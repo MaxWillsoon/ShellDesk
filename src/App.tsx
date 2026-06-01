@@ -1969,6 +1969,19 @@ function App() {
     }
   };
 
+  const openHostFromList = (host: ConnectionHost) => {
+    if (isConnectionPending) {
+      return;
+    }
+
+    if (host.authMethod === 'password' && !host.password) {
+      openCredentialDialog(host, '请输入该主机的 SSH 密码后连接。');
+      return;
+    }
+
+    void connectHost(host, undefined, 'host-card');
+  };
+
   const connectCommandBarInput = async () => {
     if (isConnectionPending) {
       return;
@@ -2328,15 +2341,9 @@ function App() {
                         <button
                           type="button"
                           className="host-card-main"
+                          title="双击打开"
                           disabled={isConnectionPending}
-                          onClick={() => {
-                          if (host.authMethod === 'password' && !host.password) {
-                            openCredentialDialog(host, '请输入该主机的 SSH 密码后连接。');
-                            return;
-                          }
-
-                          void connectHost(host, undefined, 'host-card');
-                        }}
+                          onDoubleClick={() => openHostFromList(host)}
                         >
                           <HostSystemIcon systemName={getHostSystemLabel(host)} systemType={host.systemType} />
                           <span className="host-summary">
@@ -2370,28 +2377,38 @@ function App() {
                           ) : null}
                           <details className="host-card-menu" onClick={(event) => event.stopPropagation()}>
                             <summary aria-label="主机操作">⋯</summary>
-                          <div className="host-card-menu-panel">
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                closeHostCardMenu(event.currentTarget);
-                                startEditingHost(host);
-                              }}
-                            >
-                              编辑
-                            </button>
-                            <button
-                              type="button"
-                              className="danger-text"
-                              onClick={(event) => {
-                                closeHostCardMenu(event.currentTarget);
-                                deleteHost(host);
-                              }}
-                            >
-                              删除
-                            </button>
-                          </div>
-                        </details>
+                            <div className="host-card-menu-panel">
+                              <button
+                                type="button"
+                                disabled={isConnectionPending}
+                                onClick={(event) => {
+                                  closeHostCardMenu(event.currentTarget);
+                                  openHostFromList(host);
+                                }}
+                              >
+                                打开
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  closeHostCardMenu(event.currentTarget);
+                                  startEditingHost(host);
+                                }}
+                              >
+                                编辑
+                              </button>
+                              <button
+                                type="button"
+                                className="danger-text"
+                                onClick={(event) => {
+                                  closeHostCardMenu(event.currentTarget);
+                                  deleteHost(host);
+                                }}
+                              >
+                                删除
+                              </button>
+                            </div>
+                          </details>
                         </span>
                       </article>
                     );
