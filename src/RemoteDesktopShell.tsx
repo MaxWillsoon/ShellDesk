@@ -982,6 +982,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
   const terminalToolRequestSequenceRef = useRef(0);
   const zIndexRef = useRef(0);
   const launchpadCloseTimerRef = useRef<number | null>(null);
+  const folderCloseTimerRef = useRef<number | null>(null);
   const [desktopWindows, setDesktopWindows] = useState<DesktopWindowState[]>([]);
   const [desktopLayout, setDesktopLayout] = useState<ShellDeskRemoteDesktopLayout>(() => normalizeRemoteDesktopLayout(settings.remoteDesktopLayout));
   const desktopLayoutRef = useRef(desktopLayout);
@@ -992,6 +993,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
   const [folderContextMenu, setFolderContextMenu] = useState<DesktopFolderContextMenuState | null>(null);
   const [surfaceContextMenu, setSurfaceContextMenu] = useState<DesktopSurfaceContextMenuState | null>(null);
   const [openFolderId, setOpenFolderId] = useState('');
+  const [isFolderOpen, setIsFolderOpen] = useState(false);
   const [renameFolderDialog, setRenameFolderDialog] = useState<FolderRenameDialogState | null>(null);
   const [launchpadTooltip, setLaunchpadTooltip] = useState<LaunchpadTooltipState | null>(null);
   const [terminalTitlebarMenu, setTerminalTitlebarMenu] = useState<TerminalTitlebarMenuState | null>(null);
@@ -1021,6 +1023,10 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
   useEffect(() => () => {
     if (launchpadCloseTimerRef.current !== null) {
       window.clearTimeout(launchpadCloseTimerRef.current);
+    }
+
+    if (folderCloseTimerRef.current !== null) {
+      window.clearTimeout(folderCloseTimerRef.current);
     }
   }, []);
 
@@ -1104,6 +1110,29 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
     openLaunchpad();
   };
 
+  const openDesktopFolder = (folderId: string) => {
+    if (folderCloseTimerRef.current !== null) {
+      window.clearTimeout(folderCloseTimerRef.current);
+      folderCloseTimerRef.current = null;
+    }
+
+    setOpenFolderId(folderId);
+    setIsFolderOpen(true);
+  };
+
+  const closeDesktopFolder = () => {
+    setIsFolderOpen(false);
+
+    if (folderCloseTimerRef.current !== null) {
+      window.clearTimeout(folderCloseTimerRef.current);
+    }
+
+    folderCloseTimerRef.current = window.setTimeout(() => {
+      setOpenFolderId('');
+      folderCloseTimerRef.current = null;
+    }, launchpadAnimationMs);
+  };
+
   const createFolder = () => {
     const folderName = createUniqueFolderName(desktopLayout.items);
     const folderId = `folder:${Date.now().toString(36)}`;
@@ -1143,6 +1172,12 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
     }));
 
     if (openFolderId === folderId) {
+      if (folderCloseTimerRef.current !== null) {
+        window.clearTimeout(folderCloseTimerRef.current);
+        folderCloseTimerRef.current = null;
+      }
+
+      setIsFolderOpen(false);
       setOpenFolderId('');
     }
   };
@@ -1243,6 +1278,10 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
       return;
     }
 
+    updateDesktopLayout((layout) => moveAppToDesktop(layout, appKey));
+  };
+
+  const moveFolderAppToDesktop = (appKey: DesktopAppKey) => {
     updateDesktopLayout((layout) => moveAppToDesktop(layout, appKey));
   };
 
@@ -1854,7 +1893,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
                     onDragEnd={handleDragEnd}
                     onDragOver={handleDragOver}
                     onDrop={(event) => handleDesktopDrop(event, item)}
-                    onDoubleClick={() => setOpenFolderId(item.id)}
+                    onClick={() => openDesktopFolder(item.id)}
                     onContextMenu={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
@@ -2153,7 +2192,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
     ) : null}
 
     {openFolder ? createPortal(
-      <div className="desktop-folder-overlay" role="presentation" onClick={() => setOpenFolderId('')}>
+      <div className={`desktop-folder-overlay ${isFolderOpen ? 'open' : 'closing'}`} role="presentation" onClick={closeDesktopFolder}>
         <section
           className="desktop-folder-panel"
           aria-label={openFolder.name}
@@ -2170,7 +2209,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
             >
               {openFolder.name}
             </button>
-            <button type="button" className="launchpad-close" aria-label="关闭文件夹" onClick={() => setOpenFolderId('')}>
+            <button type="button" className="launchpad-close" aria-label="关闭文件夹" onClick={closeDesktopFolder}>
               <svg width="12" height="12" viewBox="0 0 12 12" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
                 <line x1="2" y1="2" x2="10" y2="10" />
                 <line x1="10" y1="2" x2="2" y2="10" />
@@ -2186,12 +2225,16 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
                   key={appKey}
                   type="button"
                   className="desktop-icon-button desktop-folder-app-button"
+                  title="双击打开"
                   draggable
                   onDragStart={(event) => handleDragStart(event, { source: 'folder', folderId: openFolder.id, appKey })}
                   onDragEnd={handleDragEnd}
                   onDragOver={handleDragOver}
                   onDrop={(event) => handleFolderDrop(event, openFolder.id, appKey)}
-                  onClick={() => openDesktopWindow(appKey)}
+                  onDoubleClick={() => {
+                    openDesktopWindow(appKey);
+                    closeDesktopFolder();
+                  }}
                   onContextMenu={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -2230,9 +2273,14 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
             type="button"
             role="menuitem"
             onClick={() => {
-              const { appKey } = appContextMenu;
+              const { appKey, source } = appContextMenu;
               setAppContextMenu(null);
-              closeLaunchpad();
+              if (source === 'launchpad') {
+                closeLaunchpad();
+              }
+              if (source === 'folder') {
+                closeDesktopFolder();
+              }
               openDesktopWindow(appKey);
             }}
           >
@@ -2251,6 +2299,32 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
             >
               发送到桌面
             </button>
+          ) : appContextMenu.source === 'folder' ? (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  const { appKey } = appContextMenu;
+                  setAppContextMenu(null);
+                  moveFolderAppToDesktop(appKey);
+                }}
+              >
+                移动到桌面
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="danger-text"
+                onClick={() => {
+                  const { appKey } = appContextMenu;
+                  setAppContextMenu(null);
+                  deleteAppFromDesktop(appKey);
+                }}
+              >
+                删除
+              </button>
+            </>
           ) : (
             <button
               type="button"
@@ -2286,7 +2360,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
             type="button"
             role="menuitem"
             onClick={() => {
-              setOpenFolderId(folderContextMenu.folderId);
+              openDesktopFolder(folderContextMenu.folderId);
               setFolderContextMenu(null);
             }}
           >

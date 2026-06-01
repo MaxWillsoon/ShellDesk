@@ -1409,6 +1409,7 @@
   border-color: rgba(154, 177, 210, 0.12);
   border-radius: 14px;
   padding: 20px 20px 18px;
+  user-select: none;
   background:
     linear-gradient(135deg, rgba(35, 47, 62, 0.78), rgba(19, 28, 39, 0.62)),
     var(--surface);

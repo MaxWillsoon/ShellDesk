@@ -278,26 +278,23 @@
 .desktop-folder-icon-shell {
   position: relative;
   display: grid;
-  width: 52px;
-  height: 44px;
+  width: 50px;
+  height: 50px;
   place-items: center;
-  border-radius: 10px;
-  background:
-    linear-gradient(180deg, rgba(238, 244, 255, 0.9), rgba(174, 195, 224, 0.88));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.62),
-    0 8px 18px rgba(7, 10, 16, 0.24);
+  overflow: visible;
+  border-radius: 13px;
+  background: transparent;
+  box-shadow: none;
 }
 
 .desktop-folder-icon-shell::before {
   position: absolute;
-  top: -6px;
-  left: 7px;
-  width: 22px;
-  height: 10px;
-  border-radius: 6px 6px 2px 2px;
-  background: rgba(210, 225, 244, 0.96);
+  inset: 0;
+  z-index: 0;
+  background: url("../../assets/desktop-icons/folder-bg.png") center / contain no-repeat;
   content: "";
+  filter: drop-shadow(0 4px 10px rgba(7, 10, 16, 0.18));
+  pointer-events: none;
 }
 
 .desktop-folder-icon-grid {
@@ -307,6 +304,7 @@
   width: 32px;
   grid-template-columns: repeat(2, 1fr);
   gap: 3px;
+  transform: translateY(4px);
 }
 
 .desktop-folder-mini-icon {
@@ -353,11 +351,13 @@
   backdrop-filter: blur(24px);
 }
 
-.launchpad-overlay {
+.launchpad-overlay,
+.desktop-folder-overlay {
   animation: launchpad-overlay-enter 180ms ease both;
 }
 
-.launchpad-overlay.closing {
+.launchpad-overlay.closing,
+.desktop-folder-overlay.closing {
   animation: launchpad-overlay-exit 160ms ease both;
   pointer-events: none;
 }
@@ -378,6 +378,10 @@
 }
 
 .launchpad-overlay.closing .launchpad-panel {
+  animation: launchpad-panel-exit 160ms ease both;
+}
+
+.desktop-folder-overlay.closing .desktop-folder-panel {
   animation: launchpad-panel-exit 160ms ease both;
 }
 
@@ -542,8 +546,12 @@
 @media (prefers-reduced-motion: reduce) {
   .launchpad-overlay,
   .launchpad-overlay.closing,
+  .desktop-folder-overlay,
+  .desktop-folder-overlay.closing,
   .launchpad-panel,
-  .launchpad-overlay.closing .launchpad-panel {
+  .desktop-folder-panel,
+  .launchpad-overlay.closing .launchpad-panel,
+  .desktop-folder-overlay.closing .desktop-folder-panel {
     animation: none;
   }
 }
@@ -558,6 +566,16 @@
   border-radius: 18px;
   background: rgba(14, 20, 30, 0.82);
   box-shadow: 0 26px 74px rgba(0, 0, 0, 0.42);
+  transform-origin: center center;
+  animation: launchpad-panel-enter 180ms cubic-bezier(0.2, 0.72, 0.2, 1) both;
+  will-change: opacity, transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .desktop-folder-panel,
+  .desktop-folder-overlay.closing .desktop-folder-panel {
+    animation: none;
+  }
 }
 
 .desktop-folder-title {
