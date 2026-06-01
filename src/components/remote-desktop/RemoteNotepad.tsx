@@ -258,7 +258,9 @@ const AUTO_DETECT_LANGUAGE_VALUES = LANGUAGE_OPTIONS
 const MAX_DIFF_INPUT_LINES = 180;
 const MAX_DIFF_OUTPUT_LINES = 280;
 const MAX_HIGHLIGHT_CHARACTERS = 320000;
-const MAX_LANGUAGE_DETECTION_CHARACTERS = 80000;
+const MAX_LANGUAGE_DETECTION_CHARACTERS = 24000;
+const MAX_INTERACTIVE_LANGUAGE_DETECTION_CHARACTERS = 12000;
+const MAX_RENDERED_LINE_NUMBERS = 12000;
 const EDITOR_LINE_HEIGHT = 20;
 const MAX_AI_FILE_CONTEXT_CHARACTERS = 480000;
 const MAX_AI_FILE_CONTEXT_CHUNK_CHARACTERS = 60000;
@@ -432,6 +434,54 @@ function getLineEndingLabel(content: string): string {
 
 function isLikelyBinaryContent(content: string): boolean {
   return content.includes('\0');
+}
+
+function countLogicalLines(content: string): number {
+  let count = 1;
+  let offset = content.indexOf('\n');
+
+  while (offset >= 0) {
+    count += 1;
+    offset = content.indexOf('\n', offset + 1);
+  }
+
+  return count;
+}
+
+function getLineColumnAtPosition(content: string, position: number) {
+  const clampedPosition = Math.min(Math.max(position, 0), content.length);
+  let line = 1;
+  let lineStart = 0;
+  let newlineIndex = content.indexOf('\n');
+
+  while (newlineIndex >= 0 && newlineIndex < clampedPosition) {
+    line += 1;
+    lineStart = newlineIndex + 1;
+    newlineIndex = content.indexOf('\n', lineStart);
+  }
+
+  return {
+    line,
+    column: clampedPosition - lineStart + 1,
+  };
+}
+
+function getLineStartOffset(content: string, targetLine: number) {
+  const clampedLine = Math.max(1, Math.trunc(targetLine));
+
+  if (clampedLine <= 1) {
+    return 0;
+  }
+
+  let currentLine = 1;
+  let offset = content.indexOf('\n');
+
+  while (offset >= 0 && currentLine < clampedLine - 1) {
+    currentLine += 1;
+    offset = content.indexOf('\n', offset + 1);
+  }
+
+  return offset >= 0 ? offset + 1 : content.length;
 }
 
 function countOccurrences(content: string, searchText: string): number {
@@ -866,9 +916,21 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
   }, [initialFilePath, openFile]);
 
   const activeContent = activeTab.content;
+  const lineCount = useMemo(() => countLogicalLines(activeContent), [activeContent]);
+  const isLightweightEditor = activeContent.length > MAX_HIGHLIGHT_CHARACTERS || lineCount > MAX_RENDERED_LINE_NUMBERS;
+  const lightweightModeLabel = activeContent.length > MAX_HIGHLIGHT_CHARACTERS
+    ? `轻量模式：文件超过 ${Math.round(MAX_HIGHLIGHT_CHARACTERS / 1000)}k 字符，已关闭语法高亮和全量行号。`
+    : lineCount > MAX_RENDERED_LINE_NUMBERS
+      ? `轻量模式：文件超过 ${MAX_RENDERED_LINE_NUMBERS.toLocaleString()} 行，已关闭语法高亮和全量行号。`
+      : '';
+  const effectiveWrapEnabled = wrapEnabled && !isLightweightEditor;
+  const lineEndingLabel = useMemo(() => getLineEndingLabel(activeContent), [activeContent]);
   const highlightedHtml = useMemo(() => {
     if (!activeContent) return '';
-    if (activeContent.length > MAX_HIGHLIGHT_CHARACTERS || !hljs.getLanguage(activeTab.language)) {
+    if (isLightweightEditor) {
+      return '';
+    }
+    if (!hljs.getLanguage(activeTab.language)) {
       return escapeHtml(activeContent);
     }
 
@@ -877,15 +939,16 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
     } catch {
       return escapeHtml(activeContent);
     }
-  }, [activeContent, activeTab.language]);
+  }, [activeContent, activeTab.language, isLightweightEditor]);
 
-  const logicalLines = useMemo(() => activeTab.content.split('\n'), [activeTab.content]);
-  const lineCount = logicalLines.length;
+  const logicalLines = useMemo(() => (
+    isLightweightEditor ? [] : activeContent.split('\n')
+  ), [activeContent, isLightweightEditor]);
   const syncLineNumberHeights = useCallback(() => {
     const textarea = textareaRef.current;
     const measure = lineHeightMeasureRef.current;
 
-    if (!wrapEnabled) {
+    if (!effectiveWrapEnabled || isLightweightEditor) {
       setLineNumberHeights((currentHeights) => (
         areLineHeightsEqual(currentHeights, [EDITOR_LINE_HEIGHT]) ? currentHeights : [EDITOR_LINE_HEIGHT]
       ));
@@ -927,7 +990,7 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
     setLineNumberHeights((currentHeights) => (
       areLineHeightsEqual(currentHeights, nextHeights) ? currentHeights : nextHeights
     ));
-  }, [lineCount, logicalLines, wrapEnabled]);
+  }, [effectiveWrapEnabled, isLightweightEditor, lineCount, logicalLines]);
 
   useLayoutEffect(() => {
     syncLineNumberHeights();
@@ -936,7 +999,7 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
   useEffect(() => {
     const textarea = textareaRef.current;
 
-    if (!wrapEnabled || !textarea || typeof ResizeObserver === 'undefined') {
+    if (!effectiveWrapEnabled || !textarea || typeof ResizeObserver === 'undefined') {
       return undefined;
     }
 
@@ -944,19 +1007,29 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
     resizeObserver.observe(textarea);
 
     return () => resizeObserver.disconnect();
-  }, [syncLineNumberHeights, wrapEnabled]);
+  }, [effectiveWrapEnabled, syncLineNumberHeights]);
 
-  const lineNumberRows = useMemo(() => logicalLines.flatMap((_, index) => {
-    const visualLineCount = wrapEnabled
+  const lineNumberRows = useMemo(() => {
+    if (isLightweightEditor) {
+      return [
+        { key: 'current', lineNumber: cursorLine, active: true },
+        { key: 'ellipsis', lineNumber: '...', active: false },
+        { key: 'total', lineNumber: lineCount, active: false },
+      ];
+    }
+
+    return logicalLines.flatMap((_, index) => {
+      const visualLineCount = effectiveWrapEnabled
       ? Math.max(1, Math.round((lineNumberHeights[index] ?? EDITOR_LINE_HEIGHT) / EDITOR_LINE_HEIGHT))
       : 1;
 
-    return Array.from({ length: visualLineCount }, (__, visualIndex) => ({
-      key: `${index + 1}-${visualIndex}`,
-      lineNumber: visualIndex === 0 ? index + 1 : '',
-      active: visualIndex === 0 && cursorLine === index + 1,
-    }));
-  }), [cursorLine, lineNumberHeights, logicalLines, wrapEnabled]);
+      return Array.from({ length: visualLineCount }, (__, visualIndex) => ({
+        key: `${index + 1}-${visualIndex}`,
+        lineNumber: visualIndex === 0 ? index + 1 : '',
+        active: visualIndex === 0 && cursorLine === index + 1,
+      }));
+    });
+  }, [cursorLine, effectiveWrapEnabled, isLightweightEditor, lineCount, lineNumberHeights, logicalLines]);
 
   const saveTabToPath = useCallback(async (tabId: string, filePath: string, options: SaveOptions = {}) => {
     const tabToSave = tabsRef.current.find((tab) => tab.id === tabId);
@@ -1097,7 +1170,7 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
       ...tab,
       content: nextContent,
       dirty: nextContent !== tab.originalContent,
-      language: !tab.languageManuallySet && tab.language === 'plaintext'
+      language: !tab.languageManuallySet && tab.language === 'plaintext' && nextContent.length <= MAX_INTERACTIVE_LANGUAGE_DETECTION_CHARACTERS
         ? getLanguage(tab.title, nextContent)
         : tab.language,
     });
@@ -1108,10 +1181,9 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
     if (!textarea) return;
 
     const position = textarea.selectionStart;
-    const textBeforeCursor = textarea.value.slice(0, position);
-    const lines = textBeforeCursor.split('\n');
-    setCursorLine(lines.length);
-    setCursorCol(lines[lines.length - 1].length + 1);
+    const cursorPosition = getLineColumnAtPosition(textarea.value, position);
+    setCursorLine(cursorPosition.line);
+    setCursorCol(cursorPosition.column);
   }, []);
 
   const selectEditorRange = useCallback((start: number, end: number) => {
@@ -1120,20 +1192,20 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
 
     textarea.focus();
     textarea.setSelectionRange(start, end);
-    const targetLine = textarea.value.slice(0, start).split('\n').length;
-    const previousLinesHeight = wrapEnabled
+    const targetLine = getLineColumnAtPosition(textarea.value, start).line;
+    const previousLinesHeight = effectiveWrapEnabled
       ? lineNumberHeights.slice(0, Math.max(0, targetLine - 1)).reduce((total, height) => total + height, 0)
       : (targetLine - 1) * EDITOR_LINE_HEIGHT;
     textarea.scrollTop = Math.max(0, previousLinesHeight - EDITOR_LINE_HEIGHT * 4);
     updateCursorPosition();
-  }, [lineNumberHeights, updateCursorPosition, wrapEnabled]);
+  }, [effectiveWrapEnabled, lineNumberHeights, updateCursorPosition]);
 
   const replaceActiveContent = useCallback((nextContent: string, nextSelectionStart: number, nextSelectionEnd: number) => {
     updateTab(activeTabId, (tab) => tab.readOnly ? tab : {
       ...tab,
       content: nextContent,
       dirty: nextContent !== tab.originalContent,
-      language: !tab.languageManuallySet && tab.language === 'plaintext'
+      language: !tab.languageManuallySet && tab.language === 'plaintext' && nextContent.length <= MAX_INTERACTIVE_LANGUAGE_DETECTION_CHARACTERS
         ? getLanguage(tab.title, nextContent)
         : tab.language,
     });
@@ -1528,17 +1600,13 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
       return;
     }
 
-    const lines = activeTab.content.split('\n');
-    const targetLine = Math.min(lineNumber, lines.length);
-    let position = 0;
-    for (let index = 0; index < targetLine - 1; index += 1) {
-      position += lines[index].length + 1;
-    }
+    const targetLine = Math.min(lineNumber, lineCount);
+    const position = getLineStartOffset(activeTab.content, targetLine);
 
     selectEditorRange(position, position);
     setShowGoToLine(false);
     setGoToLineValue('');
-  }, [activeTab.content, goToLineValue, selectEditorRange]);
+  }, [activeTab.content, goToLineValue, lineCount, selectEditorRange]);
 
   const openFindBar = useCallback(() => {
     setShowFind(true);
@@ -1788,9 +1856,11 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
         <div className="notepad-toolbar-group notepad-editor-controls">
           <button
             type="button"
-            className={`notepad-tool-btn ${wrapEnabled ? 'active' : ''}`}
+            className={`notepad-tool-btn ${effectiveWrapEnabled ? 'active' : ''}`}
             onClick={() => setWrapEnabled((currentWrapEnabled) => !currentWrapEnabled)}
-            aria-pressed={wrapEnabled}
+            aria-pressed={effectiveWrapEnabled}
+            disabled={isLightweightEditor}
+            title={isLightweightEditor ? '大文件轻量模式下暂不启用自动换行' : '切换自动换行'}
           >
             自动换行
           </button>
@@ -1904,8 +1974,8 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
         {activeTab.isLoading ? (
           <div className="notepad-loading">正在加载文件...</div>
         ) : (
-          <div className={`notepad-editor-wrap ${wrapEnabled ? 'wrapped' : ''}`}>
-            <div ref={lineNumbersRef} className="notepad-line-numbers" aria-hidden="true">
+          <div className={`notepad-editor-wrap ${effectiveWrapEnabled ? 'wrapped' : ''} ${isLightweightEditor ? 'lightweight' : ''}`}>
+            <div ref={lineNumbersRef} className={`notepad-line-numbers ${isLightweightEditor ? 'compact' : ''}`} aria-hidden="true">
               {lineNumberRows.map((row) => (
                 <span key={row.key} className={row.active ? 'active' : ''}>
                   {row.lineNumber}
@@ -1921,9 +1991,11 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
                 aria-hidden="true"
                 wrap="soft"
               />
-              <pre ref={highlightRef} className="notepad-highlight-layer" aria-hidden="true">
-                <code dangerouslySetInnerHTML={{ __html: `${highlightedHtml}\n` }} />
-              </pre>
+              {!isLightweightEditor ? (
+                <pre ref={highlightRef} className="notepad-highlight-layer" aria-hidden="true">
+                  <code dangerouslySetInnerHTML={{ __html: `${highlightedHtml}\n` }} />
+                </pre>
+              ) : null}
               <textarea
                 ref={textareaRef}
                 className="notepad-textarea"
@@ -2050,9 +2122,10 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
         <span>{lineCount} 行</span>
         <span>{activeTab.language}</span>
         <span>UTF-8</span>
-        <span>{getLineEndingLabel(activeTab.content)}</span>
+        <span>{lineEndingLabel}</span>
         <span>缩进 2 空格</span>
-        <span>{wrapEnabled ? '自动换行' : '不换行'}</span>
+        <span>{effectiveWrapEnabled ? '自动换行' : '不换行'}</span>
+        {isLightweightEditor ? <span title={lightweightModeLabel}>轻量模式</span> : null}
         <span>{activeRevisionHint}</span>
         <span>{activeTab.readOnly ? '只读' : activeTab.dirty ? '已修改' : '已同步'}</span>
         {activeTab.filePath ? <span className="notepad-statusbar-path" title={activeTab.filePath}>{activeTab.filePath}</span> : null}

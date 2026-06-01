@@ -622,6 +622,19 @@
   color: var(--accent);
 }
 
+.notepad-line-numbers.compact {
+  justify-content: flex-start;
+}
+
+.notepad-line-numbers.compact span {
+  color: var(--muted);
+}
+
+.notepad-line-numbers.compact span.active {
+  color: var(--accent);
+  font-weight: 700;
+}
+
 .notepad-editor-container {
   position: relative;
   flex: 1;
@@ -714,6 +727,14 @@
 .notepad-textarea::selection {
   background: rgba(67, 199, 255, 0.25);
   color: transparent;
+}
+
+.notepad-editor-wrap.lightweight .notepad-textarea {
+  color: var(--text);
+}
+
+.notepad-editor-wrap.lightweight .notepad-textarea::selection {
+  color: var(--text);
 }
 
 .notepad-statusbar {
