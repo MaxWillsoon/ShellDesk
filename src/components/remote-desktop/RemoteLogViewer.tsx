@@ -727,7 +727,6 @@ function RemoteLogViewer({ connectionId, systemType }: RemoteLogViewerProps) {
         label: 'Journal',
         sources: [
           { id: 'journal:system', type: 'journal', label: '系统日志', value: '', description: 'journalctl' },
-          { id: 'journal:service-custom', type: 'journal', label: '服务日志', value: '__service__', description: serviceName || '输入 systemd unit' },
           ...serviceShortcuts.map((service) => ({
             id: `journal:${service}`,
             type: 'journal' as const,
@@ -741,14 +740,23 @@ function RemoteLogViewer({ connectionId, systemType }: RemoteLogViewerProps) {
         id: 'files',
         label: '/var/log',
         sources: [
-          { id: 'file:custom', type: 'file', label: '自定义文件', value: '', description: filePath || '输入日志路径' },
           ...logFiles,
         ],
       },
     ];
-  }, [filePath, isWindowsHost, logFiles, serviceName]);
+  }, [isWindowsHost, logFiles]);
 
-  const allSources = useMemo(() => sourceGroups.flatMap((group) => group.sources), [sourceGroups]);
+  const hiddenCustomSources = useMemo<LogSource[]>(() => (
+    isWindowsHost ? [] : [
+      { id: 'journal:service-custom', type: 'journal', label: '服务日志', value: '__service__', description: serviceName || '输入 systemd unit' },
+      { id: 'file:custom', type: 'file', label: '自定义文件', value: '', description: filePath || '输入日志路径' },
+    ]
+  ), [filePath, isWindowsHost, serviceName]);
+
+  const allSources = useMemo(
+    () => [...sourceGroups.flatMap((group) => group.sources), ...hiddenCustomSources],
+    [hiddenCustomSources, sourceGroups],
+  );
   const selectedSource = allSources.find((source) => source.id === selectedSourceId) ?? allSources[0];
 
   const resolvedSource = useMemo<LogSource>(() => {
