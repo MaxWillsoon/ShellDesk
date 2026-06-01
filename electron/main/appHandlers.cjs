@@ -8,8 +8,61 @@ const repositorySlug = `${repositoryOwner}/${repositoryName}`;
 const githubLatestReleaseApiUrl = `https://api.github.com/repos/${repositorySlug}/releases/latest`;
 const githubReleasesUrl = `https://github.com/${repositorySlug}/releases`;
 const latestYmlAssetName = 'latest.yml';
+const latestYmlAssetNamesByPlatform = {
+  darwin: ['latest-mac.yml', latestYmlAssetName],
+  linux: ['latest-linux.yml', latestYmlAssetName],
+  win32: [latestYmlAssetName],
+};
 const updateRequestTimeoutMs = 15_000;
 const externalUrlProtocols = new Set(['https:', 'http:', 'mailto:']);
+const metadataAssetNamePattern = /\.(?:blockmap|ya?ml)$/i;
+
+const assetArchPatterns = [
+  {
+    key: 'x64',
+    pattern: /(^|[^a-z0-9])(?:x64|amd64|x86_64)(?=$|[^a-z0-9])/i,
+  },
+  {
+    key: 'arm64',
+    pattern: /(^|[^a-z0-9])(?:arm64|aarch64)(?=$|[^a-z0-9])/i,
+  },
+  {
+    key: 'ia32',
+    pattern: /(^|[^a-z0-9])(?:ia32|i386|i686|x86(?![_-]?64))(?=$|[^a-z0-9])/i,
+  },
+  {
+    key: 'arm',
+    pattern: /(^|[^a-z0-9])(?:armv?7l?|arm32|arm(?!64))(?=$|[^a-z0-9])/i,
+  },
+];
+
+const platformAssetProfiles = {
+  win32: {
+    platformPattern: /(^|[^a-z0-9])win(?:32|dows)?(?=$|[^a-z0-9])|\.exe$/i,
+    conflictingPlatformPattern: /(^|[^a-z0-9])(?:mac|macos|darwin|osx|linux)(?=$|[^a-z0-9])|\.(?:dmg|appimage|deb|rpm)$/i,
+    extensionScores: [
+      { pattern: /\.exe$/i, score: 60 },
+      { pattern: /\.msi$/i, score: 55 },
+    ],
+  },
+  darwin: {
+    platformPattern: /(^|[^a-z0-9])(?:mac|macos|darwin|osx)(?=$|[^a-z0-9])|\.dmg$/i,
+    conflictingPlatformPattern: /(^|[^a-z0-9])(?:win|windows|linux)(?=$|[^a-z0-9])|\.(?:exe|msi|appimage|deb|rpm)$/i,
+    extensionScores: [
+      { pattern: /\.dmg$/i, score: 60 },
+      { pattern: /\.zip$/i, score: 40 },
+    ],
+  },
+  linux: {
+    platformPattern: /(^|[^a-z0-9])linux(?=$|[^a-z0-9])|\.(?:appimage|deb|rpm)$/i,
+    conflictingPlatformPattern: /(^|[^a-z0-9])(?:win|windows|mac|macos|darwin|osx)(?=$|[^a-z0-9])|\.(?:exe|msi|dmg)$/i,
+    extensionScores: [
+      { pattern: /\.appimage$/i, score: 60 },
+      { pattern: /\.deb$/i, score: 55 },
+      { pattern: /\.rpm$/i, score: 50 },
+    ],
+  },
+};
 
 function normalizeVersion(value) {
   return String(value ?? '').trim().replace(/^v/i, '').replace(/\+.*/, '');
@@ -119,11 +172,11 @@ function readTopLevelYamlScalar(yamlText, key) {
   return match ? unquoteYamlScalar(match[1]) : '';
 }
 
-function parseLatestYml(yamlText) {
+function parseLatestYml(yamlText, assetName = latestYmlAssetName) {
   const version = readTopLevelYamlScalar(yamlText, 'version');
 
   if (!version) {
-    throw new Error('latest.yml 中缺少 version 字段。');
+    throw new Error(`${assetName} 中缺少 version 字段。`);
   }
 
   const files = Array.from(yamlText.matchAll(/^\s*-\s+url:\s*(.+?)\s*$/gm), (match) => unquoteYamlScalar(match[1]))
@@ -197,21 +250,107 @@ function normalizeReleaseAsset(asset) {
   return { name, browserDownloadUrl, size };
 }
 
-function pickDownloadAsset(assets, feedInfo) {
-  const preferredNames = [feedInfo.path, feedInfo.files[0]].filter(Boolean);
+function pickLatestYmlAsset(assets, platform = process.platform) {
+  const preferredNames = latestYmlAssetNamesByPlatform[platform] ?? [latestYmlAssetName];
 
   for (const preferredName of preferredNames) {
-    const asset = assets.find((candidate) => candidate.name === preferredName);
+    const asset = assets.find((candidate) => candidate.name.toLowerCase() === preferredName);
 
     if (asset) {
       return asset;
     }
   }
 
-  return assets.find((asset) => {
-    const assetName = asset.name.toLowerCase();
-    return assetName !== latestYmlAssetName && !assetName.endsWith('.blockmap') && !assetName.endsWith('.yml');
-  }) ?? null;
+  return assets.find((asset) => asset.name.toLowerCase() === latestYmlAssetName) ?? null;
+}
+
+function getTargetArchKey(arch) {
+  if (arch === 'x64' || arch === 'arm64' || arch === 'ia32' || arch === 'arm') {
+    return arch;
+  }
+
+  return String(arch || '').toLowerCase();
+}
+
+function getAssetArchKeys(assetName) {
+  return assetArchPatterns
+    .filter(({ pattern }) => pattern.test(assetName))
+    .map(({ key }) => key);
+}
+
+function getExtensionScore(assetName, platform) {
+  const profile = platformAssetProfiles[platform];
+
+  if (!profile) {
+    return 0;
+  }
+
+  return profile.extensionScores.find(({ pattern }) => pattern.test(assetName))?.score ?? 0;
+}
+
+function scoreDownloadAsset(asset, feedInfo, platform, arch) {
+  const assetName = asset.name.toLowerCase();
+
+  if (assetName === latestYmlAssetName || metadataAssetNamePattern.test(assetName)) {
+    return null;
+  }
+
+  const profile = platformAssetProfiles[platform];
+
+  if (!profile) {
+    return null;
+  }
+
+  if (profile.conflictingPlatformPattern.test(assetName) || !profile.platformPattern.test(assetName)) {
+    return null;
+  }
+
+  const targetArchKey = getTargetArchKey(arch);
+  const assetArchKeys = getAssetArchKeys(assetName);
+
+  if (assetArchKeys.length > 0 && !assetArchKeys.includes(targetArchKey)) {
+    return null;
+  }
+
+  let score = 100 + getExtensionScore(assetName, platform);
+
+  if (assetArchKeys.includes(targetArchKey)) {
+    score += 80;
+  } else if (assetArchKeys.length === 0) {
+    score += 20;
+  }
+
+  if (platform === 'win32' && !/(^|[^a-z0-9])portable(?=$|[^a-z0-9])/i.test(assetName)) {
+    score += 20;
+  }
+
+  if (feedInfo.path && asset.name === feedInfo.path) {
+    score += 10;
+  }
+
+  if (feedInfo.files.includes(asset.name)) {
+    score += 5;
+  }
+
+  return score;
+}
+
+function pickDownloadAsset(assets, feedInfo, platform = process.platform, arch = process.arch) {
+  const scoredAssets = assets
+    .map((asset) => ({
+      asset,
+      score: scoreDownloadAsset(asset, feedInfo, platform, arch),
+    }))
+    .filter((entry) => entry.score !== null)
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+
+      return left.asset.name.localeCompare(right.asset.name, undefined, { numeric: true, sensitivity: 'base' });
+    });
+
+  return scoredAssets[0]?.asset ?? null;
 }
 
 function getAppInfo() {
@@ -237,17 +376,17 @@ async function checkForUpdates() {
   const assets = Array.isArray(releasePayload.assets)
     ? releasePayload.assets.map(normalizeReleaseAsset).filter(Boolean)
     : [];
-  const latestYmlAsset = assets.find((asset) => asset.name.toLowerCase() === latestYmlAssetName);
+  const latestYmlAsset = pickLatestYmlAsset(assets);
 
   if (!latestYmlAsset) {
-    throw new Error('最新 Release 中未找到 latest.yml。');
+    throw new Error('最新 Release 中未找到当前平台可用的更新元数据。');
   }
 
   const latestYmlResponse = await fetchWithTimeout(latestYmlAsset.browserDownloadUrl, {
     headers: createUpdateHeaders('text/yaml, text/plain, application/octet-stream'),
   });
   const latestYmlText = await latestYmlResponse.text();
-  const feedInfo = parseLatestYml(latestYmlText);
+  const feedInfo = parseLatestYml(latestYmlText, latestYmlAsset.name);
   const latestVersion = feedInfo.version;
   const downloadAsset = pickDownloadAsset(assets, feedInfo);
 
@@ -261,7 +400,7 @@ async function checkForUpdates() {
     releaseUrl: releasePayload.html_url || `${githubReleasesUrl}/latest`,
     releaseDate: feedInfo.releaseDate || releasePayload.published_at || null,
     latestYmlUrl: latestYmlAsset.browserDownloadUrl,
-    downloadName: downloadAsset?.name || feedInfo.path || '',
+    downloadName: downloadAsset?.name || '',
     downloadUrl: downloadAsset?.browserDownloadUrl || null,
     downloadSize: downloadAsset?.size || 0,
     checkedAt: new Date().toISOString(),
