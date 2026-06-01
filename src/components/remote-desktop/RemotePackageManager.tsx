@@ -33,10 +33,14 @@ interface PendingPackageAction {
   danger?: boolean;
 }
 
+type PackageActionOutputState = 'idle' | 'running' | 'success' | 'error';
+
 const packageViews: Array<{ key: Exclude<PackageView, 'search'>; label: string }> = [
   { key: 'upgradable', label: '可升级' },
   { key: 'installed', label: '已安装' },
 ];
+
+const maxPackageActionOutputLength = 30000;
 
 function runCmd(connectionId: string, command: string) {
   const api = window.guiSSH?.connections;
@@ -46,6 +50,34 @@ function runCmd(connectionId: string, command: string) {
   }
 
   return api.runCommand(connectionId, command);
+}
+
+function runCmdStream(
+  connectionId: string,
+  command: string,
+  callbacks: { onChunk?: (chunk: string, stream: 'stdout' | 'stderr') => void } = {},
+) {
+  const api = window.guiSSH?.connections;
+
+  if (!api?.runCommandStream) {
+    throw new Error('ShellDesk 流式命令 IPC 未就绪。');
+  }
+
+  return api.runCommandStream(connectionId, command, undefined, callbacks);
+}
+
+function appendBoundedOutput(current: string, chunk: string) {
+  if (!chunk) {
+    return current;
+  }
+
+  const next = `${current}${chunk}`;
+
+  if (next.length <= maxPackageActionOutputLength) {
+    return next;
+  }
+
+  return `...已截断前面的输出...\n${next.slice(-maxPackageActionOutputLength)}`;
 }
 
 function getPackageVersion(pkg: RemotePackageInfo) {
@@ -70,8 +102,11 @@ function RemotePackageManager({ connectionId, systemType, onOpenTerminal }: Remo
   const [notice, setNotice] = useState('');
   const [lastRefreshedAt, setLastRefreshedAt] = useState('');
   const [pendingAction, setPendingAction] = useState<PendingPackageAction | null>(null);
+  const [actionOutput, setActionOutput] = useState('');
+  const [actionOutputState, setActionOutputState] = useState<PackageActionOutputState>('idle');
   const loadRequestIdRef = useRef(0);
   const bootKeyRef = useRef('');
+  const actionOutputRef = useRef<HTMLPreElement | null>(null);
 
   const selectedPackage = useMemo(() => {
     return packages.find((pkg) => pkg.name === selectedName) ?? packages[0] ?? null;
@@ -176,6 +211,23 @@ function RemotePackageManager({ connectionId, systemType, onOpenTerminal }: Remo
     void boot();
   }, [detectManager, loadPackages]);
 
+  useEffect(() => {
+    const outputElement = actionOutputRef.current;
+    if (!outputElement) return;
+    outputElement.scrollTop = outputElement.scrollHeight;
+  }, [actionOutput]);
+
+  const resetActionOutput = () => {
+    setActionOutput('');
+    setActionOutputState('idle');
+  };
+
+  const closePendingAction = () => {
+    if (actionRunning) return;
+    setPendingAction(null);
+    resetActionOutput();
+  };
+
   const prepareAction = (action: PackageAction, pkg?: RemotePackageInfo) => {
     try {
       const packageName = pkg?.name;
@@ -195,6 +247,7 @@ function RemotePackageManager({ connectionId, systemType, onOpenTerminal }: Remo
         packageName,
         danger: action === 'remove' || action === 'upgrade-all',
       });
+      resetActionOutput();
     } catch (error) {
       setError(getErrorMessage(error));
     }
@@ -212,22 +265,46 @@ function RemotePackageManager({ connectionId, systemType, onOpenTerminal }: Remo
       title: pendingAction.label,
       initialCommand: pendingAction.command,
     });
-    setPendingAction(null);
+    closePendingAction();
   };
 
   const executePendingAction = async () => {
     if (!pendingAction) return;
 
     setActionRunning(true);
+    setActionOutput(`$ ${pendingAction.command}\n`);
+    setActionOutputState('running');
     setError('');
     setNotice('');
 
     try {
-      const result = await runCmd(connectionId, pendingAction.command);
-      setNotice(result.stdout || result.stderr || `${pendingAction.label}命令已执行。`);
-      setPendingAction(null);
-      await loadPackages(activeView, managerKind, activeView === 'search' ? lastSearchQuery : '');
+      let receivedChunk = false;
+      const result = await runCmdStream(connectionId, pendingAction.command, {
+        onChunk: (chunk) => {
+          receivedChunk = true;
+          setActionOutput((current) => appendBoundedOutput(current, chunk));
+        },
+      });
+
+      if (!receivedChunk) {
+        const finalOutput = [result.stdout, result.stderr].filter(Boolean).join('\n');
+        if (finalOutput) {
+          setActionOutput((current) => appendBoundedOutput(current, `${finalOutput}\n`));
+        }
+      }
+
+      setActionOutput((current) => appendBoundedOutput(current, `\n[退出码 ${result.code}] ${pendingAction.label}命令已结束。\n`));
+      setActionOutputState(result.code === 0 ? 'success' : 'error');
+
+      if (result.code === 0) {
+        await loadPackages(activeView, managerKind, activeView === 'search' ? lastSearchQuery : '');
+        setNotice(`${pendingAction.label}命令已完成。`);
+      } else {
+        setError(`${pendingAction.label}命令退出码 ${result.code}，请查看执行输出。`);
+      }
     } catch (error) {
+      setActionOutput((current) => appendBoundedOutput(current, `\n[错误] ${getErrorMessage(error)}\n`));
+      setActionOutputState('error');
       setError(getErrorMessage(error));
     } finally {
       setActionRunning(false);
@@ -367,17 +444,28 @@ function RemotePackageManager({ connectionId, systemType, onOpenTerminal }: Remo
       </div>
 
       {pendingAction ? createPortal(
-        <div className="package-modal-backdrop" role="presentation" onClick={() => setPendingAction(null)}>
+        <div className="package-modal-backdrop" role="presentation" onClick={closePendingAction}>
           <div className="package-confirm-dialog" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
             <div className="package-confirm-header">
               <span>{pendingAction.danger ? '需要确认' : '确认命令'}</span>
               <strong>{pendingAction.label}{pendingAction.packageName ? ` ${pendingAction.packageName}` : ''}</strong>
             </div>
             <pre>{pendingAction.command}</pre>
+            {actionOutputState !== 'idle' || actionOutput ? (
+              <div className="package-command-output">
+                <div className="package-command-output-header">
+                  <strong>执行输出</strong>
+                  <span className={`package-output-state ${actionOutputState}`}>
+                    {actionOutputState === 'running' ? '执行中' : actionOutputState === 'success' ? '已完成' : actionOutputState === 'error' ? '执行异常' : '等待执行'}
+                  </span>
+                </div>
+                <pre ref={actionOutputRef} aria-live="polite">{actionOutput || '等待远程命令输出...'}</pre>
+              </div>
+            ) : null}
             <div className="package-confirm-actions">
-              <button type="button" onClick={() => setPendingAction(null)}>取消</button>
+              <button type="button" onClick={closePendingAction} disabled={actionRunning}>{actionOutputState === 'idle' ? '取消' : '关闭'}</button>
               <button type="button" onClick={copyPendingCommand}>复制命令</button>
-              <button type="button" onClick={runPendingInTerminal} disabled={!onOpenTerminal}>终端运行</button>
+              <button type="button" onClick={runPendingInTerminal} disabled={!onOpenTerminal || actionRunning}>终端运行</button>
               <button type="button" className={pendingAction.danger ? 'danger' : 'primary'} onClick={executePendingAction} disabled={actionRunning}>
                 {actionRunning ? '执行中' : '直接执行'}
               </button>

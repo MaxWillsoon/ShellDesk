@@ -76,6 +76,10 @@ function formatRule(rule: FirewallRule) {
   ].join('\n');
 }
 
+function isInactiveUfwSnapshot(snapshot: FirewallSnapshot) {
+  return snapshot.backend === 'ufw' && /inactive|不活动|未启用|停用/i.test(snapshot.status);
+}
+
 function RemoteFirewallManager({ connectionId, systemType }: RemoteFirewallManagerProps) {
   const isWindowsHost = isWindowsSystem(systemType);
   const [snapshot, setSnapshot] = useState<FirewallSnapshot | null>(null);
@@ -109,6 +113,8 @@ function RemoteFirewallManager({ connectionId, systemType }: RemoteFirewallManag
 
       if (result.code !== 0 && nextSnapshot.backend === 'unknown') {
         setNotice(result.stderr || result.stdout || '未检测到可用防火墙工具。');
+      } else if (isInactiveUfwSnapshot(nextSnapshot)) {
+        setNotice('UFW 当前未启用，列表中的规则只存在于配置中，不会拦截端口。确认 SSH 规则后，可在终端执行 sudo ufw enable。');
       } else if (result.stderr.trim()) {
         setNotice(result.stderr.trim());
       }

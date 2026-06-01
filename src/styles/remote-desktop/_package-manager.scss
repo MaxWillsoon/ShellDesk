@@ -404,7 +404,9 @@
 .package-confirm-dialog {
   display: grid;
   width: min(560px, calc(100vw - 40px));
+  max-height: min(640px, calc(100vh - 40px));
   gap: 12px;
+  overflow: auto;
   border: 1px solid var(--pkg-border);
   border-radius: 10px;
   padding: 16px;
@@ -443,6 +445,63 @@
   white-space: pre-wrap;
 }
 
+.package-command-output {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(112, 184, 255, 0.18);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(112, 184, 255, 0.06);
+}
+
+.package-command-output-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.package-command-output-header strong {
+  color: var(--pkg-muted-strong);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.package-output-state {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0 8px;
+  background: rgba(148, 170, 204, 0.12);
+  color: var(--pkg-muted);
+  font-size: 10.5px;
+  font-weight: 850;
+}
+
+.package-output-state.running {
+  background: rgba(240, 195, 106, 0.14);
+  color: var(--pkg-accent);
+}
+
+.package-output-state.success {
+  background: rgba(117, 228, 170, 0.13);
+  color: var(--pkg-success);
+}
+
+.package-output-state.error {
+  background: rgba(255, 143, 163, 0.12);
+  color: var(--pkg-danger);
+}
+
+.package-command-output pre {
+  max-height: 150px;
+  border-color: rgba(112, 184, 255, 0.16);
+  background: rgba(2, 6, 12, 0.42);
+  color: #d8e4f3;
+  font-size: 11px;
+}
+
 .package-confirm-actions {
   justify-content: flex-end;
   flex-wrap: wrap;
@@ -471,6 +530,15 @@
 [data-theme="light"] .package-search-box input,
 [data-theme="light"] .package-confirm-dialog pre {
   background: rgba(255, 255, 255, 0.82);
+}
+
+[data-theme="light"] .package-command-output {
+  background: rgba(37, 99, 235, 0.05);
+}
+
+[data-theme="light"] .package-command-output pre {
+  background: rgba(255, 255, 255, 0.9);
+  color: #263349;
 }
 
 [data-theme="light"] .package-table th {

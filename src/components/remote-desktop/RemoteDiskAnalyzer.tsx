@@ -348,6 +348,8 @@ function RemoteDiskAnalyzer({ connectionId, systemType, onOpenFileManager }: Rem
   const [mountLoading, setMountLoading] = useState(false);
   const [scanLoading, setScanLoading] = useState(false);
   const [largeLoading, setLargeLoading] = useState(false);
+  const [scanTargetPath, setScanTargetPath] = useState('');
+  const [largeTargetPath, setLargeTargetPath] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
@@ -378,6 +380,7 @@ function RemoteDiskAnalyzer({ connectionId, systemType, onOpenFileManager }: Rem
   const scanPath = useCallback(async (path: string) => {
     const nextPath = path.trim() || (isWindowsHost ? 'C:\\' : '/');
     setScanLoading(true);
+    setScanTargetPath(nextPath);
     setError('');
     setNotice('');
 
@@ -395,12 +398,14 @@ function RemoteDiskAnalyzer({ connectionId, systemType, onOpenFileManager }: Rem
       setError(getErrorMessage(error));
     } finally {
       setScanLoading(false);
+      setScanTargetPath('');
     }
   }, [connectionId, isWindowsHost]);
 
   const searchLargeFiles = useCallback(async () => {
     const minMb = Math.min(Math.max(Number.parseInt(minLargeFileMb, 10) || 100, 1), 102400);
     setLargeLoading(true);
+    setLargeTargetPath(currentPath);
     setError('');
     setNotice('');
 
@@ -417,6 +422,7 @@ function RemoteDiskAnalyzer({ connectionId, systemType, onOpenFileManager }: Rem
       setError(getErrorMessage(error));
     } finally {
       setLargeLoading(false);
+      setLargeTargetPath('');
     }
   }, [connectionId, currentPath, isWindowsHost, minLargeFileMb]);
 
@@ -435,6 +441,9 @@ function RemoteDiskAnalyzer({ connectionId, systemType, onOpenFileManager }: Rem
   };
 
   const visibleEntries = activePanel === 'children' ? entries : largeFiles;
+  const isResultLoading = scanLoading || largeLoading;
+  const resultLoadingTitle = scanLoading ? '正在扫描目录' : '正在搜索大文件';
+  const resultLoadingPath = scanLoading ? scanTargetPath || pathDraft || currentPath : largeTargetPath || currentPath;
 
   return (
     <section className="disk-analyzer">
@@ -489,7 +498,7 @@ function RemoteDiskAnalyzer({ connectionId, systemType, onOpenFileManager }: Rem
             <button type="button" className={activePanel === 'children' ? 'active' : ''} onClick={() => setActivePanel('children')}>目录扫描</button>
             <button type="button" className={activePanel === 'large' ? 'active' : ''} onClick={() => setActivePanel('large')}>大文件</button>
           </div>
-          <div className="disk-entry-list">
+          <div className="disk-entry-list" aria-busy={isResultLoading}>
             {visibleEntries.map((entry) => (
               <button
                 key={entry.path}
@@ -507,7 +516,16 @@ function RemoteDiskAnalyzer({ connectionId, systemType, onOpenFileManager }: Rem
                 <span className="disk-size-bar"><i style={{ width: `${Math.max(4, (entry.sizeBytes / maxEntrySize) * 100)}%` }} /></span>
               </button>
             ))}
-            {!scanLoading && !largeLoading && visibleEntries.length === 0 ? <div className="disk-empty">没有扫描结果。</div> : null}
+            {isResultLoading ? (
+              <div className="disk-entry-loading" role="status" aria-live="polite">
+                <div className="disk-entry-loading-card">
+                  <span className="disk-entry-loading-spinner" aria-hidden="true" />
+                  <strong>{resultLoadingTitle}</strong>
+                  <span title={resultLoadingPath}>{resultLoadingPath}</span>
+                </div>
+              </div>
+            ) : null}
+            {!isResultLoading && visibleEntries.length === 0 ? <div className="disk-empty">没有扫描结果。</div> : null}
           </div>
         </main>
 

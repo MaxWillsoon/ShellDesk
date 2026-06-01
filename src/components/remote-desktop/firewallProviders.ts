@@ -66,9 +66,10 @@ function normalizeAction(value: string): FirewallAction {
   const normalized = value.trim().toLowerCase();
 
   if (normalized === 'allow' || normalized === 'allowed') return 'allow';
-  if (normalized === 'deny' || normalized === 'block' || normalized === 'blocked') return 'deny';
-  if (normalized === 'reject') return 'reject';
-  if (normalized === 'limit' || normalized === 'limited') return 'limit';
+  if (normalized === '允许') return 'allow';
+  if (normalized === 'deny' || normalized === 'block' || normalized === 'blocked' || normalized.includes('拒绝') || normalized.includes('阻止')) return 'deny';
+  if (normalized === 'reject' || normalized.includes('拒收')) return 'reject';
+  if (normalized === 'limit' || normalized === 'limited' || normalized.includes('限制') || normalized.includes('限速')) return 'limit';
   return 'unknown';
 }
 
@@ -81,7 +82,7 @@ function normalizeProtocol(value?: string): FirewallProtocol | undefined {
 }
 
 function parsePortAndProtocol(value: string) {
-  const trimmed = value.trim();
+  const trimmed = value.trim().replace(/\s+\(v6\)$/i, '');
   const match = trimmed.match(/^(.+?)\/(tcp|udp|any)$/i);
 
   if (!match) {
@@ -99,7 +100,7 @@ function parseUfwStatusRuleLine(line: string, index: number): FirewallRule | nul
     !line
     || line.startsWith(backendMarker)
     || line.startsWith(ufwAddedMarker)
-    || /^Status:|^Default:|^Logging:|^New profiles:|^To\s+Action\s+From|^-+\s+-+\s+-+/i.test(line)
+    || /^(?:Status|状态):|^(?:Default|默认):|^(?:Logging|日志):|^(?:New profiles|新配置文件):|^(?:To\s+Action\s+From|至\s+动作\s+来自)|^-+\s+-+\s+-+/i.test(line)
     || /^ERROR:|^sudo:|^WARN/i.test(line)
   ) {
     return null;
@@ -374,8 +375,8 @@ export function parseFirewallSnapshot(stdout: string, stderr: string, isWindowsH
   const rawOutput = [stdout, stderr].filter(Boolean).join('\n');
 
   if (backend === 'ufw') {
-    const status = stdout.match(/^Status:\s*(.+)$/im)?.[1]?.trim() ?? '未知';
-    const defaultPolicy = stdout.match(/^Default:\s*(.+)$/im)?.[1]?.trim() ?? '未读取到默认策略';
+    const status = stdout.match(/^(?:Status|状态):\s*(.+)$/im)?.[1]?.trim() ?? '未知';
+    const defaultPolicy = stdout.match(/^(?:Default|默认):\s*(.+)$/im)?.[1]?.trim() ?? '未读取到默认策略';
 
     return {
       backend,
@@ -457,7 +458,10 @@ export function createFirewallAddRuleCommand(backend: FirewallBackend, draft: Fi
   if (backend === 'ufw') {
     const protoSuffix = draft.protocol === 'any' ? '' : ` proto ${draft.protocol}`;
     const sourcePart = source && !/^any(where)?$/i.test(source) ? `from ${shellSingleQuote(source)} to any port ${shellSingleQuote(port)}${protoSuffix}` : `${shellSingleQuote(`${port}/${protocol}`)}`;
-    return `sudo -n ufw ${draft.action} ${sourcePart}`;
+    const actionPart = draft.action === 'deny' || draft.action === 'reject'
+      ? `prepend ${draft.action}`
+      : draft.action;
+    return `sudo -n ufw ${actionPart} ${sourcePart}`;
   }
 
   if (backend === 'firewalld') {
@@ -476,15 +480,84 @@ New-NetFirewallRule -DisplayName ${powershellSingleQuote(`ShellDesk ${draft.acti
   throw new Error('未检测到可操作的防火墙后端。');
 }
 
+function normalizeUfwAddress(value?: string) {
+  return String(value ?? '').trim().replace(/\s+\(v6\)$/i, '');
+}
+
+function isUfwAnyAddress(value?: string) {
+  const normalized = normalizeUfwAddress(value).toLowerCase();
+  return !normalized || normalized === 'any' || normalized === 'anywhere' || normalized === '0.0.0.0/0' || normalized === '::/0';
+}
+
+function getUfwActionToken(action: FirewallAction) {
+  if (action === 'allow' || action === 'deny' || action === 'reject' || action === 'limit') {
+    return action;
+  }
+
+  throw new Error('该 ufw 规则动作无法识别，不能安全删除。');
+}
+
+function isUfwPortTarget(target: string, port?: string, protocol?: FirewallProtocol) {
+  const normalizedTarget = normalizeUfwAddress(target);
+  const normalizedPort = String(port ?? '').trim();
+
+  if (!normalizedTarget || !normalizedPort) {
+    return false;
+  }
+
+  return normalizedTarget === normalizedPort || normalizedTarget === `${normalizedPort}/${protocol ?? ''}`;
+}
+
+function createUfwRuleDeleteSpec(rule: FirewallRule) {
+  const action = getUfwActionToken(rule.action);
+  const parts = [];
+  const direction = String(rule.direction ?? '').trim().toLowerCase();
+  const source = normalizeUfwAddress(rule.source);
+  const target = normalizeUfwAddress(rule.target);
+  const port = String(rule.port ?? '').trim();
+  const protocol = rule.protocol && rule.protocol !== 'any' ? rule.protocol : '';
+
+  if (direction === 'route') {
+    parts.push('route');
+  }
+
+  parts.push(action);
+
+  if (!isUfwAnyAddress(source)) {
+    const destination = target && !isUfwPortTarget(target, port, rule.protocol) ? target : 'any';
+    parts.push('from', shellSingleQuote(source), 'to', shellSingleQuote(destination));
+
+    if (port) {
+      parts.push('port', shellSingleQuote(port));
+    }
+
+    if (protocol) {
+      parts.push('proto', protocol);
+    }
+
+    return parts.join(' ');
+  }
+
+  if (port) {
+    parts.push(shellSingleQuote(`${port}${protocol ? `/${protocol}` : ''}`));
+    return parts.join(' ');
+  }
+
+  if (target) {
+    parts.push(shellSingleQuote(target));
+    return parts.join(' ');
+  }
+
+  throw new Error('该 ufw 规则缺少可删除的端口或目标。');
+}
+
 export function createFirewallDeleteRuleCommand(backend: FirewallBackend, rule: FirewallRule, zone?: string) {
   if (backend === 'ufw') {
     const number = rule.id.match(/^ufw:(\d+)$/)?.[1];
 
-    if (!number) {
-      throw new Error('该 ufw 规则没有编号，请先刷新规则列表后再删除。');
-    }
-
-    return `sudo -n ufw delete ${number}`;
+    return number
+      ? `sudo -n ufw --force delete ${number}`
+      : `sudo -n ufw --force delete ${createUfwRuleDeleteSpec(rule)}`;
   }
 
   if (backend === 'firewalld') {
