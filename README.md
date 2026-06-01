@@ -43,7 +43,6 @@
   - [Terminal, Files, and Editing](#terminal-files-and-editing)
   - [Databases and System Tools](#databases-and-system-tools)
   - [App Settings, Logs, Backup, and Language](#app-settings-logs-backup-and-language)
-- [Remote Desktop Apps](#remote-desktop-apps)
 - [Data and Security](#data-and-security)
 - [Compatibility Notes](#compatibility-notes)
 - [Quick Start](#quick-start)
@@ -54,7 +53,6 @@
 - [Tech Stack](#tech-stack)
 - [Project Structure](#project-structure)
 - [Development Notes](#development-notes)
-- [Roadmap](#roadmap)
 - [License](#license)
 
 ---
@@ -122,44 +120,6 @@ The project is currently in Alpha and is primarily developed and packaged for Wi
 - UI language supports English and Simplified Chinese; first launch follows the system language
 - Logs record connection, host, key, config, and system operations with search, filters, and clearing
 - Config import/export covers hosts, keys, settings, and browser bookmarks
-
----
-
-## Remote Desktop Apps
-
-| App | Capabilities |
-| :--- | :--- |
-| File Manager | Windows-style SFTP file manager with transfer, archive, rename, and context menu support |
-| Terminal | Interactive SSH shell with multiple sessions, themes, and terminal preferences |
-| Notepad | Remote text file editor with tabs, syntax highlighting, and remote save |
-| Browser | webview browser with bookmarks, recent visits, connection partitioning, and SOCKS proxy |
-| VNC Viewer | Connects to local or intranet VNC desktops with scaling modes and performance presets |
-| Log Viewer | Views journalctl, `/var/log`, and Windows Event Log |
-| System Monitor | CPU, memory, network, and system status overview |
-| MySQL | SSH-tunneled MySQL connection, database/table browsing, columns, SQL queries, and cell updates |
-| PostgreSQL | PostgreSQL connection, schema/table browsing, columns, and SQL queries |
-| MongoDB | SSH-tunneled MongoDB connection, database/collection browsing, document queries, and index inspection |
-| Search Cluster | Elasticsearch / OpenSearch health, indices, shards, and `_search` queries |
-| Message Queue | RabbitMQ queues, Kafka topics, and consumer group lag inspection |
-| MinIO / S3 | Bucket, prefix, and object browsing through remote `mc` or `aws` CLI |
-| Redis | Redis connection, key scanning, read, write, delete, and command execution |
-| SQLite | Remote SQLite file browsing, object browsing, SQL queries, and table editing |
-| Service Manager | systemd and Windows Services viewing, start, stop, restart, and startup management |
-| Container Manager | Docker / Podman container, image, and basic status management |
-| Port Listener | View port usage, listening services, and connection state |
-| Firewall | ufw, firewalld, and Windows Firewall inspection and management |
-| iptables | Linux IPv4 / IPv6 iptables rule chains, default policies, and runtime rule updates |
-| Network Diagnostics | Ping, DNS, HTTP, TCP, and related connectivity tests |
-| Disk Analyzer | Disk space, directory usage, and large file discovery |
-| Package Manager | Installed package search, upgradeable packages, and package-manager updates |
-| Git Repository | SourceTree-style remote Git status, branch management, changed files, diffs, commits, stage/unstage, commit, fetch, pull, push, and checkout |
-| Web Server | Nginx, Apache/httpd, and Caddy config discovery, Notepad handoff for config edits, config test, reload, and restart |
-| Scheduled Tasks | Cron, systemd timer, and Windows Task Scheduler viewing |
-| Security Audit | SSH config, sensitive ports, failed logins, permissions, and update checks |
-| Login Sessions | Online users, successful logins, failed logins, and source summaries |
-| API Debugger | Send HTTP requests from the remote host side |
-| Process Manager | View, search, sort, and terminate processes |
-| System Settings | System information, network, DNS, mirrors, updates, Hosts, routes, and disks |
 
 ---
 
@@ -357,18 +317,6 @@ ShellDesk/
 - UI copy should remain available in both English and Simplified Chinese
 
 See [AGENTS.md](AGENTS.md) for the full collaboration and engineering notes.
-
----
-
-## Roadmap
-
-- Add official screenshots, demo GIFs, and installer download instructions
-- Improve multi-platform packaging, signing, and release workflows
-- Enhance the SFTP transfer queue, batch operations, and error recovery
-- Add more granular encryption and redaction options for config export
-- Improve remote system tool compatibility across Linux distributions and Windows environments
-- Add automated tests for key IPC paths, data validation, and remote tool parsers
-- Continue improving accessibility, keyboard navigation, and high-contrast experiences
 
 ---
 
