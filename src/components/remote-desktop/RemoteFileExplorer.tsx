@@ -557,7 +557,7 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
   const [isResolvingDefaultPath, setIsResolvingDefaultPath] = useState(!getExplicitInitialPath(initialPath, isWindowsHost));
   const [lastClickedName, setLastClickedName] = useState<string | null>(null);
   const [deleteConfirmationEntries, setDeleteConfirmationEntries] = useState<RemoteFileEntry[] | null>(null);
-  const [transferProgress, setTransferProgress] = useState<{ type: 'download' | 'upload'; fileName: string; transferred: number; total: number } | null>(null);
+  const [transferProgress, setTransferProgress] = useState<ShellDeskTransferProgress | null>(null);
   const [tableViewport, setTableViewport] = useState({ scrollTop: 0, height: 0 });
 
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -788,13 +788,27 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
 
   useEffect(() => {
     const unsubscribe = window.guiSSH?.events.onTransferProgress((payload) => {
+      if (payload.connectionId && payload.connectionId !== connectionId) {
+        return;
+      }
+
       setTransferProgress(payload);
     });
-    const unsubEnd = window.guiSSH?.events.onTransferEnd(() => {
-      setTransferProgress(null);
+    const unsubEnd = window.guiSSH?.events.onTransferEnd((payload) => {
+      if (payload.connectionId && payload.connectionId !== connectionId) {
+        return;
+      }
+
+      setTransferProgress((currentProgress) => {
+        if (currentProgress?.queueId && payload.queueId && currentProgress.queueId !== payload.queueId) {
+          return currentProgress;
+        }
+
+        return null;
+      });
     });
     return () => { unsubscribe?.(); unsubEnd?.(); };
-  }, []);
+  }, [connectionId]);
 
   const sortCollator = useMemo(() => (
     new Intl.Collator(getShellDeskLocale(), { numeric: true, sensitivity: 'base' })
@@ -911,6 +925,31 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
     () => selectedFileEntries.reduce((totalSize, entry) => totalSize + Math.max(entry.size, 0), 0),
     [selectedFileEntries],
   );
+
+  const selectedDirectoryCount = useMemo(
+    () => selectedEntries.filter(isDirectoryEntry).length,
+    [selectedEntries],
+  );
+
+  const transferProgressPercent = useMemo(() => {
+    if (!transferProgress) {
+      return 0;
+    }
+
+    if (transferProgress.total > 0) {
+      return Math.max(1, Math.min(100, Math.round((transferProgress.transferred / transferProgress.total) * 100)));
+    }
+
+    if ((transferProgress.totalItems ?? 0) > 0) {
+      return Math.max(1, Math.min(100, Math.round(((transferProgress.completedItems ?? 0) / (transferProgress.totalItems ?? 1)) * 100)));
+    }
+
+    return 10;
+  }, [transferProgress]);
+
+  const transferItemLabel = transferProgress
+    ? `${transferProgress.completedItems ?? 0}${transferProgress.totalItems ? ` / ${transferProgress.totalItems}` : ''} 项`
+    : '';
 
   useEffect(() => {
     if (propertiesEntry) {
@@ -1369,23 +1408,36 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
     }
   }, [closeContextMenu, connectionId, isWindowsHost, remotePath]);
 
-  const downloadFiles = useCallback(async (entries: RemoteFileEntry[]) => {
-    const files = entries.filter(isFileEntry);
+  const downloadEntries = useCallback(async (entries: RemoteFileEntry[]) => {
+    closeContextMenu();
 
-    if (!files.length) {
+    if (!entries.length) {
       return;
     }
 
-    for (const entry of files) {
-      await downloadFile(entry);
+    if (entries.length === 1 && isFileEntry(entries[0])) {
+      await downloadFile(entries[0]);
+      return;
     }
-  }, [downloadFile]);
 
-  const uploadFile = useCallback(async () => {
+    try {
+      setFilesError('');
+      const remotePaths = entries.map((entry) => joinRemotePath(remotePath, entry.name, isWindowsHost));
+      const result = await window.guiSSH?.connections.downloadPaths(connectionId, remotePaths);
+
+      if (!result?.canceled) {
+        setFilesError('');
+      }
+    } catch (error) {
+      setFilesError(getErrorMessage(error));
+    }
+  }, [closeContextMenu, connectionId, downloadFile, isWindowsHost, remotePath]);
+
+  const uploadItems = useCallback(async () => {
     closeContextMenu();
     try {
       setFilesError('');
-      const result = await window.guiSSH?.connections.uploadFile(connectionId, remotePath);
+      const result = await window.guiSSH?.connections.uploadPaths(connectionId, remotePath);
       if (!result?.canceled) {
         refreshFiles();
       }
@@ -1602,10 +1654,10 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
           <button type="button" onClick={() => startNewItem('folder')}>
             新建目录
           </button>
-          <button type="button" onClick={() => void uploadFile()}>
+          <button type="button" onClick={() => void uploadItems()}>
             上传
           </button>
-          <button type="button" onClick={() => void downloadFiles(selectedFileEntries)} disabled={!selectedFileEntries.length}>
+          <button type="button" onClick={() => void downloadEntries(selectedEntries)} disabled={!selectedEntries.length}>
             下载
           </button>
         </div>
@@ -1658,7 +1710,7 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
             <strong>{transferProgress ? '正在传输' : '无活动传输'}</strong>
             <span>
               {transferProgress
-                ? `${transferProgress.type === 'download' ? '下载' : '上传'} ${transferProgress.fileName}`
+                ? `${transferProgress.type === 'download' ? '下载' : '上传'} ${transferItemLabel} · ${transferProgress.fileName}`
                 : '暂无上传或下载任务'}
             </span>
           </div>
@@ -1848,11 +1900,9 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
                       {selectedOpenActionLabel}
                     </button>
                   ) : null}
-                  {isFileEntry(primarySelectedEntry) ? (
-                    <button type="button" onClick={() => void downloadFile(primarySelectedEntry)}>
-                      下载
-                    </button>
-                  ) : null}
+                  <button type="button" onClick={() => void downloadEntries([primarySelectedEntry])}>
+                    下载
+                  </button>
                   {selectedArchiveCanDecompress ? (
                     <button type="button" onClick={() => void decompressEntry(primarySelectedEntry)}>
                       解压缩
@@ -1868,7 +1918,13 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
             ) : selectedEntries.length > 1 ? (
               <div className="explorer-details-empty">
                 <strong>{selectedEntries.length} 个项目已选</strong>
-                <span>{selectedFileEntries.length ? `其中 ${selectedFileEntries.length} 个文件，合计 ${formatBytes(selectedFilesSize)}` : '当前选择不含普通文件。'}</span>
+                <span>
+                  {selectedFileEntries.length
+                    ? `其中 ${selectedFileEntries.length} 个文件${selectedDirectoryCount ? `、${selectedDirectoryCount} 个文件夹` : ''}，文件合计 ${formatBytes(selectedFilesSize)}`
+                    : selectedDirectoryCount
+                      ? `其中 ${selectedDirectoryCount} 个文件夹`
+                      : '当前选择不含普通文件。'}
+                </span>
               </div>
             ) : (
               <div className="explorer-details-empty">
@@ -1895,9 +1951,12 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
           <div className="transfer-progress-info">
             <span className="transfer-progress-label">
               <button type="button" className="transfer-cancel-btn" onClick={() => void cancelTransfer()} title="取消传输">&times;</button>
-              {transferProgress.type === 'download' ? '下载' : '上传'} {transferProgress.fileName}
+              <span className="transfer-progress-name">
+                {transferProgress.type === 'download' ? '下载' : '上传'} {transferProgress.fileName}
+              </span>
             </span>
-            <span>
+            <span className="transfer-progress-meta">
+              {transferItemLabel ? `${transferItemLabel} · ` : ''}
               {formatBytes(transferProgress.transferred)}
               {transferProgress.total > 0 ? ` / ${formatBytes(transferProgress.total)}` : ''}
             </span>
@@ -1906,9 +1965,7 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
             <div
               className="transfer-progress-fill"
               style={{
-                width: transferProgress.total > 0
-                  ? `${Math.round((transferProgress.transferred / transferProgress.total) * 100)}%`
-                  : '10%',
+                width: `${transferProgressPercent}%`,
               }}
             />
           </div>
@@ -1960,11 +2017,18 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
                 <button type="button" role="menuitem" onClick={() => copyEntryPath(contextMenu.targetEntry!)}>
                   复制路径
                 </button>
-                {isFileEntry(contextMenu.targetEntry) && (
-                  <button type="button" role="menuitem" onClick={() => void downloadFile(contextMenu.targetEntry!)}>
-                    下载
-                  </button>
-                )}
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    const targets = selectedNames.has(contextMenu.targetEntry!.name) && selectedNames.size > 1
+                      ? sortedEntries.filter((entry) => selectedNames.has(entry.name))
+                      : [contextMenu.targetEntry!];
+                    void downloadEntries(targets);
+                  }}
+                >
+                  下载
+                </button>
                 {isArchiveFile(contextMenu.targetEntry.name) && isFileEntry(contextMenu.targetEntry) && (!isWindowsHost || contextMenu.targetEntry.name.toLowerCase().endsWith('.zip')) && (
                   <button type="button" role="menuitem" onClick={() => void decompressEntry(contextMenu.targetEntry!)}>
                     解压缩
@@ -2016,8 +2080,8 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
                   新建文件夹
                 </button>
                 <div className="context-menu-sep" />
-                <button type="button" role="menuitem" onClick={() => void uploadFile()}>
-                  上传文件
+                <button type="button" role="menuitem" onClick={() => void uploadItems()}>
+                  上传文件或文件夹
                 </button>
                 {onOpenTerminal ? (
                   <button type="button" role="menuitem" onClick={() => { closeContextMenu(); onOpenTerminal(remotePath); }}>

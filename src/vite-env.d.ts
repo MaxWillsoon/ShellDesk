@@ -462,8 +462,10 @@ interface ShellDeskConnectionControls {
   readFile: (connectionId: string, remotePath: string) => Promise<string>;
   writeFile: (connectionId: string, remotePath: string, content: string) => Promise<boolean>;
   downloadFile: (connectionId: string, remotePath: string) => Promise<{ canceled: boolean; filePath?: string; size?: number }>;
-  uploadFile: (connectionId: string, remotePath: string) => Promise<{ canceled: boolean; remotePath?: string; size?: number }>;
-  cancelTransfer: (connectionId: string) => Promise<void>;
+  downloadPaths: (connectionId: string, remotePaths: string[]) => Promise<{ canceled: boolean; directoryPath?: string; size?: number; fileCount?: number; itemCount?: number }>;
+  uploadFile: (connectionId: string, remotePath: string) => Promise<{ canceled: boolean; remotePath?: string; remotePaths?: string[]; size?: number; fileCount?: number; itemCount?: number }>;
+  uploadPaths: (connectionId: string, remotePath: string) => Promise<{ canceled: boolean; remotePath?: string; remotePaths?: string[]; size?: number; fileCount?: number; itemCount?: number }>;
+  cancelTransfer: (connectionId: string) => Promise<boolean>;
   compress: (connectionId: string, sourcePaths: string[], format: string, destPath: string) => Promise<{ format: string; destPath: string }>;
   decompress: (connectionId: string, archivePath: string, destDir?: string) => Promise<{ archivePath: string; destDir: string }>;
   statPath: (connectionId: string, remotePath: string) => Promise<ShellDeskRemotePathStat>;
@@ -836,17 +838,33 @@ interface ShellDeskSyncControls {
 }
 
 interface ShellDeskTransferProgress {
+  connectionId?: string;
+  queueId?: string;
   type: 'download' | 'upload';
   fileName: string;
   transferred: number;
   total: number;
+  currentFileTransferred?: number;
+  currentFileTotal?: number;
+  completedFiles?: number;
+  totalFiles?: number;
+  completedItems?: number;
+  totalItems?: number;
 }
 
 interface ShellDeskTransferEndPayload {
+  connectionId?: string;
+  queueId?: string;
   type: 'download' | 'upload';
   fileName: string;
   transferred: number;
   total: number;
+  currentFileTransferred?: number;
+  currentFileTotal?: number;
+  completedFiles?: number;
+  totalFiles?: number;
+  completedItems?: number;
+  totalItems?: number;
   success: boolean;
   error?: string;
 }

@@ -342,6 +342,8 @@ button.explorer-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
+  min-width: 0;
   font-size: 10.5px;
   color: #7e93aa;
 }
@@ -350,6 +352,19 @@ button.explorer-row {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
+}
+
+.transfer-progress-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transfer-progress-meta {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .transfer-progress-bar {

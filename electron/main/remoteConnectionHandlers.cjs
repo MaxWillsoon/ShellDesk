@@ -1,5 +1,6 @@
 const { BrowserWindow, dialog } = require('electron');
 const fs = require('node:fs');
+const path = require('node:path');
 const { TextDecoder } = require('node:util');
 const {
   maxRemoteCommandInputLength,
@@ -22,6 +23,7 @@ const {
 
 const maxRemotePermissionTargets = 5000;
 const maxRemoteDeleteTargets = 5000;
+const maxTransferQueueItems = 20000;
 const maxDirectorySymlinkTargetStats = 80;
 const remoteEntryCollator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
 
@@ -51,6 +53,19 @@ function validateMutableRemotePath(rawPath) {
 
 function getRemoteFileName(remotePath, fallback = 'download') {
   return remotePath.replace(/\\/g, '/').split('/').filter(Boolean).pop() || fallback;
+}
+
+function sanitizeLocalFileName(fileName, fallback = 'download') {
+  const safeName = `${fileName || ''}`
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .replace(/[. ]+$/g, '')
+    .trim();
+
+  if (!safeName || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(safeName)) {
+    return fallback;
+  }
+
+  return safeName;
 }
 
 function joinRemoteChildPath(parentPath, childName) {
@@ -1719,25 +1734,170 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     return true;
   });
 
-  // ─── Active transfer tracking (for cancel) ───────────────────────────────────
+  // ─── Transfer queue ──────────────────────────────────────────────────────────
 
-  const activeStreams = new Map(); // connectionId -> { destroy: () => void }
+  const activeTransferQueues = new Map();
 
-  function destroyActiveStream(connectionId) {
-    const handle = activeStreams.get(connectionId);
-    if (handle) {
-      activeStreams.delete(connectionId);
-      handle.destroy();
+  function createTransferCanceledError() {
+    const error = new Error('传输已取消。');
+    error.code = 'SHELLDESK_TRANSFER_CANCELED';
+    return error;
+  }
+
+  function isTransferCanceledError(error) {
+    return error?.code === 'SHELLDESK_TRANSFER_CANCELED' || /传输已取消/.test(error?.message ?? '');
+  }
+
+  function readRemotePathList(rawPaths) {
+    if (!Array.isArray(rawPaths) || rawPaths.length === 0) {
+      throw new Error('请选择要传输的远程项目。');
+    }
+
+    if (rawPaths.length > 500) {
+      throw new Error('一次最多选择 500 个远程项目。');
+    }
+
+    return rawPaths.map((rawPath) => validateRemotePath(rawPath));
+  }
+
+  function sendTransferPayload(sender, channel, payload) {
+    if (sender && !sender.isDestroyed()) {
+      sender.send(channel, payload);
     }
   }
 
+  function createTransferQueue(connectionId, type, sender) {
+    const queueId = `transfer-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    let activeDestroy = null;
+    let canceled = false;
+    let ended = false;
+    let lastSent = 0;
+    let total = 0;
+    let transferred = 0;
+    let totalFiles = 0;
+    let completedFiles = 0;
+    let totalItems = 0;
+    let completedItems = 0;
+    let fileName = type === 'download' ? '准备下载...' : '准备上传...';
+    let currentFileTransferred = 0;
+    let currentFileTotal = 0;
+
+    const createPayload = () => ({
+      connectionId,
+      queueId,
+      type,
+      fileName,
+      transferred,
+      total,
+      currentFileTransferred,
+      currentFileTotal,
+      completedFiles,
+      totalFiles,
+      completedItems,
+      totalItems,
+    });
+
+    const sendProgress = (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastSent < 100) {
+        return;
+      }
+
+      lastSent = now;
+      sendTransferPayload(sender, 'transfer:progress', createPayload());
+    };
+
+    const queue = {
+      queueId,
+      get canceled() {
+        return canceled;
+      },
+      assertActive() {
+        if (canceled) {
+          throw createTransferCanceledError();
+        }
+      },
+      cancel() {
+        canceled = true;
+        if (activeDestroy) {
+          activeDestroy(createTransferCanceledError());
+        }
+      },
+      setTotals(nextTotal, nextTotalFiles, nextTotalItems) {
+        total = nextTotal;
+        totalFiles = nextTotalFiles;
+        totalItems = nextTotalItems;
+        sendProgress(true);
+      },
+      startFile(nextFileName, nextTotal) {
+        this.assertActive();
+        fileName = nextFileName;
+        currentFileTransferred = 0;
+        currentFileTotal = nextTotal;
+        sendProgress(true);
+      },
+      addBytes(byteCount) {
+        transferred += byteCount;
+        currentFileTransferred += byteCount;
+        sendProgress();
+      },
+      completeFile() {
+        completedFiles += 1;
+        completedItems += 1;
+        currentFileTransferred = currentFileTotal;
+        sendProgress(true);
+      },
+      completeDirectory(nextFileName) {
+        fileName = nextFileName;
+        completedItems += 1;
+        currentFileTransferred = 0;
+        currentFileTotal = 0;
+        sendProgress(true);
+      },
+      setActiveDestroy(destroy) {
+        activeDestroy = destroy;
+      },
+      clearActiveDestroy(destroy) {
+        if (activeDestroy === destroy) {
+          activeDestroy = null;
+        }
+      },
+      finish(success, error) {
+        if (ended) {
+          return;
+        }
+
+        ended = true;
+        if (activeTransferQueues.get(connectionId) === queue) {
+          activeTransferQueues.delete(connectionId);
+        }
+
+        sendTransferPayload(sender, 'transfer:end', {
+          ...createPayload(),
+          success,
+          error: error ? error.message ?? String(error) : undefined,
+        });
+      },
+    };
+
+    return queue;
+  }
+
+  function cancelActiveTransferQueue(connectionId) {
+    const queue = activeTransferQueues.get(connectionId);
+    if (!queue) {
+      return false;
+    }
+
+    queue.cancel();
+    return true;
+  }
+
   registerIpcHandler('connection:cancel-transfer', (_event, connectionId) => {
-    destroyActiveStream(connectionId);
+    return cancelActiveTransferQueue(connectionId);
   });
 
-  function downloadRemoteFileToPath(client, remotePath, localPath, sender, connectionId) {
-    destroyActiveStream(connectionId);
-
+  function createSftpSession(client, callback) {
     return new Promise((resolve, reject) => {
       client.sftp((sftpError, sftp) => {
         if (sftpError) {
@@ -1745,72 +1905,324 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
           return;
         }
 
-        const fileName = getRemoteFileName(remotePath);
-        let settled = false;
-        let transferredBytes = 0;
-        let totalBytes = 0;
-        let lastSent = 0;
-        const readStream = sftp.createReadStream(remotePath);
-        const writeStream = fs.createWriteStream(localPath, { flags: 'w' });
-
-        const cleanup = () => {
-          activeStreams.delete(connectionId);
-          try { sftp.end(); } catch (_) { /* ignore */ }
-          readStream.destroy();
-          writeStream.destroy();
-        };
-
-        activeStreams.set(connectionId, { destroy: cleanup });
-
-        const sendEndAndResolve = (value) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          if (sender && !sender.isDestroyed()) {
-            sender.send('transfer:end', { type: 'download', fileName, transferred: transferredBytes, total: totalBytes, success: true });
+        (async () => {
+          try {
+            resolve(await callback(sftp));
+          } catch (error) {
+            reject(error);
+          } finally {
+            try { sftp.end(); } catch (_) { /* ignore */ }
           }
-          resolve(value);
-        };
-
-        const fail = (error) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          if (sender && !sender.isDestroyed()) {
-            sender.send('transfer:end', { type: 'download', fileName, transferred: transferredBytes, total: totalBytes, success: false, error: error?.message ?? String(error) });
-          }
-          reject(error);
-        };
-
-        const sendProgress = () => {
-          const now = Date.now();
-          if (sender && !sender.isDestroyed() && now - lastSent >= 100) {
-            lastSent = now;
-            sender.send('transfer:progress', {
-              type: 'download',
-              fileName,
-              transferred: transferredBytes,
-              total: totalBytes,
-            });
-          }
-        };
-
-        sftp.stat(remotePath, (statErr, stat) => {
-          if (!statErr && stat) {
-            totalBytes = stat.size;
-          }
-        });
-
-        readStream.on('data', (chunk) => {
-          transferredBytes += chunk.length;
-          sendProgress();
-        });
-        readStream.on('error', fail);
-        writeStream.on('error', fail);
-        writeStream.on('finish', () => sendEndAndResolve(transferredBytes));
-
-        readStream.pipe(writeStream);
+        })();
       });
+    });
+  }
+
+  function statSftpPath(sftp, targetPath) {
+    return new Promise((resolve, reject) => {
+      sftp.stat(targetPath, (statError, attrs) => {
+        if (statError) {
+          reject(statError);
+          return;
+        }
+
+        resolve(attrs);
+      });
+    });
+  }
+
+  function readSftpDirectory(sftp, targetPath) {
+    return new Promise((resolve, reject) => {
+      sftp.readdir(targetPath, (readError, entries) => {
+        if (readError) {
+          reject(readError);
+          return;
+        }
+
+        resolve(entries.filter((entry) => entry.filename !== '.' && entry.filename !== '..'));
+      });
+    });
+  }
+
+  function makeSftpDirectory(sftp, targetPath) {
+    return new Promise((resolve, reject) => {
+      sftp.mkdir(targetPath, (mkdirError) => {
+        if (!mkdirError) {
+          resolve(true);
+          return;
+        }
+
+        sftp.stat(targetPath, (statError, attrs) => {
+          if (!statError && attrs && getSftpEntryType(attrs) === 'directory') {
+            resolve(true);
+            return;
+          }
+
+          reject(mkdirError);
+        });
+      });
+    });
+  }
+
+  async function collectRemoteDownloadPlan(sftp, roots, queue) {
+    const directories = [];
+    const files = [];
+    let totalBytes = 0;
+    let itemCount = 0;
+
+    const countItem = () => {
+      itemCount += 1;
+      if (itemCount > maxTransferQueueItems) {
+        throw new Error(`传输项目超过 ${maxTransferQueueItems} 项，请分批传输。`);
+      }
+    };
+
+    const walk = async (remotePath, localPath, relativePath, fileOnly = false) => {
+      queue.assertActive();
+      const attrs = await statSftpPath(sftp, remotePath);
+      const type = getSftpEntryType(attrs);
+
+      if (type === 'directory') {
+        if (fileOnly) {
+          throw new Error('请选择批量下载来下载文件夹。');
+        }
+
+        countItem();
+        directories.push({ remotePath, localPath, relativePath });
+        const entries = await readSftpDirectory(sftp, remotePath);
+
+        for (const entry of entries) {
+          const childRemotePath = joinRemoteChildPath(remotePath, entry.filename);
+          const childLocalPath = path.join(localPath, sanitizeLocalFileName(entry.filename, 'download'));
+          const childRelativePath = `${relativePath}/${entry.filename}`;
+          await walk(childRemotePath, childLocalPath, childRelativePath);
+        }
+        return;
+      }
+
+      countItem();
+      const size = attrs.size ?? 0;
+      totalBytes += size;
+      files.push({ remotePath, localPath, relativePath, size });
+    };
+
+    for (const root of roots) {
+      await walk(root.remotePath, root.localPath, root.relativePath, root.fileOnly);
+    }
+
+    return { directories, files, totalBytes, itemCount };
+  }
+
+  function collectLocalUploadPlan(localPaths, remoteDirectory, queue) {
+    const directories = [];
+    const files = [];
+    const rootRemotePaths = [];
+    let totalBytes = 0;
+    let itemCount = 0;
+
+    const countItem = () => {
+      itemCount += 1;
+      if (itemCount > maxTransferQueueItems) {
+        throw new Error(`传输项目超过 ${maxTransferQueueItems} 项，请分批传输。`);
+      }
+    };
+
+    const walk = (localPath, remotePath, relativePath) => {
+      queue.assertActive();
+      const stats = fs.lstatSync(localPath);
+
+      if (stats.isDirectory()) {
+        countItem();
+        directories.push({ localPath, remotePath, relativePath });
+        const entries = fs.readdirSync(localPath, { withFileTypes: true })
+          .sort((left, right) => remoteEntryCollator.compare(left.name, right.name));
+
+        for (const entry of entries) {
+          if (entry.isSymbolicLink()) {
+            continue;
+          }
+
+          const childLocalPath = path.join(localPath, entry.name);
+          const childRemotePath = validateMutableRemotePath(joinRemoteChildPath(remotePath, entry.name));
+          const childRelativePath = `${relativePath}/${entry.name}`;
+          walk(childLocalPath, childRemotePath, childRelativePath);
+        }
+        return;
+      }
+
+      if (!stats.isFile()) {
+        return;
+      }
+
+      countItem();
+      totalBytes += stats.size;
+      files.push({ localPath, remotePath, relativePath, size: stats.size });
+    };
+
+    for (const localPath of localPaths) {
+      const name = path.basename(localPath) || 'upload';
+      const remotePath = validateMutableRemotePath(joinRemoteChildPath(remoteDirectory, name));
+      rootRemotePaths.push(remotePath);
+      walk(localPath, remotePath, name);
+    }
+
+    if (!directories.length && !files.length) {
+      throw new Error('没有可传输的文件。');
+    }
+
+    return { directories, files, rootRemotePaths, totalBytes, itemCount };
+  }
+
+  function transferRemoteFileToLocal(sftp, file, queue) {
+    queue.startFile(file.relativePath, file.size);
+    fs.mkdirSync(path.dirname(file.localPath), { recursive: true });
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const readStream = sftp.createReadStream(file.remotePath);
+      const writeStream = fs.createWriteStream(file.localPath, { flags: 'w' });
+      const destroy = (error) => {
+        readStream.destroy(error);
+        writeStream.destroy(error);
+      };
+
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        queue.clearActiveDestroy(destroy);
+        queue.completeFile();
+        resolve(file.size);
+      };
+
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        queue.clearActiveDestroy(destroy);
+        destroy();
+        reject(error);
+      };
+
+      queue.setActiveDestroy(destroy);
+      readStream.on('data', (chunk) => queue.addBytes(chunk.length));
+      readStream.on('error', fail);
+      writeStream.on('error', fail);
+      writeStream.on('finish', finish);
+      readStream.pipe(writeStream);
+    });
+  }
+
+  function transferLocalFileToRemote(sftp, file, queue) {
+    queue.startFile(file.relativePath, file.size);
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const readStream = fs.createReadStream(file.localPath);
+      const writeStream = sftp.createWriteStream(file.remotePath);
+      const destroy = (error) => {
+        readStream.destroy(error);
+        writeStream.destroy(error);
+      };
+
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        queue.clearActiveDestroy(destroy);
+        queue.completeFile();
+        resolve(file.size);
+      };
+
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        queue.clearActiveDestroy(destroy);
+        destroy();
+        reject(error);
+      };
+
+      queue.setActiveDestroy(destroy);
+      readStream.on('data', (chunk) => queue.addBytes(chunk.length));
+      readStream.on('error', fail);
+      writeStream.on('error', fail);
+      writeStream.on('close', finish);
+      readStream.pipe(writeStream);
+    });
+  }
+
+  async function runTransferQueue(connectionId, type, sender, executor) {
+    cancelActiveTransferQueue(connectionId);
+    const queue = createTransferQueue(connectionId, type, sender);
+    activeTransferQueues.set(connectionId, queue);
+    queue.setTotals(0, 0, 0);
+
+    try {
+      const result = await executor(queue);
+      queue.finish(true);
+      return { canceled: false, ...result };
+    } catch (error) {
+      queue.finish(false, error);
+      if (isTransferCanceledError(error)) {
+        return { canceled: true };
+      }
+      throw error;
+    }
+  }
+
+  async function runDownloadTransfer(connectionId, sender, roots) {
+    return runTransferQueue(connectionId, 'download', sender, async (queue) => {
+      let totalBytes = 0;
+      let totalFiles = 0;
+      let totalItems = 0;
+
+      await withActiveConnectionClientRetry(connectionId, (activeConnection) =>
+        createSftpSession(activeConnection.client, async (sftp) => {
+          const plan = await collectRemoteDownloadPlan(sftp, roots, queue);
+          totalBytes = plan.totalBytes;
+          totalFiles = plan.files.length;
+          totalItems = plan.itemCount;
+          queue.setTotals(totalBytes, totalFiles, totalItems);
+
+          for (const directory of plan.directories) {
+            queue.assertActive();
+            fs.mkdirSync(directory.localPath, { recursive: true });
+            queue.completeDirectory(directory.relativePath);
+          }
+
+          for (const file of plan.files) {
+            queue.assertActive();
+            await transferRemoteFileToLocal(sftp, file, queue);
+          }
+        }));
+
+      return { size: totalBytes, fileCount: totalFiles, itemCount: totalItems };
+    });
+  }
+
+  async function runUploadTransfer(connectionId, sender, localPaths, remoteDirectory) {
+    return runTransferQueue(connectionId, 'upload', sender, async (queue) => {
+      const plan = collectLocalUploadPlan(localPaths, remoteDirectory, queue);
+      queue.setTotals(plan.totalBytes, plan.files.length, plan.itemCount);
+
+      await withActiveConnectionClientRetry(connectionId, (activeConnection) =>
+        createSftpSession(activeConnection.client, async (sftp) => {
+          for (const directory of plan.directories) {
+            queue.assertActive();
+            await makeSftpDirectory(sftp, directory.remotePath);
+            queue.completeDirectory(directory.relativePath);
+          }
+
+          for (const file of plan.files) {
+            queue.assertActive();
+            await transferLocalFileToRemote(sftp, file, queue);
+          }
+        }));
+
+      return {
+        remotePath: plan.rootRemotePaths[0],
+        remotePaths: plan.rootRemotePaths,
+        size: plan.totalBytes,
+        fileCount: plan.files.length,
+        itemCount: plan.itemCount,
+      };
     });
   }
 
@@ -1820,7 +2232,7 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     const senderWindow = BrowserWindow.fromWebContents(event.sender);
 
     const result = await dialog.showSaveDialog(senderWindow ?? BrowserWindow.getAllWindows()[0], {
-      defaultPath: remoteFileName,
+      defaultPath: sanitizeLocalFileName(remoteFileName),
       filters: [{ name: '所有文件', extensions: ['*'] }],
     });
 
@@ -1828,9 +2240,41 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       return { canceled: true };
     }
 
-    const size = await withActiveConnectionClientRetry(connectionId, (activeConnection) =>
-      downloadRemoteFileToPath(activeConnection.client, remotePath, result.filePath, event.sender, connectionId));
-    return { canceled: false, filePath: result.filePath, size };
+    const transferResult = await runDownloadTransfer(connectionId, event.sender, [{
+      remotePath,
+      localPath: result.filePath,
+      relativePath: remoteFileName,
+      fileOnly: true,
+    }]);
+
+    return { ...transferResult, filePath: result.filePath };
+  });
+
+  registerIpcHandler('connection:download-paths', async (event, connectionId, rawPaths) => {
+    const remotePaths = readRemotePathList(rawPaths);
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+
+    const result = await dialog.showOpenDialog(senderWindow ?? BrowserWindow.getAllWindows()[0], {
+      properties: ['openDirectory', 'createDirectory'],
+      title: '选择下载保存目录',
+    });
+
+    if (result.canceled || !result.filePaths.length) {
+      return { canceled: true };
+    }
+
+    const localDirectory = result.filePaths[0];
+    const roots = remotePaths.map((remotePath) => {
+      const fileName = getRemoteFileName(remotePath);
+      return {
+        remotePath,
+        localPath: path.join(localDirectory, sanitizeLocalFileName(fileName, 'download')),
+        relativePath: fileName,
+      };
+    });
+    const transferResult = await runDownloadTransfer(connectionId, event.sender, roots);
+
+    return { ...transferResult, directoryPath: localDirectory };
   });
 
   registerIpcHandler('connection:upload-file', async (event, connectionId, rawRemotePath) => {
@@ -1846,82 +2290,24 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       return { canceled: true };
     }
 
-    const localPath = result.filePaths[0];
-    const fileName = localPath.split(/[/\\]/).pop() || 'upload';
-    const destPath = joinRemoteChildPath(currentPath, fileName);
-    const targetRemotePath = validateMutableRemotePath(destPath);
-    const stats = fs.statSync(localPath);
+    return runUploadTransfer(connectionId, event.sender, result.filePaths.slice(0, 1), currentPath);
+  });
 
-    if (!stats.isFile()) {
-      throw new Error('只能上传文件。');
+  registerIpcHandler('connection:upload-paths', async (event, connectionId, rawRemotePath) => {
+    const currentPath = validateRemotePath(rawRemotePath);
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+
+    const result = await dialog.showOpenDialog(senderWindow ?? BrowserWindow.getAllWindows()[0], {
+      properties: ['openFile', 'openDirectory', 'multiSelections'],
+      filters: [{ name: '所有文件', extensions: ['*'] }],
+      title: '选择要上传的文件或文件夹',
+    });
+
+    if (result.canceled || !result.filePaths.length) {
+      return { canceled: true };
     }
 
-    destroyActiveStream(connectionId);
-
-    await withActiveConnectionClientRetry(connectionId, (activeConnection) => new Promise((resolve, reject) => {
-      activeConnection.client.sftp((sftpError, sftp) => {
-        if (sftpError) { reject(sftpError); return; }
-        let settled = false;
-        let transferredBytes = 0;
-        let lastSent = 0;
-        const totalBytes = stats.size;
-        const readStream = fs.createReadStream(localPath);
-        const writeStream = sftp.createWriteStream(targetRemotePath);
-
-        const cleanup = () => {
-          activeStreams.delete(connectionId);
-          try { sftp.end(); } catch (_) { /* ignore */ }
-          readStream.destroy();
-          writeStream.destroy();
-        };
-
-        activeStreams.set(connectionId, { destroy: cleanup });
-
-        const end = (success, errorMsg) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          if (!event.sender.isDestroyed()) {
-            event.sender.send('transfer:end', {
-              type: 'upload',
-              fileName,
-              transferred: transferredBytes,
-              total: totalBytes,
-              success,
-              error: errorMsg,
-            });
-          }
-          if (success) resolve();
-          else reject(new Error(errorMsg ?? '传输已取消'));
-        };
-
-        const sendProgress = () => {
-          const now = Date.now();
-          if (!event.sender.isDestroyed() && now - lastSent >= 100) {
-            lastSent = now;
-            event.sender.send('transfer:progress', {
-              type: 'upload',
-              fileName,
-              transferred: transferredBytes,
-              total: totalBytes,
-            });
-          }
-        };
-
-        const fail = (error) => end(false, error?.message ?? String(error));
-
-        readStream.on('data', (chunk) => {
-          transferredBytes += chunk.length;
-          sendProgress();
-        });
-        readStream.on('error', fail);
-        writeStream.on('error', fail);
-        writeStream.on('close', () => end(true, null));
-        readStream.pipe(writeStream);
-      });
-    }));
-
-    return { canceled: false, remotePath: targetRemotePath, size: stats.size };
+    return runUploadTransfer(connectionId, event.sender, result.filePaths, currentPath);
   });
 
   registerIpcHandler('connection:get-status', async (_event, connectionId) => {
