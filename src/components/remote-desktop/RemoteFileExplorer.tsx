@@ -1971,8 +1971,8 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
                   </button>
                 )}
                 <div className="context-menu-item-has-submenu">
-                  <button type="button" role="menuitem">
-                    压缩为 ▸
+                  <button type="button" role="menuitem" aria-haspopup="menu">
+                    压缩为
                   </button>
                   <div className="context-submenu">
                     {(() => {

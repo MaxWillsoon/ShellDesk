@@ -43,6 +43,7 @@ export interface RemoteTerminalSessionState {
   title: string;
   status: RemoteTerminalSessionStatus;
   lastExitCode: number | null;
+  hasForegroundTask: boolean;
 }
 
 export interface RemoteTerminalCommandRequest {
@@ -88,6 +89,8 @@ type RemoteTerminalSessionEventInput =
   | Omit<Extract<RemoteTerminalSessionEvent, { type: 'terminal-command' }>, 'terminalId' | 'timestamp' | 'title'>
   | Omit<Extract<RemoteTerminalSessionEvent, { type: 'terminal-output' }>, 'terminalId' | 'timestamp' | 'title'>;
 
+type ForegroundTaskSource = 'alternate-screen' | 'command';
+
 interface RemoteTerminalProps {
   connectionId: string;
   terminalId: string;
@@ -129,6 +132,9 @@ const terminalSearchOptions: ISearchOptions = {
 const ansiOscPattern = /\x1b\][^\x07]*(?:\x07|\x1b\\)/g;
 const ansiCsiPattern = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 const controlCharacterPattern = /[\x00-\x08\x0b-\x1f\x7f]/g;
+const alternateScreenPattern = /\x1b\[\?(?:47|1047|1049)([hl])/g;
+const foregroundCommandPattern = /^(?:(?:sudo|doas)\s+)?(?:top(?!\s+-b(?:\s|$))|htop|btop|atop|watch|vim|vi|nvim|nano|less|more|man)(?:\s|$)/i;
+const foregroundSequenceBufferLimit = 32;
 
 function buildTerminalOptions(settings: ShellDeskAppSettings): ITerminalOptions {
   return {
@@ -229,6 +235,35 @@ function summarizeTerminalOutput(data: string) {
   };
 }
 
+function readForegroundTaskSignal(previousBuffer: string, data: string) {
+  const combinedData = `${previousBuffer}${data}`;
+  let hasForegroundTask: boolean | null = null;
+  alternateScreenPattern.lastIndex = 0;
+  let match: RegExpExecArray | null = alternateScreenPattern.exec(combinedData);
+
+  while (match) {
+    hasForegroundTask = match[1] === 'h';
+    match = alternateScreenPattern.exec(combinedData);
+  }
+
+  alternateScreenPattern.lastIndex = 0;
+
+  return {
+    buffer: combinedData.slice(-foregroundSequenceBufferLimit),
+    hasForegroundTask,
+  };
+}
+
+function isLikelyForegroundCommand(command: string) {
+  const trimmedCommand = command.trim();
+
+  if (!trimmedCommand || /[;&|]/.test(trimmedCommand)) {
+    return false;
+  }
+
+  return foregroundCommandPattern.test(trimmedCommand);
+}
+
 function formatTroubleshootingSnippet(selection: string) {
   return selection
     .replace(/\r\n?/g, '\n')
@@ -312,13 +347,18 @@ function RemoteTerminal({
   const launchOptionsRef = useRef(launchOptions);
   const followOutputRef = useRef(true);
   const commandBufferRef = useRef('');
+  const foregroundSequenceBufferRef = useRef('');
+  const foregroundTaskSourceRef = useRef<ForegroundTaskSource | null>(null);
   const handledCommandRequestRef = useRef('');
   const handledToolRequestRef = useRef('');
+  const onChromeChangeRef = useRef(onChromeChange);
   const onSessionEventRef = useRef(onSessionEvent);
+  const onSessionStateChangeRef = useRef(onSessionStateChange);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [sessionStatus, setSessionStatus] = useState<RemoteTerminalSessionStatus>('idle');
   const [sessionError, setSessionError] = useState('');
   const [lastExitCode, setLastExitCode] = useState<number | null>(null);
+  const [hasForegroundTask, setHasForegroundTask] = useState(false);
   const [followOutput, setFollowOutput] = useState(true);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -482,6 +522,14 @@ function RemoteTerminal({
   }, [onSessionEvent]);
 
   useEffect(() => {
+    onChromeChangeRef.current = onChromeChange;
+  }, [onChromeChange]);
+
+  useEffect(() => {
+    onSessionStateChangeRef.current = onSessionStateChange;
+  }, [onSessionStateChange]);
+
+  useEffect(() => {
     launchOptionsRef.current = launchOptions;
   }, [launchOptions]);
 
@@ -506,13 +554,14 @@ function RemoteTerminal({
       tone: getTerminalChromeTone(sessionStatus, Boolean(sessionError)),
     };
 
-    onChromeChange?.(payload);
-    onSessionStateChange?.({
+    onChromeChangeRef.current?.(payload);
+    onSessionStateChangeRef.current?.({
       title: sessionTitle,
       status: sessionStatus,
       lastExitCode,
+      hasForegroundTask,
     });
-  }, [lastExitCode, onChromeChange, onSessionStateChange, sessionError, sessionStatus, sessionTitle]);
+  }, [hasForegroundTask, lastExitCode, sessionError, sessionStatus, sessionTitle]);
 
   useEffect(() => {
     const host = terminalHostRef.current;
@@ -521,6 +570,8 @@ function RemoteTerminal({
     if (!host || !api?.connections || !api.events) {
       setSessionError('当前运行环境不支持终端。');
       setSessionStatus('exited');
+      setHasForegroundTask(false);
+      foregroundTaskSourceRef.current = null;
       return;
     }
 
@@ -543,6 +594,9 @@ function RemoteTerminal({
     setSessionStatus('idle');
     setSessionError('');
     setLastExitCode(null);
+    setHasForegroundTask(false);
+    foregroundSequenceBufferRef.current = '';
+    foregroundTaskSourceRef.current = null;
 
     terminal.attachCustomKeyEventHandler((event) => {
       const shouldOpenSearch = event.type === 'keydown' &&
@@ -674,6 +728,9 @@ function RemoteTerminal({
       setSessionStatus('idle');
       setSessionError('');
       setLastExitCode(null);
+      setHasForegroundTask(false);
+      foregroundSequenceBufferRef.current = '';
+      foregroundTaskSourceRef.current = null;
       isTerminalReadyRef.current = false;
       const { columns, rows } = getTerminalSize();
 
@@ -752,6 +809,14 @@ function RemoteTerminal({
         useLegacyTerminalIpcRef.current = true;
       }
 
+      const foregroundSignal = readForegroundTaskSignal(foregroundSequenceBufferRef.current, payload.data);
+      foregroundSequenceBufferRef.current = foregroundSignal.buffer;
+
+      if (foregroundSignal.hasForegroundTask !== null) {
+        foregroundTaskSourceRef.current = foregroundSignal.hasForegroundTask ? 'alternate-screen' : null;
+        setHasForegroundTask(foregroundSignal.hasForegroundTask);
+      }
+
       const outputSummary = summarizeTerminalOutput(payload.data);
 
       if (outputSummary) {
@@ -775,6 +840,9 @@ function RemoteTerminal({
       }
 
       isTerminalReadyRef.current = false;
+      setHasForegroundTask(false);
+      foregroundSequenceBufferRef.current = '';
+      foregroundTaskSourceRef.current = null;
       setLastExitCode(Number.isInteger(payload.code) ? payload.code ?? null : null);
       setSessionStatus('exited');
       terminal.writeln('\r\n终端会话已结束。');
@@ -785,6 +853,9 @@ function RemoteTerminal({
       }
 
       isTerminalReadyRef.current = false;
+      setHasForegroundTask(false);
+      foregroundSequenceBufferRef.current = '';
+      foregroundTaskSourceRef.current = null;
       setSessionError(payload.reason ?? '');
       setSessionStatus('disconnected');
       terminal.writeln(`\r\nSSH 连接已断开${payload.reason ? `：${payload.reason}` : '。'}`);
@@ -803,9 +874,23 @@ function RemoteTerminal({
       }
 
       writeTerminalInput(data);
+      if (
+        data.includes('\x03') ||
+        data.includes('\x04') ||
+        (foregroundTaskSourceRef.current === 'command' && data === 'q')
+      ) {
+        foregroundTaskSourceRef.current = null;
+        setHasForegroundTask(false);
+      }
+
       const commandState = collectSubmittedCommands(commandBufferRef.current, data);
       commandBufferRef.current = commandState.buffer;
       commandState.commands.forEach((command) => {
+        if (isLikelyForegroundCommand(command)) {
+          foregroundTaskSourceRef.current = 'command';
+          setHasForegroundTask(true);
+        }
+
         emitSessionEvent({
           type: 'terminal-command',
           command,
@@ -867,6 +952,12 @@ function RemoteTerminal({
       terminal.paste(commandRequest.command);
     } else {
       sendInputRef.current?.(`${commandRequest.command}\r`);
+
+      if (isLikelyForegroundCommand(commandRequest.command)) {
+        foregroundTaskSourceRef.current = 'command';
+        setHasForegroundTask(true);
+      }
+
       emitSessionEvent({
         type: 'terminal-command',
         command: commandRequest.command,

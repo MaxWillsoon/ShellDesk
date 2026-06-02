@@ -203,6 +203,8 @@ This table tracks the planned compatibility matrix for ShellDesk remote system t
 pnpm install
 ```
 
+`pnpm install` runs `prepare`, which configures the local Git hooks from `.githooks`. If hooks are ever missing, run `pnpm hooks:install` manually.
+
 ### Start Development Mode
 
 ```bash
@@ -233,6 +235,8 @@ Stop-Process -Id <PID>
 | `pnpm build` | Runs `tsc --noEmit` and then the Vite production build |
 | `pnpm start` | Runs the current build output |
 | `pnpm preview` | Previews the Vite frontend build without Electron main-process capabilities |
+| `pnpm hooks:install` | Configures local Git hooks from `.githooks` |
+| `pnpm tag` | Creates and pushes a `v<package.json version>` Git tag |
 | `pnpm release:dir` | Builds and outputs an electron-builder directory package |
 | `pnpm release` | Builds the Windows x64 NSIS installer |
 | `pnpm pack` | Packages with electron-builder without publishing |

@@ -206,6 +206,7 @@ interface DesktopWindowState {
   terminalId?: string;
   terminalLaunchOptions?: RemoteTerminalLaunchOptions;
   terminalStatus?: RemoteTerminalSessionStatus;
+  terminalHasForegroundTask?: boolean;
   terminalToolRequest?: RemoteTerminalToolRequest;
   chromeTitle?: string;
   chromeStatus?: string;
@@ -346,6 +347,7 @@ function createDesktopWindow(appKey: DesktopAppKey, sequence: number, zIndex: nu
     zIndex,
     terminalId: appKey === 'terminal' ? `terminal-${sequence}` : undefined,
     terminalStatus: appKey === 'terminal' ? 'idle' : undefined,
+    terminalHasForegroundTask: appKey === 'terminal' ? false : undefined,
     chromeTitle: isBrowserWindow ? '127.0.0.1' : undefined,
     chromeStatus: isBrowserWindow ? '已就绪' : undefined,
     chromeTone: isBrowserWindow ? 'idle' : undefined,
@@ -1442,7 +1444,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
   const closeDesktopWindow = (windowId: string) => {
     const desktopWindow = desktopWindows.find((currentWindow) => currentWindow.id === windowId);
 
-    if (desktopWindow?.appKey === 'terminal' && desktopWindow.terminalStatus === 'running') {
+    if (desktopWindow?.appKey === 'terminal' && desktopWindow.terminalHasForegroundTask) {
       setPendingCloseWindowId(windowId);
       return;
     }
@@ -1683,14 +1685,29 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
   };
 
   const updateTerminalSessionState = (windowId: string, payload: RemoteTerminalSessionState) => {
-    setDesktopWindows((currentWindows) => currentWindows.map((desktopWindow) => (
-      desktopWindow.id === windowId
-        ? {
-            ...desktopWindow,
-            terminalStatus: payload.status,
-          }
-      : desktopWindow
-    )));
+    setDesktopWindows((currentWindows) => {
+      let didChangeTerminalState = false;
+      const nextWindows = currentWindows.map((desktopWindow) => {
+        if (
+          desktopWindow.id !== windowId ||
+          (
+            desktopWindow.terminalStatus === payload.status &&
+            desktopWindow.terminalHasForegroundTask === payload.hasForegroundTask
+          )
+        ) {
+          return desktopWindow;
+        }
+
+        didChangeTerminalState = true;
+        return {
+          ...desktopWindow,
+          terminalStatus: payload.status,
+          terminalHasForegroundTask: payload.hasForegroundTask,
+        };
+      });
+
+      return didChangeTerminalState ? nextWindows : currentWindows;
+    });
   };
 
   const requestTerminalTool = (windowId: string, action: RemoteTerminalToolAction) => {
@@ -1799,7 +1816,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
     }
 
     if (desktopWindow.appKey === 'firewall-manager') {
-      return <RemoteFirewallManager connectionId={connection.id} systemType={connection.host.systemType} />;
+      return <RemoteFirewallManager connectionId={connection.id} sshPort={connection.host.port} systemType={connection.host.systemType} />;
     }
 
     if (desktopWindow.appKey === 'iptables-manager') {
@@ -1977,7 +1994,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
                   <span className={`desktop-title-icon desktop-app-icon-${desktopWindow.appKey}`}>
                     <DesktopAppIcon appKey={desktopWindow.appKey} />
                   </span>
-                  {desktopWindow.appKey === 'browser' || desktopWindow.appKey === 'terminal' ? (
+                  {desktopWindow.appKey === 'browser' ? (
                     <>
                       <span className="desktop-window-kicker">{appInfo.label}</span>
                       <strong title={desktopWindow.chromeTitle || appInfo.label}>
@@ -2531,7 +2548,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
         >
           <div id="terminal-close-confirm-title" className="notepad-modal-title">关闭终端窗口</div>
           <div className="notepad-modal-message">
-            该终端会话仍在运行，关闭窗口会结束当前 Shell。
+            检测到该终端可能仍有前台程序在运行，关闭窗口会结束当前终端会话。
           </div>
           <div className="notepad-modal-actions">
             <button type="button" className="notepad-modal-btn" onClick={() => setPendingCloseWindowId('')}>取消</button>

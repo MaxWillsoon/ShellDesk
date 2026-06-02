@@ -28,6 +28,13 @@ pnpm pack:linux-arm64 # Linux arm64
 
 **已知坑**：`pnpm dev` 退出后 Vite 可能残留占用 5173 端口。先用 `netstat -ano | findstr :5173` 找到占用 PID，再只对该 PID 执行 `taskkill /PID <pid> /F` 或 `Stop-Process -Id <pid>`，不要粗暴 kill 全部 node 进程。
 
+## AI 开发测试变量
+
+- 如果仓库根目录存在 `.env` 文件，AI Agent 在需要连接测试服务器进行开发、调试或验证时，应先读取其中的测试 SSH 变量，用于自动填充测试服务器连接信息。
+- 推荐变量名：`SHELLDESK_TEST_SSH_HOST`、`SHELLDESK_TEST_SSH_PORT`、`SHELLDESK_TEST_SSH_USERNAME`、`SHELLDESK_TEST_SSH_PASSWORD`。
+- `.env` 只用于本地测试凭据，不要提交到仓库；提交的样例请使用 `.env.example`，并只放占位值。
+- 不要在日志、终端输出、提交信息或回复中明文展示 `SHELLDESK_TEST_SSH_PASSWORD`。如果 `.env` 不存在或变量为空，应跳过自动连接并说明缺少测试凭据，不要臆造服务器信息。
+
 ## 架构概览
 
 ```

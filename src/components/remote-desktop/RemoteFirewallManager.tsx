@@ -7,8 +7,11 @@ import {
   createFirewallAddRuleCommand,
   createFirewallDeleteRuleCommand,
   createFirewallReloadCommand,
+  createFirewallSetEnabledCommand,
   createFirewallStatusCommand,
   getFirewallBackendLabel,
+  isFirewallEnabled,
+  isFirewallSshPortAllowed,
   isRiskyFirewallDraft,
   parseFirewallSnapshot,
   type FirewallRule,
@@ -20,6 +23,7 @@ import type { RemoteSystemType } from './types';
 
 interface RemoteFirewallManagerProps {
   connectionId: string;
+  sshPort: number;
   systemType?: RemoteSystemType;
 }
 
@@ -28,6 +32,7 @@ type FirewallTab = 'rules' | 'raw';
 interface PendingFirewallAction {
   title: string;
   command: string;
+  description?: string;
   danger?: boolean;
   afterRun?: () => Promise<void>;
 }
@@ -81,7 +86,7 @@ function isInactiveUfwSnapshot(snapshot: FirewallSnapshot) {
   return snapshot.backend === 'ufw' && /inactive|不活动|未启用|停用/i.test(snapshot.status);
 }
 
-function RemoteFirewallManager({ connectionId, systemType }: RemoteFirewallManagerProps) {
+function RemoteFirewallManager({ connectionId, sshPort, systemType }: RemoteFirewallManagerProps) {
   const isWindowsHost = isWindowsSystem(systemType);
   const [snapshot, setSnapshot] = useState<FirewallSnapshot | null>(null);
   const [selectedRuleId, setSelectedRuleId] = useState('');
@@ -99,6 +104,8 @@ function RemoteFirewallManager({ connectionId, systemType }: RemoteFirewallManag
   }, [selectedRuleId, snapshot?.rules]);
 
   const riskHint = useMemo(() => isRiskyFirewallDraft(draft), [draft]);
+  const canToggleFirewall = Boolean(snapshot && (snapshot.backend === 'ufw' || snapshot.backend === 'firewalld'));
+  const firewallEnabled = snapshot ? isFirewallEnabled(snapshot) : false;
 
   const refreshFirewall = useCallback(async () => {
     setLoading(true);
@@ -115,7 +122,9 @@ function RemoteFirewallManager({ connectionId, systemType }: RemoteFirewallManag
       if (result.code !== 0 && nextSnapshot.backend === 'unknown') {
         setNotice(result.stderr || result.stdout || '未检测到可用防火墙工具。');
       } else if (isInactiveUfwSnapshot(nextSnapshot)) {
-        setNotice('UFW 当前未启用，列表中的规则只存在于配置中，不会拦截端口。确认 SSH 规则后，可在终端执行 sudo ufw enable。');
+        setNotice('UFW 当前未启用，列表中的规则只存在于配置中，不会拦截端口。确认 SSH 规则后，可点击“启用”。');
+      } else if (nextSnapshot.backend === 'firewalld' && !isFirewallEnabled(nextSnapshot)) {
+        setNotice('firewalld 当前未运行。启用前请确认当前 SSH 端口已在默认 zone 中放行。');
       } else if (result.stderr.trim()) {
         setNotice(result.stderr.trim());
       }
@@ -185,6 +194,32 @@ function RemoteFirewallManager({ connectionId, systemType }: RemoteFirewallManag
     }
   };
 
+  const prepareSetFirewallEnabled = (enabled: boolean) => {
+    if (!snapshot) {
+      return;
+    }
+
+    try {
+      const command = createFirewallSetEnabledCommand(snapshot.backend, enabled);
+      const sshPortAllowed = isFirewallSshPortAllowed(snapshot, sshPort);
+      const missingSshRuleWarning = enabled && !sshPortAllowed
+        ? `未检测到放行当前 SSH 连接端口 ${sshPort}/tcp 的规则。启用防火墙可能立即中断当前会话，请先添加允许规则，或确认目标主机已通过其它策略放行该端口。`
+        : '';
+
+      setPendingAction({
+        title: enabled ? '启用防火墙' : '停用防火墙',
+        command,
+        description: missingSshRuleWarning || (enabled
+          ? '将启用防火墙服务，并在支持的后端中设置开机自启。'
+          : '将停用防火墙服务，并在支持的后端中关闭开机自启。'),
+        danger: !enabled || Boolean(missingSshRuleWarning),
+        afterRun: refreshFirewall,
+      });
+    } catch (error) {
+      setError(getErrorMessage(error));
+    }
+  };
+
   const executePendingAction = async () => {
     if (!pendingAction) {
       return;
@@ -237,6 +272,12 @@ function RemoteFirewallManager({ connectionId, systemType }: RemoteFirewallManag
         <div className="firewall-toolbar-actions">
           <button type="button" className="primary" onClick={refreshFirewall} disabled={loading}>
             {loading ? '刷新中' : '刷新'}
+          </button>
+          <button type="button" className="primary" onClick={() => prepareSetFirewallEnabled(true)} disabled={!canToggleFirewall || firewallEnabled || actionRunning}>
+            启用
+          </button>
+          <button type="button" className="danger" onClick={() => prepareSetFirewallEnabled(false)} disabled={!canToggleFirewall || !firewallEnabled || actionRunning}>
+            停用
           </button>
           <button type="button" onClick={prepareReload} disabled={!snapshot || snapshot.backend === 'unknown'}>
             Reload
@@ -366,6 +407,7 @@ function RemoteFirewallManager({ connectionId, systemType }: RemoteFirewallManag
               <span>{pendingAction.danger ? '高风险操作确认' : '确认命令'}</span>
               <strong>{pendingAction.title}</strong>
             </div>
+            {pendingAction.description ? <p>{pendingAction.description}</p> : null}
             <pre>{pendingAction.command}</pre>
             <div className="firewall-confirm-actions">
               <button type="button" onClick={() => setPendingAction(null)}>取消</button>

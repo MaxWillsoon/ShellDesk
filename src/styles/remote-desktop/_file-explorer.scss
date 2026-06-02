@@ -60,7 +60,7 @@
   display: grid;
   height: 100%;
   min-height: 0;
-  grid-template-columns: 206px minmax(0, 1fr);
+  grid-template-columns: 184px minmax(0, 1fr);
   overflow: hidden;
   background: #121c29;
 }
@@ -70,10 +70,10 @@
   height: 100%;
   min-height: 0;
   align-content: start;
-  gap: 6px;
+  gap: 4px;
   overflow: auto;
   border-right: 1px solid rgba(154, 177, 210, 0.14);
-  padding: 18px 14px;
+  padding: 12px 10px;
   background:
     radial-gradient(ellipse at 50% 0%, rgba(77, 137, 230, 0.1), transparent 42%),
     #152130;
@@ -81,15 +81,15 @@
 
 .explorer-sidebar button {
   display: flex;
-  height: 40px;
+  height: 32px;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   border: 1px solid transparent;
-  border-radius: 10px;
-  padding: 0 9px;
+  border-radius: 8px;
+  padding: 0 7px;
   background: transparent;
   color: #c9d3df;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 820;
   text-align: left;
   transition:
@@ -749,14 +749,19 @@ button.explorer-row {
 
 .context-menu-item-has-submenu > button {
   width: 100%;
+  padding-right: 12px;
 }
 
 .context-menu-item-has-submenu > button::after {
+  display: block;
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
   margin-left: auto;
-  padding-left: 12px;
-  content: '▸';
-  font-size: 10px;
-  color: #8892a4;
+  border-top: 1.7px solid #657083;
+  border-right: 1.7px solid #657083;
+  content: '';
+  transform: rotate(45deg);
 }
 
 .context-submenu {
@@ -1071,9 +1076,9 @@ button.explorer-row {
 }
 
 .explorer-sidebar .sidebar-section-title {
-  padding: 0 0 5px 4px;
+  padding: 2px 0 2px 4px;
   color: #7f8da1;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 850;
   text-transform: none;
   letter-spacing: 0;
@@ -1081,12 +1086,12 @@ button.explorer-row {
 
 .sidebar-path-icon {
   display: grid;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   flex: 0 0 auto;
   place-items: center;
   border: 1px solid rgba(154, 177, 210, 0.13);
-  border-radius: 9px;
+  border-radius: 7px;
   background:
     linear-gradient(180deg, rgba(37, 52, 70, 0.82), rgba(23, 35, 51, 0.78));
   color: #cbd8e8;
@@ -1096,8 +1101,8 @@ button.explorer-row {
 }
 
 .sidebar-path-icon svg {
-  width: 17px;
-  height: 17px;
+  width: 15px;
+  height: 15px;
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
@@ -1210,7 +1215,7 @@ button.explorer-row {
 }
 
 .explorer-layout.with-details {
-  grid-template-columns: 206px minmax(360px, 1fr) 282px;
+  grid-template-columns: 184px minmax(360px, 1fr) 282px;
 }
 
 .explorer-sidebar button {
@@ -1225,7 +1230,7 @@ button.explorer-row {
 }
 
 .explorer-sidebar-note {
-  padding: 3px 10px 8px;
+  padding: 1px 8px 5px;
   color: #8594a9;
   font-size: 9.5px;
   line-height: 1.45;
@@ -1233,10 +1238,10 @@ button.explorer-row {
 
 .explorer-transfer-card {
   display: grid;
-  gap: 3px;
+  gap: 2px;
   border: 1px solid rgba(154, 177, 210, 0.12);
-  border-radius: 8px;
-  padding: 10px 11px;
+  border-radius: 7px;
+  padding: 8px 9px;
   background: rgba(255, 255, 255, 0.035);
   color: #94a5ba;
 }

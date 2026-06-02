@@ -1580,7 +1580,7 @@ function UpdatePanel({ connectionId }: { connectionId: string }) {
       <div className="settings-panel-header">
         <div>
           <h3>系统更新</h3>
-          <p>检查并安装系统软件包更新</p>
+          <p>设置页只执行系统级更新；包安装、卸载和锁定建议交给包管理中心处理。</p>
         </div>
         <div className="settings-header-actions">
           <button type="button" className="settings-action-btn" onClick={checkUpdates} disabled={running}>
@@ -1601,9 +1601,6 @@ function UpdatePanel({ connectionId }: { connectionId: string }) {
           {success}
         </DismissibleAlert>
       ) : null}
-      <div className="settings-warning-banner">
-        设置页只执行系统级更新；包安装、卸载和锁定建议交给包管理中心处理。
-      </div>
       {upgradable ? (
         <div className="settings-section">
           <h4>可升级软件包</h4>

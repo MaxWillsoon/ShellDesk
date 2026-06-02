@@ -151,6 +151,7 @@
 
 .firewall-detail-actions button.danger,
 .firewall-table button.danger,
+.firewall-toolbar button.danger,
 .firewall-confirm-actions button.danger {
   border-color: rgba(255, 143, 163, 0.28);
   background: rgba(255, 143, 163, 0.1);
@@ -474,6 +475,14 @@
 
 .firewall-confirm-dialog.danger {
   border-color: rgba(255, 143, 163, 0.28);
+}
+
+.firewall-confirm-dialog p {
+  margin: 0;
+  color: var(--firewall-muted-strong);
+  font-size: 12px;
+  font-weight: 720;
+  line-height: 1.5;
 }
 
 .firewall-confirm-dialog pre {

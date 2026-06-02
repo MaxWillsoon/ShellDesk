@@ -203,6 +203,8 @@ ShellDesk 的本地数据存放在 Electron 用户数据目录中，设置页会
 pnpm install
 ```
 
+`pnpm install` 会通过 `prepare` 自动启用 `.githooks` 下的本地 Git hooks；如果 hook 丢失，可手动运行 `pnpm hooks:install`。
+
 ### 启动开发模式
 
 ```bash
@@ -233,6 +235,8 @@ Stop-Process -Id <PID>
 | `pnpm build` | `tsc --noEmit` 后执行 Vite 生产构建 |
 | `pnpm start` | 运行当前构建产物 |
 | `pnpm preview` | 预览 Vite 前端构建，不包含 Electron 主进程能力 |
+| `pnpm hooks:install` | 启用 `.githooks` 下的本地 Git hooks |
+| `pnpm tag` | 根据 `package.json` 版本创建并推送 `v<version>` Git tag |
 | `pnpm release:dir` | 构建并输出 electron-builder 目录包 |
 | `pnpm release` | 构建 Windows x64 NSIS 安装包 |
 | `pnpm pack` | 使用 electron-builder 打包但不发布 |

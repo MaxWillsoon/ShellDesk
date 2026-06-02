@@ -65,7 +65,7 @@ function toRecords(value: unknown): Record<string, unknown>[] {
 function normalizeAction(value: string): FirewallAction {
   const normalized = value.trim().toLowerCase();
 
-  if (normalized === 'allow' || normalized === 'allowed') return 'allow';
+  if (/\b(?:accept|allow|allowed)\b/.test(normalized)) return 'allow';
   if (normalized === '允许') return 'allow';
   if (normalized === 'deny' || normalized === 'block' || normalized === 'blocked' || normalized.includes('拒绝') || normalized.includes('阻止')) return 'deny';
   if (normalized === 'reject' || normalized.includes('拒收')) return 'reject';
@@ -353,11 +353,16 @@ fi
 if command -v firewall-cmd >/dev/null 2>&1; then
   printf '${backendMarker}\\tfirewalld\\n'
   printf '${stateMarker}\\n'
-  sudo -n firewall-cmd --state 2>&1 || firewall-cmd --state 2>&1
-  zone=$(sudo -n firewall-cmd --get-default-zone 2>/dev/null || firewall-cmd --get-default-zone 2>/dev/null || printf public)
+  state=$(sudo -n firewall-cmd --state 2>/dev/null || firewall-cmd --state 2>&1 || printf unknown)
+  printf '%s\\n' "$state"
+  zone=$(sudo -n firewall-cmd --get-default-zone 2>/dev/null || firewall-cmd --get-default-zone 2>/dev/null || sudo -n firewall-cmd --permanent --get-default-zone 2>/dev/null || firewall-cmd --permanent --get-default-zone 2>/dev/null || printf public)
   printf '${zoneMarker}\\t%s\\n' "$zone"
   printf '${listMarker}\\n'
-  sudo -n firewall-cmd --list-all --zone="$zone" 2>&1 || firewall-cmd --list-all --zone="$zone" 2>&1
+  if printf '%s' "$state" | grep -qi '^running$'; then
+    sudo -n firewall-cmd --list-all --zone="$zone" 2>&1 || firewall-cmd --list-all --zone="$zone" 2>&1 || sudo -n firewall-cmd --permanent --list-all --zone="$zone" 2>&1 || firewall-cmd --permanent --list-all --zone="$zone" 2>&1
+  else
+    sudo -n firewall-cmd --permanent --list-all --zone="$zone" 2>&1 || firewall-cmd --permanent --list-all --zone="$zone" 2>&1 || sudo -n firewall-cmd --list-all --zone="$zone" 2>&1 || firewall-cmd --list-all --zone="$zone" 2>&1
+  fi
   exit 0
 fi
 printf '${backendMarker}\\tunknown\\n'
@@ -391,11 +396,12 @@ export function parseFirewallSnapshot(stdout: string, stderr: string, isWindowsH
     const zone = stdout.match(new RegExp(`^${zoneMarker}\\t(.+)$`, 'm'))?.[1]?.trim() || 'public';
     const stateMatch = stdout.match(new RegExp(`${stateMarker}\\r?\\n([^\\r\\n]+)`, 'm'));
     const status = stateMatch?.[1]?.trim() || '未知';
+    const target = stdout.match(/^\s*target:\s*(.+)$/im)?.[1]?.trim();
 
     return {
       backend,
       status,
-      defaultPolicy: `zone ${zone}`,
+      defaultPolicy: `zone ${zone}${target ? `, target ${target}` : ''}`,
       zone,
       rules: parseFirewalldRules(stdout),
       rawOutput,
@@ -447,6 +453,113 @@ export function isRiskyFirewallDraft(draft: FirewallRuleDraft) {
   const openSource = !source || source === '0.0.0.0/0' || /^any(where)?$/i.test(source);
 
   return openSource || riskyPorts.has(port);
+}
+
+function parsePortRange(value?: string) {
+  const normalized = String(value ?? '').trim().toLowerCase()
+    .replace(/\s+\(v6\)$/i, '')
+    .replace(/\/(?:tcp|udp|any)$/i, '')
+    .replace(':', '-');
+  const match = normalized.match(/^(\d{1,5})(?:-(\d{1,5}))?$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const start = Number.parseInt(match[1], 10);
+  const end = match[2] ? Number.parseInt(match[2], 10) : start;
+
+  if (start < 1 || end > 65535 || start > end) {
+    return null;
+  }
+
+  return { start, end };
+}
+
+function portMatches(value: string | undefined, port: number) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+
+  if (!normalized) {
+    return false;
+  }
+
+  if ((normalized === 'ssh' || normalized === 'openssh') && port === 22) {
+    return true;
+  }
+
+  const range = parsePortRange(normalized);
+  return Boolean(range && port >= range.start && port <= range.end);
+}
+
+function rawRuleMatchesSshPort(raw: string, port: number) {
+  const normalized = raw.toLowerCase();
+
+  if (port === 22 && /\bservice\s+(?:name=)?["']?(?:ssh|openssh)(?:["']|\b)/.test(normalized)) {
+    return true;
+  }
+
+  const portMatch = normalized.match(/\bport\s+(?:port=)?["']?(\d{1,5}(?:[-:]\d{1,5})?)["']?/);
+  return portMatches(portMatch?.[1], port);
+}
+
+function defaultPolicyAllowsInbound(snapshot: FirewallSnapshot) {
+  const policy = snapshot.defaultPolicy.toLowerCase();
+
+  if (snapshot.backend === 'ufw') {
+    return /allow\s*\([^)]*incoming|incoming[^,;]*allow|允许[^,;]*(?:入站|进入)|(?:入站|进入)[^,;]*允许/i.test(snapshot.defaultPolicy);
+  }
+
+  if (snapshot.backend === 'firewalld') {
+    return /\btarget\s+accept\b/i.test(policy);
+  }
+
+  return false;
+}
+
+export function isFirewallEnabled(snapshot: FirewallSnapshot) {
+  const status = snapshot.status.trim().toLowerCase();
+
+  if (snapshot.backend === 'ufw') {
+    if (/^(?:inactive|disabled|not\s+active|not\s+enabled)\b/.test(status) || /不活动|未启用|停用|关闭/.test(status)) {
+      return false;
+    }
+
+    return /^(?:active|enabled)\b/.test(status) || /\b(?:active|enabled)\b/.test(status) || /活动|已启用|启用中/.test(status);
+  }
+
+  if (snapshot.backend === 'firewalld') {
+    if (/\bnot\s+running\b|inactive|dead|stopped|未运行|停止|停用|关闭/.test(status)) {
+      return false;
+    }
+
+    return /^running\b/.test(status) || /\brunning\b/.test(status) || /运行中|已运行/.test(status);
+  }
+
+  return false;
+}
+
+export function isFirewallSshPortAllowed(snapshot: FirewallSnapshot, sshPort: number) {
+  if (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535) {
+    return false;
+  }
+
+  if (defaultPolicyAllowsInbound(snapshot)) {
+    return true;
+  }
+
+  return snapshot.rules.some((rule) => {
+    if (rule.action !== 'allow' && rule.action !== 'limit') {
+      return false;
+    }
+
+    if (rule.protocol && rule.protocol !== 'tcp' && rule.protocol !== 'any') {
+      return false;
+    }
+
+    return portMatches(rule.port, sshPort)
+      || portMatches(rule.target, sshPort)
+      || rawRuleMatchesSshPort(rule.raw, sshPort);
+  });
 }
 
 export function createFirewallAddRuleCommand(backend: FirewallBackend, draft: FirewallRuleDraft, zone?: string) {
@@ -582,6 +695,34 @@ export function createFirewallReloadCommand(backend: FirewallBackend) {
   if (backend === 'firewalld') return 'sudo -n firewall-cmd --reload';
   if (backend === 'windows') return powershellCommand('Get-NetFirewallProfile | Format-Table -AutoSize | Out-String');
   throw new Error('未检测到可重载的防火墙后端。');
+}
+
+export function createFirewallSetEnabledCommand(backend: FirewallBackend, enabled: boolean) {
+  if (backend === 'ufw') {
+    return enabled ? 'sudo -n ufw --force enable' : 'sudo -n ufw disable';
+  }
+
+  if (backend === 'firewalld') {
+    return enabled
+      ? `if command -v systemctl >/dev/null 2>&1; then
+  sudo -n systemctl enable --now firewalld
+elif command -v service >/dev/null 2>&1; then
+  sudo -n service firewalld start
+else
+  printf '未检测到 systemctl 或 service，无法启用 firewalld。\\n' >&2
+  exit 1
+fi`
+      : `if command -v systemctl >/dev/null 2>&1; then
+  sudo -n systemctl disable --now firewalld
+elif command -v service >/dev/null 2>&1; then
+  sudo -n service firewalld stop
+else
+  printf '未检测到 systemctl 或 service，无法停用 firewalld。\\n' >&2
+  exit 1
+fi`;
+  }
+
+  throw new Error('启用/停用仅支持 ufw 或 firewalld 后端。');
 }
 
 export function getFirewallBackendLabel(backend: FirewallBackend) {
