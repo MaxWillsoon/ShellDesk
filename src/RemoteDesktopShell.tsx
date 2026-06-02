@@ -12,7 +12,7 @@ import type {
   RemoteTerminalToolRequest,
 } from './components/remote-desktop/RemoteTerminal';
 import type { RemoteConnectionInfo } from './components/remote-desktop/types';
-import defaultDesktopWallpaperUrl from './assets/images/default-desktop-wallpaper.png';
+import { getDesktopWallpaperPreset } from './assets/desktopWallpapers';
 import { getAppLocale, translateText } from './i18n';
 
 const RemoteApiDebugger = lazy(() => import('./components/remote-desktop/RemoteApiDebugger'));
@@ -964,7 +964,7 @@ function hasCustomDesktopWallpaper(settings: ShellDeskAppSettings) {
 function getDesktopWallpaperStyle(settings: ShellDeskAppSettings): CSSProperties {
   const wallpaperSource = hasCustomDesktopWallpaper(settings)
     ? settings.desktopWallpaperDataUrl
-    : defaultDesktopWallpaperUrl;
+    : getDesktopWallpaperPreset(settings.desktopWallpaperPresetId).url;
   const wallpaperUrl = `url(${JSON.stringify(wallpaperSource)})`;
 
   return {

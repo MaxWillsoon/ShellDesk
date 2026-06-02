@@ -13,6 +13,7 @@ const {
   configStoreFormat,
   defaultAiApiBaseUrls,
   defaultIdentityFileNames,
+  desktopWallpaperPresetIdSet,
   logFileName,
   maxAiApiBaseUrlLength,
   maxAiApiKeyLength,
@@ -156,7 +157,8 @@ function createDefaultSettings() {
     theme: 'dark',
     accentColor: accentColorChoices[0],
     defaultHostView: 'grid',
-    desktopWallpaperMode: 'default',
+    desktopWallpaperMode: 'preset',
+    desktopWallpaperPresetId: 'default',
     desktopWallpaperDataUrl: '',
     desktopWallpaperName: '',
     remoteDesktopLayout: createDefaultRemoteDesktopLayout(),
@@ -378,6 +380,20 @@ function readAppSettings(rawSettings) {
   );
   const defaultAiApiBaseUrl = defaultAiApiBaseUrls[aiProvider] ?? '';
   const defaultAiProviderName = getDefaultAiProviderName(aiProvider);
+  const desktopWallpaperDataUrl = readDesktopWallpaperDataUrl(
+    rawSettings.desktopWallpaperDataUrl,
+    defaults.desktopWallpaperDataUrl,
+  );
+  const rawDesktopWallpaperPresetId = typeof rawSettings.desktopWallpaperPresetId === 'string'
+    ? rawSettings.desktopWallpaperPresetId
+    : defaults.desktopWallpaperPresetId;
+  const desktopWallpaperPresetId = desktopWallpaperPresetIdSet.has(rawDesktopWallpaperPresetId)
+    ? rawDesktopWallpaperPresetId
+    : defaults.desktopWallpaperPresetId;
+  const hasCustomDesktopWallpaper = (
+    rawSettings.desktopWallpaperMode === 'custom' &&
+    Boolean(desktopWallpaperDataUrl)
+  );
 
   return {
     language: rawSettings.language === 'zh-CN' || rawSettings.language === 'en-US' ? rawSettings.language : defaults.language,
@@ -385,15 +401,9 @@ function readAppSettings(rawSettings) {
     theme: rawSettings.theme === 'light' || rawSettings.theme === 'system' ? rawSettings.theme : defaults.theme,
     accentColor: readColorHex(rawSettings.accentColor, '强调色', defaults.accentColor),
     defaultHostView: rawSettings.defaultHostView === 'list' ? 'list' : 'grid',
-    desktopWallpaperMode: (
-      rawSettings.desktopWallpaperMode === 'custom' &&
-      typeof rawSettings.desktopWallpaperDataUrl === 'string' &&
-      rawSettings.desktopWallpaperDataUrl
-    ) ? 'custom' : 'default',
-    desktopWallpaperDataUrl: readDesktopWallpaperDataUrl(
-      rawSettings.desktopWallpaperDataUrl,
-      defaults.desktopWallpaperDataUrl,
-    ),
+    desktopWallpaperMode: hasCustomDesktopWallpaper ? 'custom' : 'preset',
+    desktopWallpaperPresetId,
+    desktopWallpaperDataUrl,
     desktopWallpaperName: readBoundedString(
       rawSettings.desktopWallpaperName ?? '',
       '桌面壁纸名称',

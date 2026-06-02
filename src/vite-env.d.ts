@@ -170,7 +170,8 @@ interface ShellDeskAppSettings {
   theme: 'light' | 'dark' | 'system';
   accentColor: string;
   defaultHostView: 'grid' | 'list';
-  desktopWallpaperMode: 'default' | 'custom';
+  desktopWallpaperMode: 'preset' | 'custom';
+  desktopWallpaperPresetId: string;
   desktopWallpaperDataUrl: string;
   desktopWallpaperName: string;
   remoteDesktopLayout: ShellDeskRemoteDesktopLayout;

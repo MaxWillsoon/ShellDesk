@@ -6,9 +6,13 @@ import {
   terminalFontWeightChoices,
   terminalThemeChoices,
 } from '../components/remote-desktop/terminalPresets';
-import defaultDesktopWallpaperUrl from '../assets/images/default-desktop-wallpaper.png';
+import {
+  defaultDesktopWallpaperPresetId,
+  desktopWallpaperPresets,
+  getDesktopWallpaperPreset,
+} from '../assets/desktopWallpapers';
 import appIconUrl from '../assets/images/icon.png';
-import { getCurrentAppLocale } from '../i18n';
+import { getCurrentAppLocale, translateText } from '../i18n';
 
 const settingsSections = [
   { key: 'general', label: '常规', summary: '语言、字体、视图' },
@@ -386,7 +390,14 @@ function SettingsPage({
       ? '正在读取系统字体列表'
       : `已读取 ${systemFonts.length} 个系统字体`;
   const hasCustomWallpaper = settings.desktopWallpaperMode === 'custom' && Boolean(settings.desktopWallpaperDataUrl);
-  const wallpaperPreviewUrl = hasCustomWallpaper ? settings.desktopWallpaperDataUrl : defaultDesktopWallpaperUrl;
+  const selectedWallpaperPreset = getDesktopWallpaperPreset(settings.desktopWallpaperPresetId);
+  const selectedWallpaperPresetLabel = translateText(selectedWallpaperPreset.label, settings.language);
+  const wallpaperPreviewUrl = hasCustomWallpaper ? settings.desktopWallpaperDataUrl : selectedWallpaperPreset.url;
+  const wallpaperPreviewLabel = hasCustomWallpaper ? translateText('自定义壁纸', settings.language) : selectedWallpaperPresetLabel;
+  const isDefaultWallpaperPreset = !hasCustomWallpaper && selectedWallpaperPreset.id === defaultDesktopWallpaperPresetId;
+  const wallpaperPreviewAriaLabel = hasCustomWallpaper
+    ? translateText('自定义壁纸预览', settings.language)
+    : `${selectedWallpaperPresetLabel} ${translateText('预览', settings.language)}`;
   const wallpaperPreviewStyle: CSSProperties = {
     backgroundImage: `linear-gradient(180deg, rgba(8, 13, 20, 0.16), rgba(8, 13, 20, 0.34)), url(${JSON.stringify(wallpaperPreviewUrl)})`,
   };
@@ -416,14 +427,19 @@ function SettingsPage({
   const syncStatusText = syncError || syncMessage || syncConfig?.lastSyncMessage || '尚未配置自动同步';
   const syncLastSyncText = syncConfig?.lastSyncAt ? formatDateTime(syncConfig.lastSyncAt) : '尚未同步';
 
-  const resetDesktopWallpaper = () => {
+  const selectDesktopWallpaperPreset = (presetId: string) => {
     setWallpaperError('');
     onSettingsChange({
       ...settings,
-      desktopWallpaperMode: 'default',
+      desktopWallpaperMode: 'preset',
+      desktopWallpaperPresetId: presetId,
       desktopWallpaperDataUrl: '',
       desktopWallpaperName: '',
     });
+  };
+
+  const resetDesktopWallpaper = () => {
+    selectDesktopWallpaperPreset(defaultDesktopWallpaperPresetId);
   };
 
   const updateAiProvider = (provider: ShellDeskAiProvider) => {
@@ -746,6 +762,7 @@ function SettingsPage({
       onSettingsChange({
         ...settings,
         desktopWallpaperMode: 'custom',
+        desktopWallpaperPresetId: selectedWallpaperPreset.id,
         desktopWallpaperDataUrl: dataUrl,
         desktopWallpaperName: file.name,
       });
@@ -903,9 +920,32 @@ function SettingsPage({
                       <div
                         className={`desktop-wallpaper-preview ${hasCustomWallpaper ? 'custom' : ''}`}
                         style={wallpaperPreviewStyle}
-                        aria-label={hasCustomWallpaper ? '自定义壁纸预览' : '默认壁纸预览'}
+                        aria-label={wallpaperPreviewAriaLabel}
                       >
-                        <span>{hasCustomWallpaper ? '自定义壁纸' : '默认背景'}</span>
+                        <span>{wallpaperPreviewLabel}</span>
+                      </div>
+                      <div className="desktop-wallpaper-presets" aria-label="预置壁纸">
+                        {desktopWallpaperPresets.map((preset) => {
+                          const isSelectedPreset = !hasCustomWallpaper && selectedWallpaperPreset.id === preset.id;
+                          const presetLabel = translateText(preset.label, settings.language);
+
+                          return (
+                            <button
+                              key={preset.id}
+                              type="button"
+                              className={`desktop-wallpaper-preset ${isSelectedPreset ? 'selected' : ''}`}
+                              style={{
+                                backgroundImage: `linear-gradient(180deg, rgba(8, 13, 20, 0.1), rgba(8, 13, 20, 0.42)), url(${JSON.stringify(preset.url)})`,
+                              }}
+                              onClick={() => selectDesktopWallpaperPreset(preset.id)}
+                              aria-pressed={isSelectedPreset}
+                              aria-label={`${translateText('选择预置壁纸', settings.language)} ${presetLabel}`}
+                              title={presetLabel}
+                            >
+                              <span>{presetLabel}</span>
+                            </button>
+                          );
+                        })}
                       </div>
                       <div className="desktop-wallpaper-actions">
                         <label className="command-button desktop-wallpaper-upload">
@@ -916,12 +956,14 @@ function SettingsPage({
                             onChange={uploadDesktopWallpaper}
                           />
                         </label>
-                        <button type="button" className="command-button muted" onClick={resetDesktopWallpaper} disabled={!hasCustomWallpaper}>
+                        <button type="button" className="command-button muted" onClick={resetDesktopWallpaper} disabled={isDefaultWallpaperPreset}>
                           使用默认
                         </button>
                       </div>
                       <small className="desktop-wallpaper-meta">
-                        {hasCustomWallpaper ? settings.desktopWallpaperName || '自定义图片' : '当前使用 ShellDesk 默认桌面背景'}
+                        {hasCustomWallpaper
+                          ? settings.desktopWallpaperName || translateText('自定义图片', settings.language)
+                          : `${translateText('当前使用', settings.language)} ${selectedWallpaperPresetLabel}`}
                       </small>
                       {wallpaperError ? <small className="desktop-wallpaper-error">{wallpaperError}</small> : null}
                     </div>
