@@ -1113,6 +1113,20 @@ function App() {
     flushCollectionsSave();
   }, [flushCollectionsSave]);
 
+  const queueCollectionsSaveIfChanged = useCallback((payload: VaultCollectionsSavePayload) => {
+    if (!vaultControls || !isVaultReady || !isVaultHydrated) {
+      return;
+    }
+
+    const serializedPayload = JSON.stringify(payload);
+
+    if (serializedPayload === lastPersistedCollectionsRef.current) {
+      return;
+    }
+
+    scheduleCollectionsSave(payload, serializedPayload);
+  }, [isVaultHydrated, isVaultReady, scheduleCollectionsSave, vaultControls]);
+
   const refreshHosts = async () => {
     if (!vaultControls) {
       const nextHosts = readStoredHosts();
@@ -1235,19 +1249,8 @@ function App() {
   }, [isConnectionWindow, isVaultReady]);
 
   useEffect(() => {
-    if (!vaultControls || !isVaultReady || !isVaultHydrated) {
-      return;
-    }
-
-    const payload: VaultCollectionsSavePayload = { hosts, sshKeys, settings };
-    const serializedPayload = JSON.stringify(payload);
-
-    if (serializedPayload === lastPersistedCollectionsRef.current) {
-      return;
-    }
-
-    scheduleCollectionsSave(payload, serializedPayload);
-  }, [hosts, isVaultHydrated, isVaultReady, scheduleCollectionsSave, settings, sshKeys, vaultControls]);
+    queueCollectionsSaveIfChanged({ hosts, sshKeys, settings });
+  }, [hosts, queueCollectionsSaveIfChanged, settings, sshKeys]);
 
   useEffect(() => {
     const closeOpenHostCardMenus = (target: EventTarget | null) => {
@@ -1466,7 +1469,7 @@ function App() {
         return;
       }
 
-      if (payload.kind === 'vault' && (collectionsSaveInFlightRef.current || pendingCollectionsSaveRef.current)) {
+      if (collectionsSaveInFlightRef.current || pendingCollectionsSaveRef.current) {
         return;
       }
 
@@ -1478,7 +1481,8 @@ function App() {
 
   const updateSettings = useCallback((nextSettings: ShellDeskAppSettings) => {
     setSettings(nextSettings);
-  }, []);
+    queueCollectionsSaveIfChanged({ hosts, sshKeys, settings: nextSettings });
+  }, [hosts, queueCollectionsSaveIfChanged, sshKeys]);
 
   const addLog = (category: LogCategory, level: LogLevel, message: string, detail = '') => {
     setLogs((current) => {

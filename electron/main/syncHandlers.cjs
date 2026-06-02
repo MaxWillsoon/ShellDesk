@@ -438,6 +438,42 @@ function createLocalTombstones(localRecords, state, now) {
   return tombstones;
 }
 
+function createSyncFootprint(records, tombstones) {
+  const recordFootprint = {};
+  const tombstoneFootprint = {};
+
+  for (const [id, record] of Object.entries(records)) {
+    recordFootprint[id] = {
+      type: record.type,
+      hash: record.hash,
+    };
+  }
+
+  for (const [id, tombstone] of Object.entries(tombstones)) {
+    tombstoneFootprint[id] = {
+      type: tombstone.type,
+      hash: tombstone.hash,
+    };
+  }
+
+  return stableStringify({
+    records: recordFootprint,
+    tombstones: tombstoneFootprint,
+  });
+}
+
+function createLocalSyncInputs(state, now) {
+  const vault = getVault();
+  const localRecords = createLocalRecords(vault, state, now);
+  const localTombstones = createLocalTombstones(localRecords, state, now);
+
+  return {
+    localRecords,
+    localTombstones,
+    footprint: createSyncFootprint(localRecords, localTombstones),
+  };
+}
+
 function sanitizeRemoteRecord(rawRecord) {
   if (!isPlainObject(rawRecord)) {
     return null;
@@ -1258,16 +1294,20 @@ function updateSyncStatus(status, message, extraConfig = {}) {
 
 async function runWebDavSyncInternal(rawConfig) {
   const store = createOperationalStore(rawConfig, { requireSyncPassphrase: true });
-  const now = new Date().toISOString();
-  const vault = getVault();
-  const localRecords = createLocalRecords(vault, store.state, now);
-  const localTombstones = createLocalTombstones(localRecords, store.state, now);
+  const maxPreconditionRetries = 1;
+  const maxLocalRefreshes = 2;
+  let preconditionRetries = 0;
+  let localRefreshes = 0;
+  let remoteOverride = null;
 
   await ensureRemoteDirectories(store.config, store.secrets);
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const remote = await readRemoteDocument(store.config, store.secrets);
-    const merged = mergeSyncDocuments(remote.document, localRecords, localTombstones, store.state, now);
+  while (preconditionRetries <= maxPreconditionRetries && localRefreshes <= maxLocalRefreshes) {
+    const now = new Date().toISOString();
+    const local = createLocalSyncInputs(store.state, now);
+    const remote = remoteOverride ?? await readRemoteDocument(store.config, store.secrets);
+    remoteOverride = null;
+    const merged = mergeSyncDocuments(remote.document, local.localRecords, local.localTombstones, store.state, now);
     const writeResult = await writeRemoteDocument(
       store.config,
       store.secrets,
@@ -1276,12 +1316,29 @@ async function runWebDavSyncInternal(rawConfig) {
       remote.exists,
     );
 
-    if (writeResult.preconditionFailed && attempt === 0) {
+    if (writeResult.preconditionFailed && preconditionRetries < maxPreconditionRetries) {
+      preconditionRetries += 1;
       continue;
     }
 
     if (writeResult.preconditionFailed) {
       throw new Error('远端同步文件刚刚被其他设备更新，请稍后重试。');
+    }
+
+    const latestLocal = createLocalSyncInputs(store.state, now);
+
+    if (latestLocal.footprint !== local.footprint) {
+      if (localRefreshes >= maxLocalRefreshes) {
+        throw new Error('本机数据在同步期间持续变化，请稍后重试。');
+      }
+
+      localRefreshes += 1;
+      remoteOverride = {
+        document: merged.document,
+        etag: writeResult.etag,
+        exists: true,
+      };
+      continue;
     }
 
     const snapshot = applyMergedDocumentToVault(merged.document);
