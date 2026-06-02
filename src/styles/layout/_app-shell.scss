@@ -5,10 +5,8 @@
   height: 100%;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid rgba(147, 171, 205, 0.16);
-  background:
-    radial-gradient(ellipse at 18% -12%, rgba(82, 126, 188, 0.18), transparent 42%),
-    linear-gradient(145deg, #111a25 0%, #0e1620 100%);
+  border: 1px solid var(--window-border);
+  background: var(--chrome);
 }
 
 .top-chrome {
@@ -19,9 +17,7 @@
   gap: 12px;
   padding: 0 14px 0 18px;
   border-bottom: 1px solid var(--window-divider);
-  background:
-    linear-gradient(180deg, rgba(31, 42, 56, 0.82), rgba(19, 28, 39, 0.9)),
-    var(--chrome);
+  background: var(--chrome);
 }
 
 .app-shell-macos .top-chrome {
@@ -51,7 +47,7 @@
   flex: 0 0 auto;
   border-radius: 6px;
   object-fit: cover;
-  box-shadow: 0 8px 18px rgba(67, 199, 255, 0.18);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 18%, transparent);
   user-select: none;
 }
 
@@ -79,7 +75,7 @@
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: rgba(221, 229, 241, 0.82);
+  color: var(--muted-strong);
   cursor: pointer;
   font-size: 18px;
   line-height: 1;
@@ -136,7 +132,7 @@
   min-height: 0;
   flex: 1;
   grid-template-columns: 200px minmax(0, 1fr);
-  background: rgba(8, 13, 20, 0.22);
+  background: var(--sidebar);
 }
 
 .side-nav {
@@ -145,9 +141,7 @@
   flex-direction: column;
   padding: 16px 10px 18px;
   border-right: 1px solid var(--window-divider);
-  background:
-    radial-gradient(ellipse at 50% 18%, rgba(88, 143, 231, 0.11), transparent 48%),
-    linear-gradient(180deg, rgba(27, 38, 51, 0.9), rgba(18, 27, 38, 0.95));
+  background: var(--sidebar);
 }
 
 .feature-nav {
@@ -167,7 +161,7 @@
   border-radius: 8px;
   padding: 0 18px;
   background: transparent;
-  color: #eef4ff;
+  color: var(--text);
   cursor: pointer;
   font-size: 16px;
   font-weight: 800;
@@ -209,20 +203,18 @@
 .feature-nav-item:hover,
 .settings-entry.active,
 .settings-entry:hover {
-  background:
-    linear-gradient(90deg, rgba(83, 143, 245, 0.18), rgba(146, 171, 207, 0.06)),
-    rgba(255, 255, 255, 0.03);
+  background: var(--sidebar-active);
 }
 
 .feature-nav-item.active::before,
 .settings-entry.active::before {
-  background: var(--accent);
-  box-shadow: 0 0 18px rgba(98, 168, 255, 0.55);
+  background: transparent;
+  box-shadow: none;
 }
 
 .feature-nav-item.active .nav-icon,
 .settings-entry.active .nav-icon {
-  color: var(--accent);
+  color: var(--text);
 }
 
 .settings-entry {

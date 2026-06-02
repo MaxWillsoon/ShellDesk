@@ -170,7 +170,7 @@ function getReadableTextColor(hexColor: string) {
   const { red, green, blue } = readHexColorChannels(hexColor);
   const luminance = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255;
 
-  return luminance > 0.58 ? '#0b1220' : '#ffffff';
+  return luminance > 0.72 ? '#0b1220' : '#ffffff';
 }
 
 const hostSystemIconUrls: Record<HostSystemType, string> = {
@@ -1314,33 +1314,35 @@ function App() {
     root.style.setProperty('--accent', accentColor);
     root.style.setProperty('--accent-strong', accentColor);
     root.style.setProperty('--accent-contrast', accentContrast);
-    root.style.setProperty('--bg', isLightTheme ? '#e7edf5' : '#0b111a');
-    root.style.setProperty('--chrome', isLightTheme ? '#dfe7f1' : '#1b222b');
-    root.style.setProperty('--sidebar', isLightTheme ? '#dde6f0' : '#20262f');
+    root.style.setProperty('--bg', isLightTheme ? '#e7edf5' : '#0e131c');
+    root.style.setProperty('--chrome', isLightTheme ? '#dfe7f1' : '#22272f');
+    root.style.setProperty('--sidebar', isLightTheme ? '#dde6f0' : '#22272f');
     root.style.setProperty('--sidebar-active', isLightTheme ? '#ccd8e6' : '#3a3f49');
-    root.style.setProperty('--surface', isLightTheme ? '#f8fafc' : '#111820');
-    root.style.setProperty('--surface-soft', isLightTheme ? '#eef3f8' : '#161e28');
-    root.style.setProperty('--surface-strong', isLightTheme ? '#dfe7f1' : '#1a2330');
-    root.style.setProperty('--surface-elevated', isLightTheme ? '#edf2f7' : '#141b25');
-    root.style.setProperty('--surface-input', isLightTheme ? '#f8fafc' : '#1a212c');
-    root.style.setProperty('--surface-control', isLightTheme ? '#e4ebf4' : '#202733');
-    root.style.setProperty('--surface-hover', isLightTheme ? '#e5edf6' : '#141d28');
-    root.style.setProperty('--surface-icon', isLightTheme ? '#d2e1f1' : '#12334a');
-    root.style.setProperty('--surface-panel', isLightTheme ? '#f2f6fb' : '#151d28');
-    root.style.setProperty('--surface-empty', isLightTheme ? 'rgba(16, 32, 51, 0.035)' : 'rgba(255, 255, 255, 0.025)');
-    root.style.setProperty('--surface-pill', isLightTheme ? '#d2dce8' : '#1d2632');
+    root.style.setProperty('--surface', isLightTheme ? '#f8fafc' : '#111722');
+    root.style.setProperty('--surface-soft', isLightTheme ? '#eef3f8' : '#151b26');
+    root.style.setProperty('--surface-strong', isLightTheme ? '#dfe7f1' : '#202631');
+    root.style.setProperty('--surface-elevated', isLightTheme ? '#edf2f7' : '#111722');
+    root.style.setProperty('--surface-input', isLightTheme ? '#f8fafc' : '#202631');
+    root.style.setProperty('--surface-control', isLightTheme ? '#e4ebf4' : '#151b25');
+    root.style.setProperty('--surface-hover', isLightTheme ? '#e5edf6' : 'rgba(255, 255, 255, 0.06)');
+    root.style.setProperty('--surface-icon', isLightTheme ? '#d2e1f1' : '#143149');
+    root.style.setProperty('--surface-panel', isLightTheme ? '#f2f6fb' : 'rgba(17, 23, 34, 0.98)');
+    root.style.setProperty('--surface-empty', isLightTheme ? 'rgba(16, 32, 51, 0.035)' : 'rgba(255, 255, 255, 0.035)');
+    root.style.setProperty('--surface-pill', isLightTheme ? '#d2dce8' : '#171d28');
     root.style.setProperty('--surface-success-soft', isLightTheme ? 'rgba(34, 160, 90, 0.08)' : 'rgba(119, 244, 197, 0.08)');
     root.style.setProperty('--surface-success-border', isLightTheme ? 'rgba(34, 160, 90, 0.22)' : 'rgba(119, 244, 197, 0.22)');
     root.style.setProperty('--text-success', isLightTheme ? '#1a8a55' : '#d8fff1');
-    root.style.setProperty('--toast-bg', isLightTheme ? 'rgba(241, 246, 251, 0.96)' : 'rgba(12, 23, 34, 0.92)');
-    root.style.setProperty('--toast-text', isLightTheme ? '#1a6d94' : '#c6efff');
-    root.style.setProperty('--text', isLightTheme ? '#18263a' : '#edf4ff');
-    root.style.setProperty('--muted', isLightTheme ? '#627890' : '#8b9aad');
-    root.style.setProperty('--muted-strong', isLightTheme ? '#415874' : '#bfcede');
-    root.style.setProperty('--border', isLightTheme ? 'rgba(20, 42, 68, 0.14)' : 'rgba(139, 164, 195, 0.14)');
-    root.style.setProperty('--border-strong', isLightTheme ? 'rgba(20, 42, 68, 0.22)' : 'rgba(139, 164, 195, 0.28)');
-    root.style.setProperty('--window-border', isLightTheme ? 'rgba(20, 42, 68, 0.1)' : 'rgba(255, 255, 255, 0.04)');
-    root.style.setProperty('--window-divider', isLightTheme ? 'rgba(20, 42, 68, 0.1)' : 'rgba(255, 255, 255, 0.05)');
+    root.style.setProperty('--toast-bg', isLightTheme ? 'rgba(241, 246, 251, 0.96)' : 'rgba(17, 23, 34, 0.94)');
+    root.style.setProperty('--toast-text', isLightTheme ? '#1a6d94' : '#d8f4ff');
+    root.style.setProperty('--text', isLightTheme ? '#18263a' : '#f4f7fb');
+    root.style.setProperty('--muted', isLightTheme ? '#627890' : '#939cab');
+    root.style.setProperty('--muted-strong', isLightTheme ? '#415874' : '#c3cad5');
+    root.style.setProperty('--text-secondary', isLightTheme ? '#657489' : '#aeb7c6');
+    root.style.setProperty('--text-muted', isLightTheme ? '#7b8797' : '#778292');
+    root.style.setProperty('--border', isLightTheme ? 'rgba(20, 42, 68, 0.14)' : 'rgba(178, 188, 205, 0.13)');
+    root.style.setProperty('--border-strong', isLightTheme ? 'rgba(20, 42, 68, 0.22)' : 'rgba(178, 188, 205, 0.24)');
+    root.style.setProperty('--window-border', isLightTheme ? 'rgba(20, 42, 68, 0.1)' : 'rgba(178, 188, 205, 0.18)');
+    root.style.setProperty('--window-divider', isLightTheme ? 'rgba(20, 42, 68, 0.1)' : 'rgba(178, 188, 205, 0.12)');
     root.style.setProperty('--chrome-hover', isLightTheme ? 'rgba(20, 42, 68, 0.06)' : 'rgba(255, 255, 255, 0.08)');
     root.style.setProperty('--danger-hover-bg', isLightTheme ? 'rgba(200, 48, 78, 0.12)' : 'rgba(255, 111, 143, 0.18)');
     root.style.setProperty('--danger-hover-text', isLightTheme ? '#d63a5e' : '#ffd8e1');
@@ -1353,11 +1355,11 @@ function App() {
     root.style.setProperty('--accent-border', toRgba(accentColor, isLightTheme ? 0.36 : 0.42));
     root.style.setProperty('--accent-strong-border', toRgba(accentColor, isLightTheme ? 0.5 : 0.58));
     root.style.setProperty('--shadow', isLightTheme ? 'rgba(43, 67, 92, 0.12)' : 'rgba(0, 0, 0, 0.34)');
-    root.style.setProperty('--shadow-soft', isLightTheme ? '0 6px 18px rgba(43, 67, 92, 0.08)' : '0 12px 28px rgba(0, 0, 0, 0.16)');
+    root.style.setProperty('--shadow-soft', isLightTheme ? '0 6px 18px rgba(43, 67, 92, 0.08)' : '0 18px 42px rgba(0, 0, 0, 0.18)');
     root.style.setProperty('--shadow-float', isLightTheme ? '0 12px 28px rgba(43, 67, 92, 0.16)' : '0 18px 36px rgba(0, 0, 0, 0.32)');
     root.style.setProperty('--shadow-panel', isLightTheme ? '0 16px 48px rgba(43, 67, 92, 0.16)' : '0 24px 70px rgba(0, 0, 0, 0.42)');
     root.style.setProperty('--shadow-panel-strong', isLightTheme ? '0 16px 48px rgba(43, 67, 92, 0.18)' : '0 24px 70px rgba(0, 0, 0, 0.46)');
-    root.style.setProperty('--toggle-off', isLightTheme ? '#c3cedb' : '#202938');
+    root.style.setProperty('--toggle-off', isLightTheme ? '#c3cedb' : '#232b3b');
     root.style.colorScheme = isLightTheme ? 'light' : 'dark';
     root.setAttribute('data-theme', effectiveTheme);
     const interfaceFontFamily = buildFontStack(settings.interfaceFont, [
