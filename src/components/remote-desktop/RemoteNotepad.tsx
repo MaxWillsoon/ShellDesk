@@ -34,6 +34,7 @@ import dockerfile from 'highlight.js/lib/languages/dockerfile';
 import diff from 'highlight.js/lib/languages/diff';
 import plaintext from 'highlight.js/lib/languages/plaintext';
 
+import { translateStructuredText } from '../../i18n';
 import { getErrorMessage } from './desktopUtils';
 import RemoteFilePicker from './RemoteFilePicker';
 import type { RemoteSystemType } from './types';
@@ -1304,16 +1305,22 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
   ): ShellDeskAiChatMessage[] => {
     const recentMessages = nextMessages.slice(-MAX_AI_HISTORY_MESSAGES).map<ShellDeskAiChatMessage>((message) => ({
       role: message.role === 'assistant' ? 'assistant' : 'user',
-      content: message.role === 'tool' ? `工具结果：\n${message.content}` : message.content,
+      content: message.role === 'tool'
+        ? `${translateStructuredText('工具结果：', settings.language)}\n${message.content}`
+        : message.content,
+    }));
+    const fileContextMessages = buildAiFileContextMessages().map((message) => ({
+      ...message,
+      content: translateStructuredText(message.content, settings.language),
     }));
 
     return [
-      { role: 'system', content: NOTEPAD_AI_SYSTEM_PROMPT },
-      { role: 'user', content: buildAiContextMessage(selection, options) },
-      ...buildAiFileContextMessages(),
+      { role: 'system', content: translateStructuredText(NOTEPAD_AI_SYSTEM_PROMPT, settings.language) },
+      { role: 'user', content: translateStructuredText(buildAiContextMessage(selection, options), settings.language) },
+      ...fileContextMessages,
       ...recentMessages,
     ];
-  }, [buildAiContextMessage, buildAiFileContextMessages]);
+  }, [buildAiContextMessage, buildAiFileContextMessages, settings.language]);
 
   const runRemoteEnvironmentProbe = useCallback(async () => {
     const command = getEnvironmentProbeCommand(systemType);

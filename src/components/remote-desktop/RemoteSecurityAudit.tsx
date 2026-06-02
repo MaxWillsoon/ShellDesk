@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import DismissibleAlert from './DismissibleAlert';
 
+import { translateStructuredText } from '../../i18n';
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import MarkdownReport from './MarkdownReport';
 import { isWindowsSystem } from './remoteSystem';
@@ -103,7 +104,10 @@ function createAiChatRequest(
     apiKey: settings.aiApiKey,
     model: settings.aiModel,
     temperature,
-    messages,
+    messages: messages.map((message) => ({
+      ...message,
+      content: translateStructuredText(message.content, settings.language),
+    })),
   };
 }
 

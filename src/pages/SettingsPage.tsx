@@ -424,8 +424,8 @@ function SettingsPage({
   const hasSavedSyncPassphrase = Boolean(syncConfig?.hasSyncPassphrase);
   const isSyncBusy = Boolean(syncPendingAction);
   const syncStatusClassName = getSyncStatusClassName(syncConfig?.lastSyncStatus, Boolean(syncError));
-  const syncStatusText = syncError || syncMessage || syncConfig?.lastSyncMessage || '尚未配置自动同步';
-  const syncLastSyncText = syncConfig?.lastSyncAt ? formatDateTime(syncConfig.lastSyncAt) : '尚未同步';
+  const syncStatusText = syncError || syncMessage || syncConfig?.lastSyncMessage || translateText('尚未配置自动同步', settings.language);
+  const syncLastSyncText = syncConfig?.lastSyncAt ? formatDateTime(syncConfig.lastSyncAt) : translateText('尚未同步', settings.language);
 
   const selectDesktopWallpaperPreset = (presetId: string) => {
     setWallpaperError('');
