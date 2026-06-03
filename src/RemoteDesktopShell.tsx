@@ -12,7 +12,7 @@ import type {
   RemoteTerminalToolRequest,
 } from './components/remote-desktop/RemoteTerminal';
 import type { RemoteConnectionInfo } from './components/remote-desktop/types';
-import { getDesktopWallpaperPreset } from './assets/desktopWallpapers';
+import { loadDesktopWallpaperPresetUrl } from './assets/desktopWallpapers';
 import ContextMenuIcon from './components/remote-desktop/ContextMenuIcon';
 import { getAppLocale, t, type MessageId } from './i18n';
 
@@ -971,14 +971,16 @@ function hasCustomDesktopWallpaper(settings: ShellDeskAppSettings) {
   return settings.desktopWallpaperMode === 'custom' && Boolean(settings.desktopWallpaperDataUrl);
 }
 
-function getDesktopWallpaperStyle(settings: ShellDeskAppSettings): CSSProperties {
+function getDesktopWallpaperStyle(settings: ShellDeskAppSettings, presetWallpaperUrl: string): CSSProperties {
   const wallpaperSource = hasCustomDesktopWallpaper(settings)
     ? settings.desktopWallpaperDataUrl
-    : getDesktopWallpaperPreset(settings.desktopWallpaperPresetId).url;
-  const wallpaperUrl = `url(${JSON.stringify(wallpaperSource)})`;
+    : presetWallpaperUrl;
+  const wallpaperImage = wallpaperSource
+    ? `, url(${JSON.stringify(wallpaperSource)})`
+    : '';
 
   return {
-    backgroundImage: `linear-gradient(180deg, var(--desktop-wallpaper-scrim-top), var(--desktop-wallpaper-scrim-bottom)), ${wallpaperUrl}`,
+    backgroundImage: `linear-gradient(180deg, var(--desktop-wallpaper-scrim-top), var(--desktop-wallpaper-scrim-bottom))${wallpaperImage}`,
     backgroundPosition: 'center, center',
     backgroundRepeat: 'no-repeat, no-repeat',
     backgroundSize: 'cover, cover',
@@ -1010,10 +1012,11 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
   const [launchpadTooltip, setLaunchpadTooltip] = useState<LaunchpadTooltipState | null>(null);
   const [terminalTitlebarMenu, setTerminalTitlebarMenu] = useState<TerminalTitlebarMenuState | null>(null);
   const [pendingCloseWindowId, setPendingCloseWindowId] = useState('');
+  const [presetWallpaperUrl, setPresetWallpaperUrl] = useState('');
   const focusedWindow = desktopWindows.find((desktopWindow) => desktopWindow.id === focusedWindowId && !desktopWindow.isMinimized) ?? null;
   const terminalTitlebarMenuWindow = desktopWindows.find((desktopWindow) => desktopWindow.id === terminalTitlebarMenu?.windowId && desktopWindow.appKey === 'terminal') ?? null;
   const pendingCloseWindow = desktopWindows.find((desktopWindow) => desktopWindow.id === pendingCloseWindowId) ?? null;
-  const desktopWallpaperStyle = getDesktopWallpaperStyle(settings);
+  const desktopWallpaperStyle = getDesktopWallpaperStyle(settings, presetWallpaperUrl);
   const hasCustomWallpaper = hasCustomDesktopWallpaper(settings);
   const visibleDesktopItems = getSortedDesktopItems(desktopLayout, settings.language);
   const openFolder = desktopLayout.items.find((item): item is DesktopFolderLayoutItem => item.type === 'folder' && item.id === openFolderId) ?? null;
@@ -1031,6 +1034,30 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
   useEffect(() => {
     desktopLayoutRef.current = desktopLayout;
   }, [desktopLayout]);
+
+  useEffect(() => {
+    if (hasCustomDesktopWallpaper(settings)) {
+      setPresetWallpaperUrl('');
+      return undefined;
+    }
+
+    let isCurrent = true;
+    loadDesktopWallpaperPresetUrl(settings.desktopWallpaperPresetId)
+      .then((url) => {
+        if (isCurrent) {
+          setPresetWallpaperUrl(url);
+        }
+      })
+      .catch(() => {
+        if (isCurrent) {
+          setPresetWallpaperUrl('');
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [settings.desktopWallpaperMode, settings.desktopWallpaperPresetId, settings.desktopWallpaperDataUrl]);
 
   useEffect(() => () => {
     if (launchpadCloseTimerRef.current !== null) {

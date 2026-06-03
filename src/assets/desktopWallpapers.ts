@@ -1,52 +1,65 @@
-import defaultDesktopWallpaperUrl from './images/default-desktop-wallpaper.png';
-import amberRoutesWallpaperUrl from './images/desktop-wallpaper-amber-routes.png';
-import greenHealthWallpaperUrl from './images/desktop-wallpaper-green-health.png';
-import indigoTracesWallpaperUrl from './images/desktop-wallpaper-indigo-traces.png';
-import midnightOpsWallpaperUrl from './images/desktop-wallpaper-midnight-ops.png';
-import mistConsoleWallpaperUrl from './images/desktop-wallpaper-mist-console.png';
 import type { MessageId } from '../i18nCatalog';
 
 export const defaultDesktopWallpaperPresetId = 'default';
 
-export const desktopWallpaperPresets: ReadonlyArray<{
-  id: string;
-  labelId: MessageId;
-  url: string;
-}> = [
+export const desktopWallpaperPresets = [
   {
     id: defaultDesktopWallpaperPresetId,
     labelId: 'settings.wallpaper.preset.default',
-    url: defaultDesktopWallpaperUrl,
   },
   {
     id: 'midnight-ops',
     labelId: 'settings.wallpaper.preset.midnightOps',
-    url: midnightOpsWallpaperUrl,
   },
   {
     id: 'amber-routes',
     labelId: 'settings.wallpaper.preset.amberRoutes',
-    url: amberRoutesWallpaperUrl,
   },
   {
     id: 'mist-console',
     labelId: 'settings.wallpaper.preset.mistConsole',
-    url: mistConsoleWallpaperUrl,
   },
   {
     id: 'green-health',
     labelId: 'settings.wallpaper.preset.greenHealth',
-    url: greenHealthWallpaperUrl,
   },
   {
     id: 'indigo-traces',
     labelId: 'settings.wallpaper.preset.indigoTraces',
-    url: indigoTracesWallpaperUrl,
   },
-] as const;
+] as const satisfies ReadonlyArray<{ id: string; labelId: MessageId }>;
 
 export type DesktopWallpaperPreset = (typeof desktopWallpaperPresets)[number];
+export type DesktopWallpaperPresetId = DesktopWallpaperPreset['id'];
+
+type WallpaperModule = { default: string };
+type WallpaperLoader = () => Promise<WallpaperModule>;
+
+const desktopWallpaperPresetLoaders: Record<DesktopWallpaperPresetId, WallpaperLoader> = {
+  default: () => import('./images/default-desktop-wallpaper.png'),
+  'midnight-ops': () => import('./images/desktop-wallpaper-midnight-ops.png'),
+  'amber-routes': () => import('./images/desktop-wallpaper-amber-routes.png'),
+  'mist-console': () => import('./images/desktop-wallpaper-mist-console.png'),
+  'green-health': () => import('./images/desktop-wallpaper-green-health.png'),
+  'indigo-traces': () => import('./images/desktop-wallpaper-indigo-traces.png'),
+};
+
+const loadedDesktopWallpaperUrls = new Map<DesktopWallpaperPresetId, string>();
 
 export function getDesktopWallpaperPreset(presetId: string | null | undefined): DesktopWallpaperPreset {
   return desktopWallpaperPresets.find((preset) => preset.id === presetId) ?? desktopWallpaperPresets[0];
+}
+
+export function loadDesktopWallpaperPresetUrl(presetId: string | null | undefined) {
+  const preset = getDesktopWallpaperPreset(presetId);
+  const cachedUrl = loadedDesktopWallpaperUrls.get(preset.id);
+
+  if (cachedUrl) {
+    return Promise.resolve(cachedUrl);
+  }
+
+  return desktopWallpaperPresetLoaders[preset.id]().then((module) => {
+    loadedDesktopWallpaperUrls.set(preset.id, module.default);
+    return module.default;
+  });
 }

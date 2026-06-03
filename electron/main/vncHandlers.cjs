@@ -1,6 +1,5 @@
 const crypto = require('node:crypto');
 const http = require('node:http');
-const { WebSocket, WebSocketServer } = require('ws');
 const {
   createBufferedReader,
   ensureActiveConnectionClient,
@@ -10,6 +9,16 @@ const {
   withActiveConnectionClientRetry,
 } = require('./connectionManager.cjs');
 const { isPlainObject, readBoundedString, readIntegerInRange, toErrorMessage } = require('./validation.cjs');
+
+let wsModule = null;
+
+function getWsModule() {
+  if (!wsModule) {
+    wsModule = require('ws');
+  }
+
+  return wsModule;
+}
 
 function registerVncHandlers(registerIpcHandler) {
   // ─── VNC over SSH tunnel ────────────────────────────────────────────────────
@@ -55,6 +64,8 @@ function registerVncHandlers(registerIpcHandler) {
   }
 
   function closeVncProxy(entry) {
+    const { WebSocket } = getWsModule();
+
     for (const remoteStream of entry.remoteStreams) {
       remoteStream.removeAllListeners();
       remoteStream.on('error', () => undefined);
@@ -241,6 +252,7 @@ function registerVncHandlers(registerIpcHandler) {
 
   function createVncWebSocketProxy(clientOrProvider, vncHost, vncPort, onDiagnostic) {
     return new Promise((resolve, reject) => {
+      const { WebSocket, WebSocketServer } = getWsModule();
       const webSockets = new Set();
       const remoteStreams = new Set();
       const httpServer = http.createServer((_request, response) => {

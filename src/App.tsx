@@ -1,16 +1,21 @@
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import RemoteDesktop from './RemoteDesktopShell';
 import appIconUrl from './assets/images/icon.png';
 import DismissibleAlert from './components/DismissibleAlert';
 import NavIcon, { type NavIconName } from './components/navigation/NavIcon';
 import type { RemoteConnectionInfo } from './components/remote-desktop/types';
 import { buildFontStack } from './fontUtils';
-import KeysPage from './pages/KeysPage';
-import LogsPage from './pages/LogsPage';
-import SettingsPage from './pages/SettingsPage';
-import { getAppLocale, getCurrentAppLanguage, getSystemLanguage, t, useShellDeskI18n, type MessageId } from './i18n';
+import { getAppLocale, getCurrentAppLanguage, getSystemLanguage, loadFullMessageCatalog, preloadFullMessageCatalog, t, useShellDeskI18n, type AppLanguage, type MessageId } from './i18n';
+
+const RemoteDesktop = lazy(() =>
+  Promise.all([loadFullMessageCatalog(), import('./RemoteDesktopShell')]).then(([, module]) => module));
+const KeysPage = lazy(() =>
+  Promise.all([loadFullMessageCatalog(), import('./pages/KeysPage')]).then(([, module]) => module));
+const LogsPage = lazy(() =>
+  Promise.all([loadFullMessageCatalog(), import('./pages/LogsPage')]).then(([, module]) => module));
+const SettingsPage = lazy(() =>
+  Promise.all([loadFullMessageCatalog(), import('./pages/SettingsPage')]).then(([, module]) => module));
 
 const hostsStorageKey = 'shelldesk:hosts';
 const hostGroupPanelCollapsedStorageKey = 'shelldesk:host-groups-collapsed';
@@ -151,6 +156,41 @@ const hostSystemLabels: Record<HostSystemType, string> = {
   linux: 'Linux',
   unix: 'Unix',
 };
+
+function LazyContentFallback({ language }: { language: AppLanguage }) {
+  return (
+    <div className="empty-state">
+      <span>LOADING</span>
+      <h3>{t('desktop.window.loading', language)}</h3>
+    </div>
+  );
+}
+
+function RemoteDesktopLoadingFallback({ language }: { language: AppLanguage }) {
+  return (
+    <main className="remote-desktop-page remote-desktop-boot-page no-drag">
+      <section className="remote-desktop-surface remote-desktop-boot-surface" role="status" aria-label={t('desktop.window.loading', language)}>
+        <span className="remote-desktop-boot-status">{t('desktop.window.loading', language)}</span>
+        <div className="remote-desktop-boot-icons" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
+        <div className="remote-desktop-boot-window" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </div>
+        <div className="remote-desktop-boot-dock" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </div>
+      </section>
+    </main>
+  );
+}
 
 function getHostSystemType(value: unknown, systemName?: unknown): HostSystemType {
   const normalizedValue = typeof value === 'string' ? value.toLowerCase() : '';
@@ -2073,6 +2113,7 @@ function App() {
     }
 
     setConnectionErrorNotice(null);
+    preloadFullMessageCatalog();
 
     try {
       const nextConnection = await window.guiSSH.connections.connect(hostForConnection);
@@ -2390,7 +2431,9 @@ function App() {
       ) : null}
 
       {connection ? (
-        <RemoteDesktop connection={connection} settings={settings} onSettingsChange={updateSettings} />
+        <Suspense fallback={<RemoteDesktopLoadingFallback language={appLanguage} />}>
+          <RemoteDesktop connection={connection} settings={settings} onSettingsChange={updateSettings} />
+        </Suspense>
       ) : isConnectionWindow ? (
         <main className="vault-page no-drag">
           <div className="empty-state">
@@ -2412,6 +2455,8 @@ function App() {
                 type="button"
                 className={`feature-nav-item ${activePage === item.page ? 'active' : ''}`}
                 onClick={() => setActivePage(item.page)}
+                onFocus={item.page === 'hosts' ? undefined : preloadFullMessageCatalog}
+                onMouseEnter={item.page === 'hosts' ? undefined : preloadFullMessageCatalog}
               >
                 <span className="nav-icon"><NavIcon name={item.icon} /></span>
                 {t(item.labelId, appLanguage)}
@@ -2423,6 +2468,8 @@ function App() {
             type="button"
             className={`settings-entry ${activePage === 'settings' ? 'active' : ''}`}
             onClick={() => setActivePage('settings')}
+            onFocus={preloadFullMessageCatalog}
+            onMouseEnter={preloadFullMessageCatalog}
           >
             <span className="nav-icon"><NavIcon name="settings" /></span>
             {t('app.nav.settings', appLanguage)}
@@ -2642,31 +2689,37 @@ function App() {
           </section>
             </>
           ) : activePage === 'keys' ? (
-            <KeysPage
-              keySearchQuery={keySearchQuery}
-              filteredKeys={filteredKeys}
-              sshKeys={sshKeys}
-              onSearchChange={setKeySearchQuery}
-              onImportPrivateKey={openImportKey}
-              onCreateKey={openCreateKey}
-              onEditKey={startEditingKey}
-              onDeleteKey={deleteSshKey}
-              onCopyPublicKey={copyPublicKey}
-            />
+            <Suspense fallback={<LazyContentFallback language={appLanguage} />}>
+              <KeysPage
+                keySearchQuery={keySearchQuery}
+                filteredKeys={filteredKeys}
+                sshKeys={sshKeys}
+                onSearchChange={setKeySearchQuery}
+                onImportPrivateKey={openImportKey}
+                onCreateKey={openCreateKey}
+                onEditKey={startEditingKey}
+                onDeleteKey={deleteSshKey}
+                onCopyPublicKey={copyPublicKey}
+              />
+            </Suspense>
           ) : activePage === 'logs' ? (
-            <LogsPage logs={logs} onClearLogs={clearLogs} />
+            <Suspense fallback={<LazyContentFallback language={appLanguage} />}>
+              <LogsPage logs={logs} onClearLogs={clearLogs} />
+            </Suspense>
           ) : (
-            <SettingsPage
-              hostCount={hosts.length}
-              keyCount={sshKeys.length}
-              bookmarkCount={bookmarkCount}
-              settings={settings}
-              storageInfo={storageInfo}
-              isConfigTransferPending={isConfigTransferPending}
-              onSettingsChange={updateSettings}
-              onImportConfig={importConfig}
-              onExportConfig={exportConfig}
-            />
+            <Suspense fallback={<LazyContentFallback language={appLanguage} />}>
+              <SettingsPage
+                hostCount={hosts.length}
+                keyCount={sshKeys.length}
+                bookmarkCount={bookmarkCount}
+                settings={settings}
+                storageInfo={storageInfo}
+                isConfigTransferPending={isConfigTransferPending}
+                onSettingsChange={updateSettings}
+                onImportConfig={importConfig}
+                onExportConfig={exportConfig}
+              />
+            </Suspense>
           )}
 
           {isEditorOpen && activePage === 'hosts' ? (

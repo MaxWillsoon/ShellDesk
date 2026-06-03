@@ -1,8 +1,42 @@
 import { useEffect, useState } from 'react';
-import { formatMessageTemplate, messageCatalog, type MessageId, type MessageParams } from './i18nCatalog';
+import { coreMessageCatalog } from './i18nCoreCatalog';
+import type { MessageId, MessageParams } from './i18nCatalog';
 
 export type AppLanguage = ShellDeskAppSettings['language'];
 export type { MessageId, MessageParams } from './i18nCatalog';
+
+type MessageDictionary = Partial<Record<MessageId, string>>;
+type MessageCatalog = Record<AppLanguage, MessageDictionary>;
+
+let activeMessageCatalog: MessageCatalog = coreMessageCatalog;
+let fullMessageCatalogPromise: Promise<void> | null = null;
+
+function formatMessageTemplate(template: string, params?: MessageParams) {
+  if (!params) {
+    return template;
+  }
+
+  return template.replace(/\{(\w+)\}/gu, (match, key: string) => {
+    const value = params[key];
+    return value === undefined || value === null ? match : String(value);
+  });
+}
+
+export function loadFullMessageCatalog() {
+  if (!fullMessageCatalogPromise) {
+    fullMessageCatalogPromise = import('./i18nCatalog').then((module) => {
+      activeMessageCatalog = module.messageCatalog;
+    });
+  }
+
+  return fullMessageCatalogPromise;
+}
+
+export function preloadFullMessageCatalog() {
+  void loadFullMessageCatalog().catch(() => {
+    fullMessageCatalogPromise = null;
+  });
+}
 
 export function getSystemLanguage(): AppLanguage {
   const locales = [
@@ -58,8 +92,8 @@ export function useCurrentAppLanguage(): AppLanguage {
 
 export function t(id: MessageId, language: AppLanguage, params?: MessageParams) {
   const normalizedLanguage = normalizeAppLanguage(language);
-  const messages = messageCatalog[normalizedLanguage] ?? messageCatalog['zh-CN'];
-  const template = messages[id] ?? messageCatalog['zh-CN'][id] ?? id;
+  const messages = activeMessageCatalog[normalizedLanguage] ?? activeMessageCatalog['zh-CN'];
+  const template = messages[id] ?? activeMessageCatalog['zh-CN'][id] ?? id;
   return formatMessageTemplate(template, params);
 }
 

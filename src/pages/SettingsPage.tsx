@@ -10,6 +10,7 @@ import {
   defaultDesktopWallpaperPresetId,
   desktopWallpaperPresets,
   getDesktopWallpaperPreset,
+  loadDesktopWallpaperPresetUrl,
 } from '../assets/desktopWallpapers';
 import appIconUrl from '../assets/images/icon.png';
 import { getCurrentAppLocale, t, type MessageId } from '../i18n';
@@ -356,6 +357,7 @@ function SettingsPage({
 }: SettingsPageProps) {
   const [activeSection, setActiveSection] = useState<(typeof settingsSections)[number]['key']>('general');
   const [wallpaperError, setWallpaperError] = useState('');
+  const [wallpaperPresetUrls, setWallpaperPresetUrls] = useState<Record<string, string>>({});
   const [systemFonts, setSystemFonts] = useState<string[]>(fallbackSystemFontChoices);
   const [isSystemFontsLoading, setIsSystemFontsLoading] = useState(false);
   const [systemFontsError, setSystemFontsError] = useState('');
@@ -410,15 +412,39 @@ function SettingsPage({
   const hasCustomWallpaper = settings.desktopWallpaperMode === 'custom' && Boolean(settings.desktopWallpaperDataUrl);
   const selectedWallpaperPreset = getDesktopWallpaperPreset(settings.desktopWallpaperPresetId);
   const selectedWallpaperPresetLabel = t(selectedWallpaperPreset.labelId, settings.language);
-  const wallpaperPreviewUrl = hasCustomWallpaper ? settings.desktopWallpaperDataUrl : selectedWallpaperPreset.url;
+  const wallpaperPreviewUrl = hasCustomWallpaper
+    ? settings.desktopWallpaperDataUrl
+    : wallpaperPresetUrls[selectedWallpaperPreset.id] || '';
   const wallpaperPreviewLabel = hasCustomWallpaper ? t('settings.wallpaper.custom', settings.language) : selectedWallpaperPresetLabel;
   const isDefaultWallpaperPreset = !hasCustomWallpaper && selectedWallpaperPreset.id === defaultDesktopWallpaperPresetId;
   const wallpaperPreviewAriaLabel = hasCustomWallpaper
     ? t('settings.wallpaper.customPreview', settings.language)
     : `${selectedWallpaperPresetLabel} ${t('settings.wallpaper.preview', settings.language)}`;
   const wallpaperPreviewStyle: CSSProperties = {
-    backgroundImage: `linear-gradient(180deg, rgba(8, 13, 20, 0.16), rgba(8, 13, 20, 0.34)), url(${JSON.stringify(wallpaperPreviewUrl)})`,
+    backgroundImage: wallpaperPreviewUrl
+      ? `linear-gradient(180deg, rgba(8, 13, 20, 0.16), rgba(8, 13, 20, 0.34)), url(${JSON.stringify(wallpaperPreviewUrl)})`
+      : 'linear-gradient(180deg, rgba(8, 13, 20, 0.16), rgba(8, 13, 20, 0.34))',
   };
+
+  useEffect(() => {
+    let isCurrent = true;
+
+    Promise.all(desktopWallpaperPresets.map(async (preset) => {
+      const url = await loadDesktopWallpaperPresetUrl(preset.id);
+      return [preset.id, url] as const;
+    }))
+      .then((entries) => {
+        if (isCurrent) {
+          setWallpaperPresetUrls(Object.fromEntries(entries));
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      isCurrent = false;
+    };
+  }, []);
+
   const appDisplayName = appInfo?.productName || window.guiSSH?.appName || 'ShellDesk';
   const appVersion = appInfo?.version || '0.0.1';
   const appPlatform = appInfo ? `${appInfo.platform} ${appInfo.arch}` : t('settings.about.runtime.current', settings.language);
@@ -1132,6 +1158,7 @@ function SettingsPage({
                         {desktopWallpaperPresets.map((preset) => {
                           const isSelectedPreset = !hasCustomWallpaper && selectedWallpaperPreset.id === preset.id;
                           const presetLabel = t(preset.labelId, settings.language);
+                          const presetUrl = wallpaperPresetUrls[preset.id] || '';
 
                           return (
                             <button
@@ -1139,7 +1166,9 @@ function SettingsPage({
                               type="button"
                               className={`desktop-wallpaper-preset ${isSelectedPreset ? 'selected' : ''}`}
                               style={{
-                                backgroundImage: `linear-gradient(180deg, rgba(8, 13, 20, 0.1), rgba(8, 13, 20, 0.42)), url(${JSON.stringify(preset.url)})`,
+                                backgroundImage: presetUrl
+                                  ? `linear-gradient(180deg, rgba(8, 13, 20, 0.1), rgba(8, 13, 20, 0.42)), url(${JSON.stringify(presetUrl)})`
+                                  : 'linear-gradient(180deg, rgba(8, 13, 20, 0.1), rgba(8, 13, 20, 0.42))',
                               }}
                               onClick={() => selectDesktopWallpaperPreset(preset.id)}
                               aria-pressed={isSelectedPreset}

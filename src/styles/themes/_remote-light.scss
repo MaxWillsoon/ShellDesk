@@ -426,6 +426,39 @@
     radial-gradient(ellipse at 50% 100%, rgba(23, 32, 51, 0.12), transparent 54%);
 }
 
+[data-theme="light"] .remote-desktop-boot-icons span {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+[data-theme="light"] .remote-desktop-boot-icons span::before,
+[data-theme="light"] .remote-desktop-boot-dock span {
+  border-color: rgba(52, 72, 104, 0.12);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.7), rgba(230, 237, 246, 0.3)),
+    rgba(28, 115, 195, 0.16);
+  box-shadow: 0 12px 26px rgba(34, 55, 84, 0.16);
+}
+
+[data-theme="light"] .remote-desktop-boot-icons span::after,
+[data-theme="light"] .remote-desktop-boot-window span {
+  background:
+    linear-gradient(90deg, rgba(68, 92, 126, 0.08), rgba(68, 92, 126, 0.18), rgba(68, 92, 126, 0.08));
+}
+
+[data-theme="light"] .remote-desktop-boot-window {
+  border-color: rgba(61, 82, 116, 0.16);
+  background: rgba(244, 248, 252, 0.7);
+  box-shadow:
+    0 30px 70px rgba(34, 55, 84, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.64);
+}
+
+[data-theme="light"] .remote-desktop-boot-dock {
+  border-color: rgba(61, 82, 116, 0.14);
+  background: rgba(244, 248, 252, 0.68);
+  box-shadow: 0 20px 42px rgba(34, 55, 84, 0.16);
+}
+
 [data-theme="light"] .global-search,
 [data-theme="light"] .command-button,
 [data-theme="light"] .view-switch {

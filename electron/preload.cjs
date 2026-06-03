@@ -1,18 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-function readInitialPublicVaultSnapshot() {
-  try {
-    const result = ipcRenderer.sendSync('vault:get-public-snapshot-sync');
-    return result?.ok ? result.snapshot : null;
-  } catch {
-    return null;
-  }
-}
-
-const initialPublicVaultSnapshot = readInitialPublicVaultSnapshot();
-let initialPublicVaultSnapshotPromise = initialPublicVaultSnapshot
-  ? Promise.resolve(initialPublicVaultSnapshot)
-  : ipcRenderer.invoke('vault:get-public-snapshot');
+const initialPublicVaultSnapshot = null;
+let initialPublicVaultSnapshotPromise = ipcRenderer.invoke('vault:get-public-snapshot');
 let shouldUseInitialPublicVaultSnapshot = true;
 
 initialPublicVaultSnapshotPromise.catch(() => undefined);

@@ -1,11 +1,5 @@
 const crypto = require('node:crypto');
 const net = require('node:net');
-const Redis = require('ioredis');
-const mysql = require('mysql2/promise');
-const mongodb = require('mongodb');
-const { MongoClient } = mongodb;
-const EJSON = mongodb.EJSON || mongodb.BSON?.EJSON;
-const { Client: PostgresClient } = require('pg');
 const {
   forwardOut,
   registerConnectionCleanup,
@@ -19,9 +13,63 @@ const {
   readIntegerInRange,
 } = require('./validation.cjs');
 
+let RedisModule = null;
+let mysqlModule = null;
+let mongoModule = null;
+let PostgresClientModule = null;
+
+function getRedisModule() {
+  if (!RedisModule) {
+    RedisModule = require('ioredis');
+  }
+
+  return RedisModule;
+}
+
+function getMysqlModule() {
+  if (!mysqlModule) {
+    mysqlModule = require('mysql2/promise');
+  }
+
+  return mysqlModule;
+}
+
+function getMongoModule() {
+  if (!mongoModule) {
+    const mongodb = require('mongodb');
+    const EJSON = mongodb.EJSON || mongodb.BSON?.EJSON;
+
+    if (!EJSON) {
+      throw new Error('MongoDB EJSON 工具不可用，请检查 mongodb 依赖版本。');
+    }
+
+    mongoModule = { MongoClient: mongodb.MongoClient, EJSON };
+  }
+
+  return mongoModule;
+}
+
+function getPostgresClientModule() {
+  if (!PostgresClientModule) {
+    PostgresClientModule = require('pg').Client;
+  }
+
+  return PostgresClientModule;
+}
+
 function registerDatabaseHandlers(registerIpcHandler) {
-  if (!EJSON) {
-    throw new Error('MongoDB EJSON 工具不可用，请检查 mongodb 依赖版本。');
+  function getMongoEjson() {
+    return getMongoModule().EJSON;
+  }
+
+  function getMongoClient() {
+    const { MongoClient } = getMongoModule();
+
+    if (typeof MongoClient !== 'function') {
+      throw new Error('MongoDB 客户端不可用，请检查 mongodb 依赖版本。');
+    }
+
+    return MongoClient;
   }
 
   function adaptConnectedSocketStream(stream) {
@@ -71,7 +119,7 @@ function registerDatabaseHandlers(registerIpcHandler) {
     const stream = await createMysqlTunnelStream(activeConnection.client, config.host, config.port);
 
     try {
-      const connection = await mysql.createConnection({
+      const connection = await getMysqlModule().createConnection({
         host: config.host,
         port: config.port,
         user: config.user,
@@ -272,7 +320,6 @@ function registerDatabaseHandlers(registerIpcHandler) {
 
   function createTcpTunnel(client, remoteHost, remotePort) {
     return new Promise((resolve, reject) => {
-      const localPort = Math.floor(Math.random() * 50000) + 10000;
       const localHost = '127.0.0.1';
       const server = net.createServer((localSocket) => {
         localSocket.on('error', () => undefined);
@@ -292,7 +339,9 @@ function registerDatabaseHandlers(registerIpcHandler) {
         });
       });
 
-      server.listen(localPort, localHost, () => {
+      server.listen(0, localHost, () => {
+        const address = server.address();
+        const localPort = typeof address === 'object' && address ? address.port : 0;
         resolve({ server, localPort, localHost });
       });
       server.on('error', reject);
@@ -322,7 +371,7 @@ function registerDatabaseHandlers(registerIpcHandler) {
       return fallback;
     }
 
-    const parsed = EJSON.parse(text, { relaxed: true });
+    const parsed = getMongoEjson().parse(text, { relaxed: true });
 
     if (!isPlainObject(parsed)) {
       throw new Error(`${label}必须是 JSON 对象。`);
@@ -332,6 +381,7 @@ function registerDatabaseHandlers(registerIpcHandler) {
   }
 
   function serializeMongoValue(value) {
+    const EJSON = getMongoEjson();
     return EJSON.parse(EJSON.stringify(value, { relaxed: false }));
   }
 
@@ -366,11 +416,14 @@ function registerDatabaseHandlers(registerIpcHandler) {
 
     const { server: tunnelServer, localPort } = await withActiveConnectionClientRetry(connectionId, (activeConnection) =>
       createTcpTunnel(activeConnection.client, mongoHost, mongoPort));
+    const MongoClient = getMongoClient();
     const client = new MongoClient(`mongodb://127.0.0.1:${localPort}`, {
       auth: mongoUser ? { username: mongoUser, password: mongoPassword } : undefined,
       authSource: mongoUser ? authSource : undefined,
       connectTimeoutMS: 15000,
       directConnection: true,
+      maxPoolSize: 4,
+      minPoolSize: 0,
       serverSelectionTimeoutMS: 15000,
     });
 
@@ -516,6 +569,7 @@ function registerDatabaseHandlers(registerIpcHandler) {
 
     const stream = adaptConnectedSocketStream(await withActiveConnectionClientRetry(connectionId, (activeConnection) =>
       forwardOut(activeConnection.client, postgresHost, postgresPort)));
+    const PostgresClient = getPostgresClientModule();
     const client = new PostgresClient({
       host: postgresHost,
       port: postgresPort,
@@ -731,7 +785,6 @@ function registerDatabaseHandlers(registerIpcHandler) {
 
   function createRedisTunnel(client, redisHost, redisPort) {
     return new Promise((resolve, reject) => {
-      const localPort = Math.floor(Math.random() * 50000) + 10000;
       const localHost = '127.0.0.1';
       const server = net.createServer((localSocket) => {
         localSocket.on('error', () => undefined);
@@ -750,7 +803,9 @@ function registerDatabaseHandlers(registerIpcHandler) {
           localSocket.destroy();
         });
       });
-      server.listen(localPort, localHost, () => {
+      server.listen(0, localHost, () => {
+        const address = server.address();
+        const localPort = typeof address === 'object' && address ? address.port : 0;
         resolve({ server, localPort, localHost });
       });
       server.on('error', reject);
@@ -772,6 +827,7 @@ function registerDatabaseHandlers(registerIpcHandler) {
     }
     const { server: tunnelServer, localPort } = await withActiveConnectionClientRetry(connectionId, (activeConnection) =>
       createRedisTunnel(activeConnection.client, redisHost, redisPort));
+    const Redis = getRedisModule();
     const redis = new Redis({
       host: '127.0.0.1', port: localPort, password: redisPassword, db: redisDb,
       lazyConnect: true, connectTimeout: 15000, maxRetriesPerRequest: 1,

@@ -4,7 +4,7 @@ const path = require('node:path');
 const { maxConfigImportBytes } = require('./constants.cjs');
 const { getSystemFontFamilies } = require('./systemFonts.cjs');
 const { getSenderWindow } = require('./windows.cjs');
-const { isPlainObject, readBoundedString, toErrorMessage } = require('./validation.cjs');
+const { isPlainObject, readBoundedString } = require('./validation.cjs');
 const {
   buildConfigBundle,
   createPublicVaultSnapshot,
@@ -106,14 +106,6 @@ function registerConfigHandlers(registerIpcHandler) {
     }
 
     return result.filePaths[0] ?? '';
-  });
-
-  ipcMain.on('vault:get-public-snapshot-sync', (event) => {
-    try {
-      event.returnValue = { ok: true, snapshot: createPublicVaultSnapshot() };
-    } catch (error) {
-      event.returnValue = { ok: false, error: toErrorMessage(error) };
-    }
   });
 
   registerIpcHandler('vault:get-public-snapshot', async () => createPublicVaultSnapshot());
