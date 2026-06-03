@@ -28,8 +28,12 @@
 }
 
 .security-toolbar {
+  display: grid;
+  flex: 0 0 auto;
   min-height: 52px;
-  justify-content: space-between;
+  grid-template-columns: minmax(170px, 0.85fr) minmax(260px, 1.5fr) auto;
+  align-items: center;
+  gap: 10px;
   border-bottom: 1px solid var(--security-border);
   padding: 8px 10px;
   background: rgba(255, 255, 255, 0.035);
@@ -104,6 +108,7 @@
 
 .security-alert {
   display: flex;
+  flex: 0 0 auto;
   min-height: 38px;
   align-items: center;
   margin: 8px 10px 0;
@@ -135,32 +140,56 @@
   color: var(--security-accent);
 }
 
+.security-alert + .security-layout {
+  margin-top: 8px;
+}
+
 .security-summary {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 8px;
-  padding: 10px;
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
 }
 
 .security-summary div {
-  display: grid;
+  display: flex;
+  min-height: 30px;
   min-width: 0;
-  gap: 4px;
+  align-items: center;
+  gap: 5px;
   border: 1px solid var(--security-border);
-  border-radius: 8px;
-  padding: 9px 10px;
+  border-radius: 999px;
+  padding: 4px 8px;
   background: rgba(255, 255, 255, 0.04);
 }
 
 .security-summary strong {
-  font-size: 18px;
+  order: -1;
+  font-size: 13px;
   font-weight: 880;
+  line-height: 1;
 }
 
 .security-summary em {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.security-summary span,
+.security-summary em {
+  line-height: 1;
+}
+
+.security-score-card {
+  flex: 1 1 108px;
+  max-width: 150px;
+}
+
+.security-score-card strong {
+  font-size: 14px;
 }
 
 .security-score-card.good {
@@ -186,7 +215,7 @@
 .security-layout {
   display: grid;
   min-height: 0;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   grid-template-columns: 300px minmax(0, 1fr);
   gap: 10px;
   overflow: hidden;
@@ -739,19 +768,17 @@
 @media (max-width: 850px) {
   .security-toolbar {
     align-items: stretch;
-    flex-direction: column;
+    grid-template-columns: 1fr;
   }
 
+  .security-summary,
   .security-actions {
+    justify-content: flex-start;
     flex-wrap: wrap;
   }
 
   .security-layout {
     grid-template-columns: 1fr;
-  }
-
-  .security-summary {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

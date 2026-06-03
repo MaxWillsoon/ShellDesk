@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import DismissibleAlert from './DismissibleAlert';
 
@@ -24,6 +24,13 @@ interface RemoteSecurityAuditProps {
   hostLabel?: string;
 }
 
+interface SecurityCheckListGroup {
+  id: string;
+  title: string;
+  description: string;
+  definitionIds: string[];
+}
+
 type SecurityAiAuditPhase = 'idle' | 'planning' | 'collecting' | 'requesting' | 'streaming' | 'done' | 'error';
 
 interface SecurityAiPlan {
@@ -33,6 +40,135 @@ interface SecurityAiPlan {
 
 const SECURITY_AI_EVIDENCE_CHAR_LIMIT = 100000;
 const SECURITY_AI_RAW_OUTPUT_LIMIT = 7000;
+const securitySeverityRank: Record<SecurityCheckResult['severity'], number> = {
+  high: 4,
+  medium: 3,
+  low: 2,
+  info: 1,
+};
+const securityStatusRank: Record<SecurityCheckResult['status'], number> = {
+  failed: 4,
+  warning: 3,
+  unknown: 2,
+  passed: 1,
+};
+
+function createSecurityCheckListGroups(definitions: SecurityCheckDefinition[], language: AppLanguage): SecurityCheckListGroup[] {
+  const definitionById = new Map(definitions.map((definition) => [definition.id, definition]));
+  const createSingleGroup = (definitionId: string): SecurityCheckListGroup | null => {
+    const definition = definitionById.get(definitionId);
+
+    return definition
+      ? {
+          id: definition.id,
+          title: definition.title,
+          description: definition.description,
+          definitionIds: [definition.id],
+        }
+      : null;
+  };
+
+  return [
+    createSingleGroup('ssh-config'),
+    {
+      id: 'identity-access',
+      title: t('securityAudit.group.identityAccess.title', language),
+      description: t('securityAudit.group.identityAccess.description', language),
+      definitionIds: ['privileged-users', 'account-keys'],
+    },
+    createSingleGroup('failed-logins'),
+    {
+      id: 'network-exposure',
+      title: t('securityAudit.group.networkExposure.title', language),
+      description: t('securityAudit.group.networkExposure.description', language),
+      definitionIds: ['open-ports', 'firewall-exposure'],
+    },
+    {
+      id: 'runtime-privilege',
+      title: t('securityAudit.group.runtimePrivilege.title', language),
+      description: t('securityAudit.group.runtimePrivilege.description', language),
+      definitionIds: ['process-analysis', 'privilege-surface'],
+    },
+    createSingleGroup('file-permissions'),
+    createSingleGroup('updates'),
+  ]
+    .filter((group): group is SecurityCheckListGroup => Boolean(group))
+    .map((group) => ({
+      ...group,
+      definitionIds: group.definitionIds.filter((definitionId) => definitionById.has(definitionId)),
+    }))
+    .filter((group) => group.definitionIds.length > 0);
+}
+
+function getWorstSecurityResult(results: SecurityCheckResult[]) {
+  return results.reduce<SecurityCheckResult | null>((worstResult, result) => {
+    if (!worstResult) {
+      return result;
+    }
+
+    const statusDelta = securityStatusRank[result.status] - securityStatusRank[worstResult.status];
+
+    if (statusDelta !== 0) {
+      return statusDelta > 0 ? result : worstResult;
+    }
+
+    return securitySeverityRank[result.severity] > securitySeverityRank[worstResult.severity] ? result : worstResult;
+  }, null);
+}
+
+function createPendingSecurityResult(definition: SecurityCheckDefinition, language: AppLanguage): SecurityCheckResult {
+  return {
+    id: definition.id,
+    title: definition.title,
+    severity: 'info',
+    status: 'unknown',
+    summary: definition.description,
+    details: [t('securityAudit.pending.detail', language)],
+    suggestions: [t('securityAudit.pending.suggestion', language)],
+    rawOutput: '',
+  };
+}
+
+function createGroupedSecurityResult(
+  group: SecurityCheckListGroup,
+  definitions: SecurityCheckDefinition[],
+  results: SecurityCheckResult[],
+  language: AppLanguage,
+): SecurityCheckResult {
+  if (definitions.length === 1) {
+    return results[0] ?? createPendingSecurityResult(definitions[0], language);
+  }
+
+  const worstResult = getWorstSecurityResult(results);
+  const completedLabel = `${results.length}/${definitions.length}`;
+  const summary = worstResult
+    ? `${completedLabel} · ${worstResult.title}: ${worstResult.summary}`
+    : group.description;
+  const details = definitions.map((definition) => {
+    const result = results.find((item) => item.id === definition.id);
+
+    return result
+      ? `${definition.title} · ${getStatusLabel(result.status, language)} · ${result.summary}`
+      : `${definition.title} · ${t('securityAudit.ui.pendingRun', language)} · ${definition.description}`;
+  });
+  const suggestions = results.length
+    ? results.flatMap((result) => result.suggestions.map((suggestion) => `${result.title}: ${suggestion}`))
+    : [t('securityAudit.pending.suggestion', language)];
+  const rawOutput = results
+    .map((result) => `# ${result.title}\n${result.rawOutput || t('securityAudit.ui.noRawOutput', language)}`)
+    .join('\n\n');
+
+  return {
+    id: group.id,
+    title: group.title,
+    severity: worstResult?.severity ?? 'info',
+    status: worstResult?.status ?? 'unknown',
+    summary,
+    details,
+    suggestions,
+    rawOutput,
+  };
+}
 
 function runCmd(connectionId: string, command: string, language: AppLanguage) {
   const api = window.guiSSH?.connections;
@@ -270,8 +406,9 @@ function RemoteSecurityAudit({ connectionId, settings, systemType, hostLabel }: 
   const effectiveHostLabel = hostLabel || t('securityCheck.report.currentConnection', language);
   const isWindowsHost = isWindowsSystem(systemType);
   const definitions = useMemo(() => createSecurityCheckDefinitions(isWindowsHost, language), [isWindowsHost, language]);
+  const checkGroups = useMemo(() => createSecurityCheckListGroups(definitions, language), [definitions, language]);
   const [results, setResults] = useState<SecurityCheckResult[]>([]);
-  const [selectedId, setSelectedId] = useState(definitions[0]?.id ?? '');
+  const [selectedGroupId, setSelectedGroupId] = useState(checkGroups[0]?.id ?? '');
   const [runningAll, setRunningAll] = useState(false);
   const [runningIds, setRunningIds] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState('');
@@ -286,20 +423,19 @@ function RemoteSecurityAudit({ connectionId, settings, systemType, hostLabel }: 
   const [aiAuditPlanNote, setAiAuditPlanNote] = useState('');
   const [aiAuditSnapshotNote, setAiAuditSnapshotNote] = useState('');
 
-  const selectedDefinition = definitions.find((definition) => definition.id === selectedId) ?? definitions[0];
-  const selectedResult = results.find((result) => result.id === selectedId) ?? null;
-  const currentResult = selectedResult ?? (selectedDefinition
-    ? {
-        id: selectedDefinition.id,
-        title: selectedDefinition.title,
-        severity: 'info' as const,
-        status: 'unknown' as const,
-        summary: selectedDefinition.description,
-        details: [t('securityAudit.pending.detail', language)],
-        suggestions: [t('securityAudit.pending.suggestion', language)],
-        rawOutput: '',
-      }
-    : null);
+  const selectedGroup = checkGroups.find((group) => group.id === selectedGroupId) ?? checkGroups[0];
+  const selectedDefinitions = selectedGroup
+    ? selectedGroup.definitionIds
+        .map((definitionId) => definitions.find((definition) => definition.id === definitionId) ?? null)
+        .filter((definition): definition is SecurityCheckDefinition => Boolean(definition))
+    : [];
+  const selectedResults = selectedDefinitions
+    .map((definition) => results.find((result) => result.id === definition.id) ?? null)
+    .filter((result): result is SecurityCheckResult => Boolean(result));
+  const currentResult = selectedGroup
+    ? createGroupedSecurityResult(selectedGroup, selectedDefinitions, selectedResults, language)
+    : null;
+  const isSelectedGroupRunning = selectedDefinitions.some((definition) => runningIds.has(definition.id));
   const stats = useMemo(() => ({
     high: results.filter((result) => result.severity === 'high').length,
     medium: results.filter((result) => result.severity === 'medium').length,
@@ -309,6 +445,17 @@ function RemoteSecurityAudit({ connectionId, settings, systemType, hostLabel }: 
   }), [results]);
   const score = useMemo(() => calculateSecurityScore(results, language), [language, results]);
   const isAiAuditBusy = aiAuditPhase === 'planning' || aiAuditPhase === 'collecting' || aiAuditPhase === 'requesting' || aiAuditPhase === 'streaming';
+
+  useEffect(() => {
+    if (!checkGroups.length) {
+      setSelectedGroupId('');
+      return;
+    }
+
+    if (!checkGroups.some((group) => group.id === selectedGroupId)) {
+      setSelectedGroupId(checkGroups[0].id);
+    }
+  }, [checkGroups, selectedGroupId]);
 
   const upsertResult = (nextResult: SecurityCheckResult) => {
     setResults((currentResults) => {
@@ -365,6 +512,16 @@ function RemoteSecurityAudit({ connectionId, settings, systemType, hostLabel }: 
       setError(getErrorMessage(error));
     } finally {
       setRunningAll(false);
+    }
+  };
+
+  const runSelectedGroup = async () => {
+    if (!selectedDefinitions.length || isSelectedGroupRunning) {
+      return;
+    }
+
+    for (const definition of selectedDefinitions) {
+      await runCheck(definition);
     }
   };
 
@@ -439,29 +596,30 @@ function RemoteSecurityAudit({ connectionId, settings, systemType, hostLabel }: 
       return;
     }
 
-    const selectedDefinitions = plan.ids
+    const aiSelectedDefinitions = plan.ids
       .map((id) => definitions.find((definition) => definition.id === id))
       .filter((definition): definition is SecurityCheckDefinition => Boolean(definition));
 
-    if (!selectedDefinitions.length) {
+    if (!aiSelectedDefinitions.length) {
       setAiAuditPhase('error');
       setAiAuditError(t('securityAudit.ai.error.noSelection', language));
       return;
     }
 
     const planNote = t('securityAudit.ai.plan.note', language, {
-      count: selectedDefinitions.length,
-      items: selectedDefinitions.map((definition) => definition.title).join(language === 'zh-CN' ? '、' : ', '),
+      count: aiSelectedDefinitions.length,
+      items: aiSelectedDefinitions.map((definition) => definition.title).join(language === 'zh-CN' ? '、' : ', '),
       reason: plan.reason,
     });
     const completedResults: SecurityCheckResult[] = [];
 
     setAiAuditPlanNote(planNote);
     setAiAuditPhase('collecting');
-    setSelectedId(selectedDefinitions[0].id);
+    const firstAiGroup = checkGroups.find((group) => group.definitionIds.includes(aiSelectedDefinitions[0].id));
+    setSelectedGroupId(firstAiGroup?.id ?? checkGroups[0]?.id ?? '');
 
-    for (const [index, definition] of selectedDefinitions.entries()) {
-      setAiAuditSnapshotNote(t('securityAudit.ai.collectingItem', language, { index: index + 1, total: selectedDefinitions.length, title: definition.title }));
+    for (const [index, definition] of aiSelectedDefinitions.entries()) {
+      setAiAuditSnapshotNote(t('securityAudit.ai.collectingItem', language, { index: index + 1, total: aiSelectedDefinitions.length, title: definition.title }));
       completedResults.push(await runCheck(definition));
     }
 
@@ -583,9 +741,20 @@ function RemoteSecurityAudit({ connectionId, settings, systemType, hostLabel }: 
     <section className="security-audit">
       <header className="security-toolbar">
         <div className="security-title">
-          <span>{isWindowsHost ? 'Windows' : 'Linux/Unix'} {t('securityAudit.ui.titleSuffix', language)}</span>
           <strong>{effectiveHostLabel}</strong>
           <em>{scannedAt || t('securityAudit.ui.notRun', language)}</em>
+        </div>
+        <div className="security-summary">
+          <div className={`security-score-card ${score.tone}`}>
+            <span>{t('securityAudit.ui.score', language)}</span>
+            <strong>{score.score ?? '--'}</strong>
+            <em>{score.label}</em>
+          </div>
+          <div><span>{t('securityAudit.ui.highRisk', language)}</span><strong>{stats.high}</strong></div>
+          <div><span>{t('securityAudit.ui.mediumRisk', language)}</span><strong>{stats.medium}</strong></div>
+          <div><span>{t('securityAudit.ui.lowRisk', language)}</span><strong>{stats.low}</strong></div>
+          <div><span>{t('securityAudit.ui.info', language)}</span><strong>{stats.info}</strong></div>
+          <div><span>{t('securityAudit.ui.needsAttention', language)}</span><strong>{stats.warning}</strong></div>
         </div>
         <div className="security-actions">
           <button type="button" className="primary" onClick={runAllChecks} disabled={runningAll || isAiAuditBusy}>
@@ -601,37 +770,33 @@ function RemoteSecurityAudit({ connectionId, settings, systemType, hostLabel }: 
       {error ? <DismissibleAlert className="security-alert danger" onDismiss={() => setError('')} role="alert">{error}</DismissibleAlert> : null}
       {notice ? <DismissibleAlert className="security-alert info" onDismiss={() => setNotice('')}>{notice}</DismissibleAlert> : null}
 
-      <div className="security-summary">
-        <div className={`security-score-card ${score.tone}`}>
-          <span>{t('securityAudit.ui.score', language)}</span>
-          <strong>{score.score ?? '--'}</strong>
-          <em>{score.label}</em>
-        </div>
-        <div><span>{t('securityAudit.ui.highRisk', language)}</span><strong>{stats.high}</strong></div>
-        <div><span>{t('securityAudit.ui.mediumRisk', language)}</span><strong>{stats.medium}</strong></div>
-        <div><span>{t('securityAudit.ui.lowRisk', language)}</span><strong>{stats.low}</strong></div>
-        <div><span>{t('securityAudit.ui.info', language)}</span><strong>{stats.info}</strong></div>
-        <div><span>{t('securityAudit.ui.needsAttention', language)}</span><strong>{stats.warning}</strong></div>
-      </div>
-
       <div className="security-layout">
         <aside className="security-check-list">
-          {definitions.map((definition) => {
-            const result = results.find((item) => item.id === definition.id);
-            const isRunning = runningIds.has(definition.id);
+          {checkGroups.map((group) => {
+            const groupDefinitions = group.definitionIds
+              .map((definitionId) => definitions.find((definition) => definition.id === definitionId) ?? null)
+              .filter((definition): definition is SecurityCheckDefinition => Boolean(definition));
+            const groupResults = groupDefinitions
+              .map((definition) => results.find((item) => item.id === definition.id) ?? null)
+              .filter((result): result is SecurityCheckResult => Boolean(result));
+            const groupResult = createGroupedSecurityResult(group, groupDefinitions, groupResults, language);
+            const isRunning = groupDefinitions.some((definition) => runningIds.has(definition.id));
+            const statusLabel = groupResults.length
+              ? getStatusLabel(groupResult.status, language)
+              : t('securityAudit.ui.pendingRun', language);
 
             return (
               <button
-                key={definition.id}
+                key={group.id}
                 type="button"
-                className={`${selectedId === definition.id ? 'active' : ''} ${result?.severity ?? 'info'}`}
-                onClick={() => setSelectedId(definition.id)}
+                className={`${selectedGroupId === group.id ? 'active' : ''} ${groupResult.severity}`}
+                onClick={() => setSelectedGroupId(group.id)}
               >
                 <span>
-                  <strong>{definition.title}</strong>
-                  <small>{result?.summary ?? definition.description}</small>
+                  <strong>{group.title}</strong>
+                  <small>{groupResult.summary}</small>
                 </span>
-                <em className={result?.status ?? 'unknown'}>{isRunning ? '...' : result ? getStatusLabel(result.status, language) : t('securityAudit.ui.pendingRun', language)}</em>
+                <em className={groupResult.status}>{isRunning ? '...' : statusLabel}</em>
               </button>
             );
           })}
@@ -649,10 +814,12 @@ function RemoteSecurityAudit({ connectionId, settings, systemType, hostLabel }: 
                   <span className={`security-severity ${currentResult.severity}`}>{getSeverityLabel(currentResult.severity, language)}</span>
                   <button
                     type="button"
-                    onClick={() => selectedDefinition ? runCheck(selectedDefinition) : undefined}
-                    disabled={!selectedDefinition || runningIds.has(currentResult.id)}
+                    onClick={() => void runSelectedGroup()}
+                    disabled={!selectedDefinitions.length || isSelectedGroupRunning}
                   >
-                    {runningIds.has(currentResult.id) ? t('securityAudit.ui.rerunning', language) : t('securityAudit.ui.rerunOne', language)}
+                    {isSelectedGroupRunning
+                      ? t('securityAudit.ui.rerunning', language)
+                      : t(selectedDefinitions.length > 1 ? 'securityAudit.ui.rerunGroup' : 'securityAudit.ui.rerunOne', language)}
                   </button>
                 </div>
               </div>
