@@ -77,6 +77,7 @@ const defaultAppSettings: ShellDeskAppSettings = {
 
 type AppPage = 'hosts' | 'keys' | 'logs' | 'settings';
 type HostListSortMode = 'createdDesc' | 'createdAsc' | 'updatedDesc' | 'updatedAsc' | 'nameAsc' | 'nameDesc' | 'addressAsc';
+type SyncConflictNotice = Pick<ShellDeskSyncResult, 'conflictCount' | 'conflicts' | 'config'>;
 type HostSystemType =
   | 'unknown'
   | 'windows'
@@ -1106,6 +1107,10 @@ function App() {
   const [isQuickConnecting, setIsQuickConnecting] = useState(false);
   const [isCredentialConnecting, setIsCredentialConnecting] = useState(false);
   const [connectionErrorNotice, setConnectionErrorNotice] = useState<ConnectionErrorNotice | null>(null);
+  const [syncConflictCount, setSyncConflictCount] = useState(0);
+  const [syncConflictNotice, setSyncConflictNotice] = useState<SyncConflictNotice | null>(null);
+  const [syncResolutionPending, setSyncResolutionPending] = useState<ShellDeskSyncConflictResolution | ''>('');
+  const [syncResolutionError, setSyncResolutionError] = useState('');
   const [credentialHost, setCredentialHost] = useState<ConnectionHost | null>(null);
   const [credentialForm, setCredentialForm] = useState<CredentialFormState>(emptyCredentialForm);
   const [credentialError, setCredentialError] = useState('');
@@ -1336,6 +1341,23 @@ function App() {
     }
   };
 
+  const updateSyncConflictNotice = useCallback((config: ShellDeskSyncPublicConfig, conflicts: ShellDeskSyncConflict[] = []) => {
+    const pendingCount = config.lastConflictCount > 0 ? config.lastConflictCount : 0;
+
+    setSyncConflictCount(pendingCount);
+
+    if (pendingCount) {
+      setSyncConflictNotice({
+        conflictCount: pendingCount,
+        conflicts,
+        config,
+      });
+    } else {
+      setSyncConflictNotice(null);
+      setSyncResolutionError('');
+    }
+  }, []);
+
   useEffect(() => {
     hostsRef.current = hosts;
   }, [hosts]);
@@ -1431,6 +1453,48 @@ function App() {
       disposed = true;
     };
   }, [isConnectionWindow, vaultControls]);
+
+  useEffect(() => {
+    if (isConnectionWindow) {
+      return undefined;
+    }
+
+    const syncControls = window.guiSSH?.sync;
+    const syncEvents = window.guiSSH?.events;
+    let disposed = false;
+
+    void syncControls?.getConfig()
+      .then((config) => {
+        if (!disposed) {
+          updateSyncConflictNotice(config);
+        }
+      })
+      .catch(() => undefined);
+
+    const removeSyncChanged = syncEvents?.onSyncChanged?.((result) => {
+      if (disposed) {
+        return;
+      }
+
+      if (result.needsResolution) {
+        setSyncConflictCount(result.conflictCount);
+        setSyncConflictNotice({
+          conflictCount: result.conflictCount,
+          conflicts: result.conflicts,
+          config: result.config,
+        });
+        setSyncResolutionError('');
+        return;
+      }
+
+      updateSyncConflictNotice(result.config);
+    });
+
+    return () => {
+      disposed = true;
+      removeSyncChanged?.();
+    };
+  }, [isConnectionWindow, updateSyncConflictNotice]);
 
   useEffect(() => {
     storeHostGroupPanelCollapsed(isHostGroupPanelCollapsed);
@@ -1722,6 +1786,49 @@ function App() {
 
   const closeWindow = () => {
     void windowControls?.close();
+  };
+
+  const resolveSyncConflict = async (resolution: ShellDeskSyncConflictResolution) => {
+    const syncControls = window.guiSSH?.sync;
+
+    if (!syncControls) {
+      setSyncResolutionError(t('app.sync.conflict.noApi', appLanguage));
+      return;
+    }
+
+    setSyncResolutionPending(resolution);
+    setSyncResolutionError('');
+
+    try {
+      const result = await syncControls.runNow({ conflictResolution: resolution });
+
+      if (result.snapshot) {
+        applyVaultSnapshot(result.snapshot);
+      }
+
+      if (result.needsResolution) {
+        setSyncConflictCount(result.conflictCount);
+        setSyncConflictNotice({
+          conflictCount: result.conflictCount,
+          conflicts: result.conflicts,
+          config: result.config,
+        });
+        setSyncResolutionError(t('app.sync.conflict.stillPending', appLanguage, { count: String(result.conflictCount) }));
+        return;
+      }
+
+      setSyncConflictCount(0);
+      setSyncConflictNotice(null);
+      setStatusMessage(t(
+        resolution === 'local' ? 'app.sync.conflict.resolvedLocal' : 'app.sync.conflict.resolvedRemote',
+        appLanguage,
+        { count: String(result.conflictCount) },
+      ));
+    } catch (error) {
+      setSyncResolutionError(t('app.sync.conflict.resolveFailed', appLanguage, { error: getErrorMessage(error, appLanguage) }));
+    } finally {
+      setSyncResolutionPending('');
+    }
   };
 
   const resetForm = () => {
@@ -2381,6 +2488,14 @@ function App() {
         : t('app.deleteConfirm.key', appLanguage, { name: deleteConfirmation.key.name })
       : t('app.deleteConfirm.host', appLanguage, { name: deleteConfirmation.host.name })
     : '';
+  const syncConflictPreview = syncConflictNotice?.conflicts.slice(0, 2) ?? [];
+  const syncConflictHiddenCount = syncConflictPreview.length
+    ? Math.max(0, (syncConflictNotice?.conflictCount ?? 0) - syncConflictPreview.length)
+    : 0;
+  const syncConflictBadgeLabel = syncConflictCount
+    ? t('app.sync.conflict.badge', appLanguage, { count: String(syncConflictCount) })
+    : '';
+  const shouldShowSyncConflictNotice = Boolean(syncConflictNotice) && !connection && !isConnectionWindow && activePage !== 'settings';
 
   return (
     <div className={isMacOS ? 'app-shell app-shell-macos' : 'app-shell'}>
@@ -2430,6 +2545,60 @@ function App() {
         </div>,
         document.body,
       ) : null}
+      {shouldShowSyncConflictNotice && syncConflictNotice ? createPortal(
+        <div className="sync-conflict-popover no-drag" role="alertdialog" aria-modal="false" aria-labelledby="sync-conflict-title">
+          <button
+            type="button"
+            className="sync-conflict-close"
+            aria-label={t('app.sync.conflict.dismiss', appLanguage)}
+            onClick={() => setSyncConflictNotice(null)}
+          >
+            ×
+          </button>
+          <span className="sync-conflict-mark" aria-hidden="true">!</span>
+          <div className="sync-conflict-copy">
+            <strong id="sync-conflict-title">{t('app.sync.conflict.title', appLanguage)}</strong>
+            <p>{t('app.sync.conflict.summary', appLanguage, { count: String(syncConflictNotice.conflictCount) })}</p>
+            {syncConflictPreview.length ? (
+              <div className="sync-conflict-preview">
+                {syncConflictPreview.map((conflict) => (
+                  <span key={`${conflict.type}:${conflict.id}`}>
+                    <b>{conflict.name}</b>
+                    <small>{conflict.reason}</small>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <small className="sync-conflict-muted">{t('app.sync.conflict.noDetails', appLanguage)}</small>
+            )}
+            {syncConflictHiddenCount > 0 ? (
+              <small className="sync-conflict-muted">{t('app.sync.conflict.more', appLanguage, { count: String(syncConflictHiddenCount) })}</small>
+            ) : null}
+            {syncResolutionError ? <small className="sync-conflict-error">{syncResolutionError}</small> : null}
+            <div className="sync-conflict-actions">
+              <button type="button" onClick={() => { setActivePage('settings'); preloadFullMessageCatalog(); }}>
+                {t('app.sync.conflict.openSettings', appLanguage)}
+              </button>
+              <button
+                type="button"
+                onClick={() => void resolveSyncConflict('remote')}
+                disabled={Boolean(syncResolutionPending)}
+              >
+                {syncResolutionPending === 'remote' ? t('app.sync.conflict.keepRemoteLoading', appLanguage) : t('app.sync.conflict.keepRemote', appLanguage)}
+              </button>
+              <button
+                type="button"
+                className="primary"
+                onClick={() => void resolveSyncConflict('local')}
+                disabled={Boolean(syncResolutionPending)}
+              >
+                {syncResolutionPending === 'local' ? t('app.sync.conflict.keepLocalLoading', appLanguage) : t('app.sync.conflict.keepLocal', appLanguage)}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
 
       {connection ? (
         <Suspense fallback={<RemoteDesktopLoadingFallback language={appLanguage} />}>
@@ -2467,13 +2636,15 @@ function App() {
 
           <button
             type="button"
-            className={`settings-entry ${activePage === 'settings' ? 'active' : ''}`}
+            className={`settings-entry ${activePage === 'settings' ? 'active' : ''} ${syncConflictCount ? 'has-sync-conflict' : ''}`}
             onClick={() => setActivePage('settings')}
             onFocus={preloadFullMessageCatalog}
             onMouseEnter={preloadFullMessageCatalog}
+            title={syncConflictBadgeLabel || undefined}
           >
             <span className="nav-icon"><NavIcon name="settings" /></span>
             {t('app.nav.settings', appLanguage)}
+            {syncConflictCount ? <span className="settings-sync-dot" aria-label={syncConflictBadgeLabel} /> : null}
           </button>
         </aside>
 

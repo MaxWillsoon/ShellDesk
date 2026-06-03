@@ -1,4 +1,4 @@
-const { app, safeStorage } = require('electron');
+const { app, BrowserWindow, safeStorage } = require('electron');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -26,6 +26,14 @@ const syncPasswordPlaceholder = '••••••••';
 let syncTimer = null;
 let startupSyncTimer = null;
 let activeSyncPromise = null;
+
+function emitSyncChanged(payload) {
+  for (const browserWindow of BrowserWindow.getAllWindows()) {
+    if (!browserWindow.isDestroyed()) {
+      browserWindow.webContents.send('sync:changed', payload);
+    }
+  }
+}
 
 function getSyncSettingsPath() {
   return path.join(app.getPath('userData'), syncSettingsFileName);
@@ -279,6 +287,10 @@ function readIncomingSecret(value, previousValue) {
   }
 
   return value;
+}
+
+function readConflictResolution(value) {
+  return value === 'local' || value === 'remote' ? value : '';
 }
 
 function saveSyncConfig(rawConfig) {
@@ -923,44 +935,6 @@ async function writeRemoteDocument(config, secrets, document, etag, exists) {
   };
 }
 
-function createConflictName(name, now) {
-  const dateLabel = now.slice(0, 10);
-  const baseName = typeof name === 'string' && name.trim() ? name.trim() : '未命名';
-  return `${baseName}（同步冲突 ${dateLabel}）`.slice(0, 80);
-}
-
-function createConflictDuplicate(record, now, deviceId) {
-  const nextId = crypto.randomUUID();
-
-  if (record.type === 'host') {
-    const payload = {
-      ...record.payload,
-      id: nextId,
-      name: createConflictName(record.payload.name, now),
-      updatedAt: now,
-    };
-
-    return createSyncRecord(`host:${nextId}`, 'host', payload, now, deviceId);
-  }
-
-  if (record.type === 'bookmark') {
-    const bookmark = {
-      ...record.payload.bookmark,
-      id: nextId,
-      title: createConflictName(record.payload.bookmark?.title, now),
-      updatedAt: now,
-    };
-    const payload = {
-      scope: record.payload.scope,
-      bookmark,
-    };
-
-    return createSyncRecord(`bookmark:${hashPayload(record.payload.scope).slice(0, 16)}:${nextId}`, 'bookmark', payload, now, deviceId);
-  }
-
-  return null;
-}
-
 function addConflict(conflicts, record, reason) {
   conflicts.push({
     type: record.type,
@@ -974,10 +948,12 @@ function addConflict(conflicts, record, reason) {
   });
 }
 
-function mergeSyncDocuments(remoteDocument, localRecords, localTombstones, state, now) {
+function mergeSyncDocuments(remoteDocument, localRecords, localTombstones, state, now, conflictResolution = '') {
   const mergedRecords = { ...remoteDocument.records };
   const mergedTombstones = { ...remoteDocument.tombstones };
   const conflicts = [];
+  const keepLocal = conflictResolution === 'local';
+  const keepRemote = conflictResolution === 'remote';
   let uploaded = 0;
   let downloaded = 0;
   let deleted = 0;
@@ -993,7 +969,26 @@ function mergeSyncDocuments(remoteDocument, localRecords, localTombstones, state
       continue;
     }
 
-    addConflict(conflicts, remoteRecord, '本机删除与远端修改冲突，已保留远端版本。');
+    if (keepLocal) {
+      addConflict(conflicts, remoteRecord, '本机删除与远端修改冲突，已按选择保留本地：云端对应数据将删除。');
+      delete mergedRecords[tombstone.id];
+      mergedTombstones[tombstone.id] = tombstone;
+      uploaded += 1;
+      deleted += 1;
+      continue;
+    }
+
+    addConflict(
+      conflicts,
+      remoteRecord,
+      keepRemote
+        ? '本机删除与远端修改冲突，已按选择保留云端：云端版本已恢复到本地。'
+        : '本机删除与远端修改冲突，请选择保留本地或保留云端。',
+    );
+
+    if (keepRemote) {
+      downloaded += 1;
+    }
   }
 
   for (const [id, localRecord] of Object.entries(localRecords)) {
@@ -1010,8 +1005,24 @@ function mergeSyncDocuments(remoteDocument, localRecords, localTombstones, state
         continue;
       }
 
-      delete mergedTombstones[id];
-      addConflict(conflicts, localRecord, '远端删除与本机修改冲突，已保留本机版本。');
+      if (keepRemote) {
+        addConflict(conflicts, localRecord, '远端删除与本机修改冲突，已按选择保留云端：本机对应数据将删除。');
+        delete mergedRecords[id];
+        downloaded += 1;
+        deleted += 1;
+        continue;
+      }
+
+      if (keepLocal) {
+        addConflict(conflicts, localRecord, '远端删除与本机修改冲突，已按选择保留本地：本机版本已覆盖到云端。');
+        delete mergedTombstones[id];
+        mergedRecords[id] = localRecord;
+        uploaded += 1;
+        continue;
+      }
+
+      addConflict(conflicts, localRecord, '远端删除与本机修改冲突，请选择保留本地或保留云端。');
+      continue;
     }
 
     const remoteRecord = mergedRecords[id];
@@ -1032,24 +1043,22 @@ function mergeSyncDocuments(remoteDocument, localRecords, localTombstones, state
     const remoteChanged = previousRecord ? previousRecord.hash !== remoteRecord.hash : false;
 
     if (previousRecord && localChanged && remoteChanged) {
-      addConflict(conflicts, localRecord, `${localRecord.type === 'settings' ? '设置' : '同一条数据'}在本机和远端都被修改，已避免静默覆盖。`);
+      const conflictLabel = localRecord.type === 'settings' ? '设置' : '同一条数据';
 
-      if (localRecord.type === 'settings') {
+      if (keepRemote) {
+        addConflict(conflicts, localRecord, `${conflictLabel}在本机和远端都被修改，已按选择保留云端版本。`);
+        downloaded += 1;
+        continue;
+      }
+
+      if (keepLocal) {
+        addConflict(conflicts, localRecord, `${conflictLabel}在本机和远端都被修改，已按选择保留本地版本。`);
         mergedRecords[id] = localRecord;
         uploaded += 1;
         continue;
       }
 
-      const duplicate = createConflictDuplicate(remoteRecord, now, state.deviceId);
-
-      mergedRecords[id] = localRecord;
-
-      if (duplicate) {
-        mergedRecords[duplicate.id] = duplicate;
-      }
-
-      uploaded += 1;
-      downloaded += duplicate ? 1 : 0;
+      addConflict(conflicts, localRecord, `${conflictLabel}在本机和远端都被修改，请选择保留本地或保留云端。`);
       continue;
     }
 
@@ -1294,6 +1303,7 @@ function updateSyncStatus(status, message, extraConfig = {}) {
 
 async function runWebDavSyncInternal(rawConfig) {
   const store = createOperationalStore(rawConfig, { requireSyncPassphrase: true });
+  const conflictResolution = readConflictResolution(rawConfig?.conflictResolution);
   const maxPreconditionRetries = 1;
   const maxLocalRefreshes = 2;
   let preconditionRetries = 0;
@@ -1307,7 +1317,47 @@ async function runWebDavSyncInternal(rawConfig) {
     const local = createLocalSyncInputs(store.state, now);
     const remote = remoteOverride ?? await readRemoteDocument(store.config, store.secrets);
     remoteOverride = null;
-    const merged = mergeSyncDocuments(remote.document, local.localRecords, local.localTombstones, store.state, now);
+    const merged = mergeSyncDocuments(
+      remote.document,
+      local.localRecords,
+      local.localTombstones,
+      store.state,
+      now,
+      conflictResolution,
+    );
+
+    if (merged.conflicts.length && !conflictResolution) {
+      const nextStore = writeSyncStore({
+        config: {
+          ...store.config,
+          lastSyncStatus: 'warning',
+          lastSyncMessage: `发现 ${merged.conflicts.length} 个同步冲突，请选择保留本地或保留云端。`,
+          lastConflictCount: merged.conflicts.length,
+        },
+        secrets: store.secrets,
+        state: store.state,
+      });
+
+      reloadSyncSchedule();
+
+      const result = {
+        ok: false,
+        needsResolution: true,
+        resolution: '',
+        syncedAt: '',
+        uploaded: 0,
+        downloaded: 0,
+        deleted: 0,
+        conflictCount: merged.conflicts.length,
+        conflicts: merged.conflicts,
+        snapshot: null,
+        config: toPublicSyncConfig(nextStore),
+      };
+
+      emitSyncChanged(result);
+      return result;
+    }
+
     const writeResult = await writeRemoteDocument(
       store.config,
       store.secrets,
@@ -1342,15 +1392,16 @@ async function runWebDavSyncInternal(rawConfig) {
     }
 
     const snapshot = applyMergedDocumentToVault(merged.document);
+    const syncMessage = merged.conflicts.length && conflictResolution
+      ? `同步完成，已按选择保留${conflictResolution === 'local' ? '本地' : '云端'}处理 ${merged.conflicts.length} 个冲突。`
+      : '同步完成。';
     const nextStore = writeSyncStore({
       config: {
         ...store.config,
         lastSyncAt: now,
-        lastSyncStatus: merged.conflicts.length ? 'warning' : 'success',
-        lastSyncMessage: merged.conflicts.length
-          ? `同步完成，发现 ${merged.conflicts.length} 个冲突，已保留副本或本机设置。`
-          : '同步完成。',
-        lastConflictCount: merged.conflicts.length,
+        lastSyncStatus: 'success',
+        lastSyncMessage: syncMessage,
+        lastConflictCount: 0,
       },
       secrets: store.secrets,
       state: createStateFromDocument(merged.document, store.state.deviceId, writeResult.etag, now),
@@ -1358,8 +1409,10 @@ async function runWebDavSyncInternal(rawConfig) {
 
     reloadSyncSchedule();
 
-    return {
+    const result = {
       ok: true,
+      needsResolution: false,
+      resolution: conflictResolution,
       syncedAt: now,
       uploaded: merged.uploaded,
       downloaded: merged.downloaded,
@@ -1369,6 +1422,9 @@ async function runWebDavSyncInternal(rawConfig) {
       snapshot,
       config: toPublicSyncConfig(nextStore),
     };
+
+    emitSyncChanged(result);
+    return result;
   }
 
   throw new Error('同步未完成。');

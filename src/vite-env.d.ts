@@ -818,6 +818,7 @@ interface ShellDeskAiControls {
 }
 
 type ShellDeskSyncStatus = 'idle' | 'success' | 'warning' | 'error';
+type ShellDeskSyncConflictResolution = 'local' | 'remote';
 
 interface ShellDeskSyncPublicConfig {
   enabled: boolean;
@@ -849,6 +850,10 @@ interface ShellDeskSyncConfigInput {
   syncOnStartup: boolean;
 }
 
+interface ShellDeskSyncRunInput extends Partial<ShellDeskSyncConfigInput> {
+  conflictResolution?: ShellDeskSyncConflictResolution;
+}
+
 interface ShellDeskSyncConflict {
   type: 'host' | 'bookmark' | 'settings';
   id: string;
@@ -858,13 +863,15 @@ interface ShellDeskSyncConflict {
 
 interface ShellDeskSyncResult {
   ok: boolean;
+  needsResolution: boolean;
+  resolution: ShellDeskSyncConflictResolution | '';
   syncedAt: string;
   uploaded: number;
   downloaded: number;
   deleted: number;
   conflictCount: number;
   conflicts: ShellDeskSyncConflict[];
-  snapshot: ShellDeskVaultSnapshot;
+  snapshot: ShellDeskVaultSnapshot | null;
   config: ShellDeskSyncPublicConfig;
 }
 
@@ -878,7 +885,7 @@ interface ShellDeskSyncControls {
   getConfig: () => Promise<ShellDeskSyncPublicConfig>;
   saveConfig: (config: ShellDeskSyncConfigInput) => Promise<ShellDeskSyncPublicConfig>;
   testWebDav: (config: ShellDeskSyncConfigInput) => Promise<ShellDeskWebDavTestResult>;
-  runNow: (config?: ShellDeskSyncConfigInput) => Promise<ShellDeskSyncResult>;
+  runNow: (config?: ShellDeskSyncRunInput) => Promise<ShellDeskSyncResult>;
 }
 
 interface ShellDeskTransferProgress {
@@ -922,6 +929,7 @@ interface ShellDeskEventControls {
   onConnectionRestored: (callback: (payload: { connectionId: string; restoredAt?: string }) => void) => () => void;
   onWindowMaximizedChange: (callback: (payload: { maximized: boolean }) => void) => () => void;
   onVaultChanged: (callback: (payload: { kind: 'vault' | 'bookmarks' | 'preference'; scope?: string; key?: string }) => void) => () => void;
+  onSyncChanged: (callback: (payload: ShellDeskSyncResult) => void) => () => void;
   onTransferProgress: (callback: (payload: ShellDeskTransferProgress) => void) => () => void;
   onTransferEnd: (callback: (payload: ShellDeskTransferEndPayload) => void) => () => void;
   onUpdateAvailable: (callback: (payload: ShellDeskUpdateStatus) => void) => () => void;

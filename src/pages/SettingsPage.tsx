@@ -344,6 +344,8 @@ interface SettingsPageProps {
   onExportConfig: () => void;
 }
 
+type SyncPendingAction = 'load' | 'save' | 'test' | 'run' | 'resolve-local' | 'resolve-remote' | '';
+
 function SettingsPage({
   hostCount,
   keyCount,
@@ -376,7 +378,8 @@ function SettingsPage({
   const [syncMessage, setSyncMessage] = useState('');
   const [syncError, setSyncError] = useState('');
   const [syncConflicts, setSyncConflicts] = useState<ShellDeskSyncConflict[]>([]);
-  const [syncPendingAction, setSyncPendingAction] = useState<'load' | 'save' | 'test' | 'run' | ''>('');
+  const [syncNeedsResolution, setSyncNeedsResolution] = useState(false);
+  const [syncPendingAction, setSyncPendingAction] = useState<SyncPendingAction>('');
 
   const updateSetting = <Field extends keyof ShellDeskAppSettings>(field: Field, value: ShellDeskAppSettings[Field]) => {
     onSettingsChange({
@@ -484,6 +487,8 @@ function SettingsPage({
   const syncStatusClassName = getSyncStatusClassName(syncConfig?.lastSyncStatus, Boolean(syncError));
   const syncStatusText = syncError || syncMessage || syncConfig?.lastSyncMessage || t('settings.sync.status.notConfigured', settings.language);
   const syncLastSyncText = syncConfig?.lastSyncAt ? formatDateTime(syncConfig.lastSyncAt) : t('settings.sync.lastSync.notSynced', settings.language);
+  const syncConflictCount = Math.max(syncConflicts.length, syncConfig?.lastConflictCount ?? 0);
+  const syncHasPendingResolution = syncNeedsResolution || (syncConfig?.lastConflictCount ?? 0) > 0;
 
   const selectDesktopWallpaperPreset = (presetId: string) => {
     setWallpaperError('');
@@ -747,6 +752,13 @@ function SettingsPage({
   const applySyncConfig = useCallback((config: ShellDeskSyncPublicConfig) => {
     setSyncConfig(config);
     setSyncForm(createSyncFormFromConfig(config));
+    if ((config.lastConflictCount ?? 0) > 0) {
+      setSyncNeedsResolution(true);
+      return;
+    }
+
+    setSyncConflicts([]);
+    setSyncNeedsResolution(false);
   }, []);
 
   const updateSyncForm = <Field extends keyof ShellDeskSyncConfigInput>(field: Field, value: ShellDeskSyncConfigInput[Field]) => {
@@ -773,6 +785,7 @@ function SettingsPage({
       applySyncConfig(config);
       setSyncMessage(t('settings.sync.message.saved', settings.language));
       setSyncConflicts([]);
+      setSyncNeedsResolution(false);
     } catch (error) {
       setSyncError(getSettingsErrorMessage(error, settings.language));
     } finally {
@@ -796,6 +809,7 @@ function SettingsPage({
       const result = await syncControls.testWebDav(syncForm);
       setSyncMessage(result.message);
       setSyncConflicts([]);
+      setSyncNeedsResolution(false);
     } catch (error) {
       setSyncError(getSettingsErrorMessage(error, settings.language));
     } finally {
@@ -803,7 +817,7 @@ function SettingsPage({
     }
   };
 
-  const runAutoSyncNow = async () => {
+  const runAutoSyncNow = async (conflictResolution?: ShellDeskSyncConflictResolution) => {
     const syncControls = window.guiSSH?.sync;
 
     if (!syncControls) {
@@ -811,16 +825,29 @@ function SettingsPage({
       return;
     }
 
-    setSyncPendingAction('run');
+    setSyncPendingAction(conflictResolution === 'local'
+      ? 'resolve-local'
+      : conflictResolution === 'remote'
+        ? 'resolve-remote'
+        : 'run');
     setSyncError('');
     setSyncMessage('');
 
     try {
-      const result = await syncControls.runNow(syncForm);
-      applySyncConfig(result.config);
+      const result = await syncControls.runNow(conflictResolution ? { ...syncForm, conflictResolution } : syncForm);
       setSyncConflicts(result.conflicts);
-      setSyncMessage(result.conflictCount
-        ? t('settings.sync.message.conflicts', settings.language, { count: result.conflictCount })
+
+      if (result.needsResolution) {
+        setSyncConfig(result.config);
+        setSyncNeedsResolution(true);
+        setSyncMessage(t('settings.sync.message.needsResolution', settings.language, { count: result.conflictCount }));
+        return;
+      }
+
+      applySyncConfig(result.config);
+      setSyncNeedsResolution(false);
+      setSyncMessage(result.conflictCount && result.resolution
+        ? t(result.resolution === 'local' ? 'settings.sync.message.resolvedLocal' : 'settings.sync.message.resolvedRemote', settings.language, { count: result.conflictCount })
         : t('settings.sync.message.summary', settings.language, {
           uploaded: result.uploaded,
           downloaded: result.downloaded,
@@ -916,6 +943,23 @@ function SettingsPage({
       disposed = true;
     };
   }, [applySyncConfig]);
+
+  useEffect(() => {
+    const removeSyncChanged = window.guiSSH?.events?.onSyncChanged?.((result) => {
+      setSyncConfig(result.config);
+      setSyncConflicts(result.conflicts);
+      setSyncNeedsResolution(result.needsResolution || (result.config.lastConflictCount ?? 0) > 0);
+
+      if (result.needsResolution) {
+        setSyncMessage(t('settings.sync.message.needsResolution', settings.language, { count: String(result.conflictCount) }));
+        setSyncError('');
+      }
+    });
+
+    return () => {
+      removeSyncChanged?.();
+    };
+  }, [settings.language]);
 
   useEffect(() => {
     const listFonts = window.guiSSH?.system?.listFonts;
@@ -2013,7 +2057,7 @@ function SettingsPage({
                       <button
                         type="button"
                         className="command-button"
-                        onClick={runAutoSyncNow}
+                        onClick={() => runAutoSyncNow()}
                         disabled={isSyncBusy}
                       >
                         {syncPendingAction === 'run' ? t('settings.sync.action.run.loading', settings.language) : t('settings.sync.action.run', settings.language)}
@@ -2023,16 +2067,48 @@ function SettingsPage({
                 </div>
                 <p className="settings-caption">{t('settings.sync.caption', settings.language)}</p>
 
-                {syncConflicts.length ? (
-                  <div className="settings-sync-conflicts">
-                    <strong>{t('settings.sync.conflicts.title', settings.language)}</strong>
-                    {syncConflicts.slice(0, 6).map((conflict) => (
-                      <div key={`${conflict.type}:${conflict.id}`}>
-                        <span>{conflict.name}</span>
-                        <small>{conflict.reason}</small>
+                {(syncConflicts.length || syncHasPendingResolution) ? (
+                  <div className={syncHasPendingResolution ? 'settings-sync-conflicts needs-resolution' : 'settings-sync-conflicts'}>
+                    <strong>{t(syncHasPendingResolution ? 'settings.sync.conflicts.resolveTitle' : 'settings.sync.conflicts.title', settings.language)}</strong>
+                    {syncHasPendingResolution ? <p>{t('settings.sync.conflicts.resolveSummary', settings.language)}</p> : null}
+                    {syncConflicts.length ? (
+                      <div className="settings-sync-conflict-list">
+                        {syncConflicts.slice(0, 6).map((conflict) => (
+                          <div className="settings-sync-conflict-item" key={`${conflict.type}:${conflict.id}`}>
+                            <span>{conflict.name}</span>
+                            <small>{conflict.reason}</small>
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    ) : (
+                      <div className="settings-sync-conflict-list">
+                        <div className="settings-sync-conflict-item">
+                          <span>{t('settings.sync.conflicts.pendingCount', settings.language, { count: String(syncConflictCount) })}</span>
+                          <small>{t('settings.sync.conflicts.pendingSummary', settings.language)}</small>
+                        </div>
+                      </div>
+                    )}
                     {syncConflicts.length > 6 ? <small>{t('settings.sync.conflicts.more', settings.language, { count: String(syncConflicts.length - 6) })}</small> : null}
+                    {syncHasPendingResolution ? (
+                      <div className="settings-sync-resolution-actions">
+                        <button
+                          type="button"
+                          className="command-button"
+                          onClick={() => runAutoSyncNow('remote')}
+                          disabled={isSyncBusy}
+                        >
+                          {syncPendingAction === 'resolve-remote' ? t('settings.sync.action.keepRemote.loading', settings.language) : t('settings.sync.action.keepRemote', settings.language)}
+                        </button>
+                        <button
+                          type="button"
+                          className="command-button primary"
+                          onClick={() => runAutoSyncNow('local')}
+                          disabled={isSyncBusy}
+                        >
+                          {syncPendingAction === 'resolve-local' ? t('settings.sync.action.keepLocal.loading', settings.language) : t('settings.sync.action.keepLocal', settings.language)}
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </section>
