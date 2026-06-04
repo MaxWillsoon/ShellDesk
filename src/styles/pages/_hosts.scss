@@ -401,13 +401,8 @@
 .host-avatar.host-system-icon {
   overflow: hidden;
   position: relative;
+  border-radius: 6px;
   isolation: isolate;
-}
-
-.host-system-icon svg {
-  display: block;
-  width: 72%;
-  height: 72%;
 }
 
 .host-system-icon img {
@@ -415,7 +410,7 @@
   width: 100%;
   height: 100%;
   border-radius: inherit;
-  object-fit: contain;
+  object-fit: cover;
   pointer-events: none;
   user-select: none;
 }
@@ -1751,6 +1746,7 @@
 
 .host-avatar.host-system-icon {
   background: transparent;
+  border-radius: 6px;
 }
 
 .host-avatar.host-system-icon img {
