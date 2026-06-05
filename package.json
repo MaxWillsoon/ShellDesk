@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit",
     "build": "pnpm typecheck && vite build",
     "test": "pnpm build",
+    "tag": "node scripts/create-version-tag.cjs",
     "release:dir": "pnpm pack:dir",
     "release": "pnpm build && cross-env npm_config_arch=x64 NODE_OPTIONS=--disable-warning=DEP0190 electron-builder --config electron-builder.config.cjs --win nsis --x64 --publish=never",
     "pack": "pnpm build && cross-env NODE_OPTIONS=--disable-warning=DEP0190 electron-builder --config electron-builder.config.cjs --publish=never",
