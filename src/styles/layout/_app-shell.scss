@@ -254,6 +254,10 @@
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34);
 }
 
+.sync-conflict-popover.update-ready-popover {
+  border-color: color-mix(in srgb, var(--accent-strong-border) 76%, var(--surface-success-border) 24%);
+}
+
 .sync-conflict-close {
   position: absolute;
   top: 8px;
@@ -286,6 +290,11 @@
   color: var(--danger-text-soft);
   font-size: 16px;
   font-weight: 900;
+}
+
+.update-ready-popover .sync-conflict-mark {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
 }
 
 .sync-conflict-copy {

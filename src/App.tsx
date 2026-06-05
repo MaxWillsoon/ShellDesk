@@ -20,6 +20,7 @@ const SettingsPage = lazy(() =>
 const hostsStorageKey = 'shelldesk:hosts';
 const hostGroupPanelCollapsedStorageKey = 'shelldesk:host-groups-collapsed';
 const hostListSortModeStorageKey = 'shelldesk:host-list-sort-mode';
+const dismissedUpdateReadyVersionStorageKey = 'shelldesk:update-ready-dismissed-version';
 const ungroupedKey = '__ungrouped__';
 const remoteDesktopAppCatalogVersion = 3;
 const remoteDesktopAppCatalogMigrationKeys: ShellDeskDesktopAppKey[] = [
@@ -87,6 +88,7 @@ const defaultAppSettings: ShellDeskAppSettings = {
 type AppPage = 'hosts' | 'keys' | 'logs' | 'settings';
 type HostListSortMode = 'createdDesc' | 'createdAsc' | 'updatedDesc' | 'updatedAsc' | 'nameAsc' | 'nameDesc' | 'addressAsc';
 type SyncConflictNotice = Pick<ShellDeskSyncResult, 'conflictCount' | 'conflicts' | 'config'>;
+type UpdateReadyNotice = Pick<ShellDeskUpdateStatus, 'version' | 'releaseDate' | 'releaseNotes'>;
 type HostSystemType =
   | 'unknown'
   | 'windows'
@@ -753,6 +755,36 @@ function getHostListSortMode(value: unknown): HostListSortMode {
   return isHostListSortMode(value) ? value : 'createdDesc';
 }
 
+function getUpdateReadyVersionKey(status: Pick<ShellDeskUpdateStatus, 'version'>) {
+  return (status.version || 'unknown').trim() || 'unknown';
+}
+
+function formatUpdateReadyVersion(version: string | null | undefined) {
+  const trimmedVersion = version?.trim();
+
+  if (!trimmedVersion) {
+    return '';
+  }
+
+  return trimmedVersion.toLowerCase().startsWith('v') ? trimmedVersion : `v${trimmedVersion}`;
+}
+
+function readDismissedUpdateReadyVersion() {
+  try {
+    return window.localStorage.getItem(dismissedUpdateReadyVersionStorageKey) || '';
+  } catch {
+    return '';
+  }
+}
+
+function storeDismissedUpdateReadyVersion(versionKey: string) {
+  try {
+    window.localStorage.setItem(dismissedUpdateReadyVersionStorageKey, versionKey);
+  } catch {
+    // Ignore localStorage write failures in restricted environments.
+  }
+}
+
 function compareHostText(left: string, right: string, locale: string) {
   return left.localeCompare(right, locale, { numeric: true, sensitivity: 'base' });
 }
@@ -1148,6 +1180,9 @@ function App() {
   const [syncConflictNotice, setSyncConflictNotice] = useState<SyncConflictNotice | null>(null);
   const [syncResolutionPending, setSyncResolutionPending] = useState<ShellDeskSyncConflictResolution | ''>('');
   const [syncResolutionError, setSyncResolutionError] = useState('');
+  const [updateReadyNotice, setUpdateReadyNotice] = useState<UpdateReadyNotice | null>(null);
+  const [updateInstallPending, setUpdateInstallPending] = useState(false);
+  const [updateInstallError, setUpdateInstallError] = useState('');
   const [credentialHost, setCredentialHost] = useState<ConnectionHost | null>(null);
   const [credentialForm, setCredentialForm] = useState<CredentialFormState>(emptyCredentialForm);
   const [credentialError, setCredentialError] = useState('');
@@ -1406,6 +1441,25 @@ function App() {
     }
   }, []);
 
+  const showUpdateReadyNotice = useCallback((status: ShellDeskUpdateStatus) => {
+    if (status.status !== 'ready') {
+      return;
+    }
+
+    const versionKey = getUpdateReadyVersionKey(status);
+
+    if (readDismissedUpdateReadyVersion() === versionKey) {
+      return;
+    }
+
+    setUpdateReadyNotice({
+      version: status.version,
+      releaseDate: status.releaseDate,
+      releaseNotes: status.releaseNotes,
+    });
+    setUpdateInstallError('');
+  }, []);
+
   useEffect(() => {
     hostsRef.current = hosts;
   }, [hosts]);
@@ -1543,6 +1597,35 @@ function App() {
       removeSyncChanged?.();
     };
   }, [isConnectionWindow, updateSyncConflictNotice]);
+
+  useEffect(() => {
+    if (isConnectionWindow) {
+      return undefined;
+    }
+
+    const appControls = window.guiSSH?.app;
+    const eventControls = window.guiSSH?.events;
+    let disposed = false;
+
+    void appControls?.getUpdateStatus?.()
+      .then((status) => {
+        if (!disposed) {
+          showUpdateReadyNotice(status);
+        }
+      })
+      .catch(() => undefined);
+
+    const removeUpdateDownloaded = eventControls?.onUpdateDownloaded?.((status) => {
+      if (!disposed) {
+        showUpdateReadyNotice(status);
+      }
+    });
+
+    return () => {
+      disposed = true;
+      removeUpdateDownloaded?.();
+    };
+  }, [isConnectionWindow, showUpdateReadyNotice]);
 
   useEffect(() => {
     storeHostGroupPanelCollapsed(isHostGroupPanelCollapsed);
@@ -1876,6 +1959,35 @@ function App() {
       setSyncResolutionError(t('app.sync.conflict.resolveFailed', appLanguage, { error: getErrorMessage(error, appLanguage) }));
     } finally {
       setSyncResolutionPending('');
+    }
+  };
+
+  const dismissUpdateReadyNotice = () => {
+    if (updateReadyNotice) {
+      storeDismissedUpdateReadyVersion(getUpdateReadyVersionKey(updateReadyNotice));
+    }
+
+    setUpdateReadyNotice(null);
+    setUpdateInstallError('');
+  };
+
+  const installDownloadedUpdate = async () => {
+    const install = window.guiSSH?.app?.installUpdate;
+
+    if (!install) {
+      setUpdateInstallError(t('app.update.ready.noApi', appLanguage));
+      return;
+    }
+
+    setUpdateInstallPending(true);
+    setUpdateInstallError('');
+
+    try {
+      await install();
+    } catch (error) {
+      setUpdateInstallError(t('app.update.ready.installFailed', appLanguage, { error: getErrorMessage(error, appLanguage) }));
+    } finally {
+      setUpdateInstallPending(false);
     }
   };
 
@@ -2544,6 +2656,11 @@ function App() {
     ? t('app.sync.conflict.badge', appLanguage, { count: String(syncConflictCount) })
     : '';
   const shouldShowSyncConflictNotice = Boolean(syncConflictNotice) && !connection && !isConnectionWindow && activePage !== 'settings';
+  const formattedUpdateReadyVersion = formatUpdateReadyVersion(updateReadyNotice?.version);
+  const updateReadyVersionLabel = formattedUpdateReadyVersion
+    ? formattedUpdateReadyVersion
+    : t('app.update.ready.versionUnknown', appLanguage);
+  const shouldShowUpdateReadyNotice = Boolean(updateReadyNotice) && !shouldShowSyncConflictNotice && !connection && !isConnectionWindow && activePage !== 'settings';
 
   return (
     <div className={isMacOS ? 'app-shell app-shell-macos' : 'app-shell'}>
@@ -2641,6 +2758,34 @@ function App() {
                 disabled={Boolean(syncResolutionPending)}
               >
                 {syncResolutionPending === 'local' ? t('app.sync.conflict.keepLocalLoading', appLanguage) : t('app.sync.conflict.keepLocal', appLanguage)}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+      {shouldShowUpdateReadyNotice && updateReadyNotice ? createPortal(
+        <div className="sync-conflict-popover update-ready-popover no-drag" role="alertdialog" aria-modal="false" aria-labelledby="update-ready-title">
+          <button
+            type="button"
+            className="sync-conflict-close"
+            aria-label={t('app.update.ready.later', appLanguage)}
+            onClick={dismissUpdateReadyNotice}
+            disabled={updateInstallPending}
+          >
+            ×
+          </button>
+          <span className="sync-conflict-mark" aria-hidden="true">↑</span>
+          <div className="sync-conflict-copy">
+            <strong id="update-ready-title">{t('app.update.ready.title', appLanguage)}</strong>
+            <p>{t('app.update.ready.summary', appLanguage, { version: updateReadyVersionLabel })}</p>
+            {updateInstallError ? <small className="sync-conflict-error">{updateInstallError}</small> : null}
+            <div className="sync-conflict-actions">
+              <button type="button" onClick={installDownloadedUpdate} disabled={updateInstallPending}>
+                {updateInstallPending ? t('app.update.ready.installing', appLanguage) : t('app.update.ready.installNow', appLanguage)}
+              </button>
+              <button type="button" className="primary" onClick={dismissUpdateReadyNotice} disabled={updateInstallPending}>
+                {t('app.update.ready.later', appLanguage)}
               </button>
             </div>
           </div>
