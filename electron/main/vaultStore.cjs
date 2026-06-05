@@ -1509,11 +1509,11 @@ function ensureNoDuplicateKey(nextKey, currentKeys, ignoreKeyId = '') {
     }
 
     if (key.privateKey.trim() === normalizedPrivateKey) {
-      throw new Error(`密钥「${key.name}」已经存在。`);
+      throw new Error(`相同 SSH 私钥已存在：${key.name}。`);
     }
 
     if (nextKey.fingerprint && key.fingerprint && key.fingerprint === nextKey.fingerprint) {
-      throw new Error(`密钥「${key.name}」已经存在。`);
+      throw new Error(`相同 SSH 密钥指纹已存在：${key.name}。`);
     }
   }
 }

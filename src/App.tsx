@@ -1465,6 +1465,30 @@ function App() {
     scheduleCollectionsSave(payload, serializedPayload);
   }, [isVaultHydrated, isVaultReady, scheduleCollectionsSave, vaultControls]);
 
+  const persistCurrentCollections = useCallback(async () => {
+    if (!vaultControls || !isVaultReady || !isVaultHydrated) {
+      return;
+    }
+
+    const payload: VaultCollectionsSavePayload = {
+      hosts: hostsRef.current,
+      sshKeys: sshKeysRef.current,
+      settings: settingsRef.current,
+    };
+    const serializedPayload = JSON.stringify(payload);
+
+    if (serializedPayload === lastPersistedCollectionsRef.current) {
+      return;
+    }
+
+    pendingCollectionsSaveRef.current = null;
+
+    const snapshot = await vaultControls.saveCollections(payload);
+    lastPersistedCollectionsRef.current = serializedPayload;
+    setStorageInfo(snapshot.storage);
+    setBookmarkCount(snapshot.browserBookmarks.reduce((total: number, collection: ShellDeskBrowserBookmarkCollection) => total + collection.bookmarks.length, 0));
+  }, [isVaultHydrated, isVaultReady, vaultControls]);
+
   const commitCollectionsState = useCallback((
     nextHosts: Host[],
     nextSshKeys: SshKey[],
@@ -2155,7 +2179,7 @@ function App() {
     setKeyFormError('');
   };
 
-  const submitKey = (event: FormEvent<HTMLFormElement>) => {
+  const submitKey = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
     const mode = editingKey ? 'edit' : keyEditorMode;
@@ -2180,29 +2204,31 @@ function App() {
       return;
     }
 
-    const action = keyEditorMode === 'generate'
-      ? vaultControls.generateRsaKeyPair({
-          name: keyForm.name.trim(),
-          passphrase: keyForm.passphrase,
-          modulusLength: Number(keyForm.modulusLength),
-        })
-      : vaultControls.importKeyPair({
-          name: keyForm.name.trim(),
-          privateKeyPath: keyForm.privateKeyPath.trim(),
-          publicKeyPath: keyForm.publicKeyPath.trim(),
-          passphrase: keyForm.passphrase,
-        });
+    const creationMode = keyEditorMode;
 
-    action
-      .then(({ snapshot, key }) => {
-        applyVaultSnapshot(snapshot);
-        addLog('key', 'success', t(keyEditorMode === 'generate' ? 'app.key.generateLog' : 'app.key.importLog', appLanguage, { name: key.name }));
-        setStatusMessage(t(keyEditorMode === 'generate' ? 'app.key.generatedStatus' : 'app.key.importedStatus', appLanguage, { name: key.name }));
-        closeKeyEditor();
-      })
-      .catch((error: unknown) => {
-        setKeyFormError(getErrorMessage(error, appLanguage));
-      });
+    try {
+      await persistCurrentCollections();
+
+      const { snapshot, key } = creationMode === 'generate'
+        ? await vaultControls.generateRsaKeyPair({
+            name: keyForm.name.trim(),
+            passphrase: keyForm.passphrase,
+            modulusLength: Number(keyForm.modulusLength),
+          })
+        : await vaultControls.importKeyPair({
+            name: keyForm.name.trim(),
+            privateKeyPath: keyForm.privateKeyPath.trim(),
+            publicKeyPath: keyForm.publicKeyPath.trim(),
+            passphrase: keyForm.passphrase,
+          });
+
+      applyVaultSnapshot(snapshot);
+      addLog('key', 'success', t(creationMode === 'generate' ? 'app.key.generateLog' : 'app.key.importLog', appLanguage, { name: key.name }));
+      setStatusMessage(t(creationMode === 'generate' ? 'app.key.generatedStatus' : 'app.key.importedStatus', appLanguage, { name: key.name }));
+      closeKeyEditor();
+    } catch (error: unknown) {
+      setKeyFormError(getErrorMessage(error, appLanguage));
+    }
   };
 
   const startEditingKey = (key: SshKey) => {
