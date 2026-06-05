@@ -14,17 +14,13 @@
 </p>
 
 <p align="center">
-  <img alt="GitHub Release" src="https://img.shields.io/github/v/release/liubaicai/ShellDesk?style=for-the-badge&logo=github&label=Release">
+  <a href="https://github.com/liubaicai/ShellDesk/releases/latest">
+  <img alt="GitHub Release" src="https://img.shields.io/github/v/release/liubaicai/ShellDesk?style=for-the-badge&logo=github&label=Release&color=success">
+  </a>
   &nbsp;
   <img alt="Platform" src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-blue?style=for-the-badge&logo=electron">
   &nbsp;
   <img alt="License" src="https://img.shields.io/badge/License-GPL--3.0-green?style=for-the-badge">
-</p>
-
-<p align="center">
-  <a href="https://github.com/liubaicai/ShellDesk/releases/latest">
-    <img src="https://img.shields.io/github/v/release/liubaicai/ShellDesk?style=for-the-badge&logo=github&label=下载最新版&color=success" alt="下载最新版">
-  </a>
 </p>
 
 <p align="center">
@@ -54,10 +50,10 @@
   - [安装依赖](#安装依赖)
   - [启动开发模式](#启动开发模式)
 - [常用脚本](#常用脚本)
-- [技术栈](#技术栈)
 - [项目结构](#项目结构)
 - [开发约定](#开发约定)
 - [开源协议](#开源协议)
+- [致谢](#致谢)
 
 ---
 
@@ -241,25 +237,6 @@ Stop-Process -Id <PID>
 
 ---
 
-## 技术栈
-
-| 分类 | 技术 |
-| :--- | :--- |
-| 桌面框架 | Electron 40 |
-| 前端框架 | React 19 |
-| 类型系统 | TypeScript 5.9 |
-| 构建工具 | Vite 7 |
-| 样式 | Sass / SCSS + CSS 变量 |
-| SSH / SFTP | ssh2 |
-| 终端 | xterm.js |
-| VNC | @novnc/novnc |
-| 数据库 | mysql2、pg、mongodb、ioredis、SQLite IPC |
-| 代码高亮 | highlight.js |
-| 打包 | electron-builder |
-| 包管理 | pnpm |
-
----
-
 ## 项目结构
 
 ```text
@@ -322,6 +299,12 @@ ShellDesk/
 ## 开源协议
 
 本项目采用 GNU General Public License v3.0（GPLv3）开源协议发布。完整协议内容见 [LICENSE](LICENSE)。
+
+---
+
+## 致谢
+
+- [binaricat/Netcatty](https://github.com/binaricat/Netcatty) — SSH workspace、SFTP 与终端一体化工具。本项目参考了其中部分功能和 UI 设计。
 
 ---
 

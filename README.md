@@ -14,17 +14,13 @@
 </p>
 
 <p align="center">
-  <img alt="GitHub Release" src="https://img.shields.io/github/v/release/liubaicai/ShellDesk?style=for-the-badge&logo=github&label=Release">
+  <a href="https://github.com/liubaicai/ShellDesk/releases/latest">
+  <img alt="GitHub Release" src="https://img.shields.io/github/v/release/liubaicai/ShellDesk?style=for-the-badge&logo=github&label=Release&color=success">
+  </a>
   &nbsp;
   <img alt="Platform" src="https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-blue?style=for-the-badge&logo=electron">
   &nbsp;
   <img alt="License" src="https://img.shields.io/badge/License-GPL--3.0-green?style=for-the-badge">
-</p>
-
-<p align="center">
-  <a href="https://github.com/liubaicai/ShellDesk/releases/latest">
-    <img src="https://img.shields.io/github/v/release/liubaicai/ShellDesk?style=for-the-badge&logo=github&label=下载最新版&color=success" alt="下载最新版">
-  </a>
 </p>
 
 <p align="center">
@@ -54,10 +50,10 @@
   - [Install Dependencies](#install-dependencies)
   - [Start Development Mode](#start-development-mode)
 - [Scripts](#scripts)
-- [Tech Stack](#tech-stack)
 - [Project Structure](#project-structure)
 - [Development Notes](#development-notes)
 - [License](#license)
+- [Acknowledgments](#acknowledgments)
 
 ---
 
@@ -242,25 +238,6 @@ More platform packaging scripts are available in [package.json](package.json).
 
 ---
 
-## Tech Stack
-
-| Category | Technology |
-| :--- | :--- |
-| Desktop framework | Electron 40 |
-| Frontend framework | React 19 |
-| Type system | TypeScript 5.9 |
-| Build tool | Vite 7 |
-| Styling | Sass / SCSS + CSS variables |
-| SSH / SFTP | ssh2 |
-| Terminal | xterm.js |
-| VNC | @novnc/novnc |
-| Databases | mysql2, pg, mongodb, ioredis, SQLite IPC |
-| Syntax highlighting | highlight.js |
-| Packaging | electron-builder |
-| Package manager | pnpm |
-
----
-
 ## Project Structure
 
 ```text
@@ -324,6 +301,12 @@ See [AGENTS.md](AGENTS.md) for the full collaboration and engineering notes.
 ## License
 
 This project is released under the GNU General Public License v3.0 (GPLv3). See [LICENSE](LICENSE) for the full license text.
+
+---
+
+## Acknowledgments
+
+- [binaricat/Netcatty](https://github.com/binaricat/Netcatty) — SSH workspace, SFTP, and terminals in one. Some features and UI design were referenced from this project.
 
 ---
 
