@@ -9,7 +9,7 @@ export const coreMessageCatalog = {
     "common.close": "关闭",
     "common.closeAlert": "关闭提示",
     "app.nav.hosts": "主机",
-    "app.nav.keys": "密钥",
+    "app.nav.keys": "密钥对",
     "app.nav.snippets": "代码片段",
     "app.nav.logs": "日志",
     "app.nav.settings": "设置",

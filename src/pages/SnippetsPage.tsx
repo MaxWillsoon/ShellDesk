@@ -691,7 +691,16 @@ function SnippetsPage({ settings, onSettingsChange }: SnippetsPageProps) {
                   />
                 </label>
 
-                <section className="snippet-ai-card" aria-label={t('snippets.ai.title', language)}>
+                <label className="snippet-field-card">
+                  <span>{t('terminal.snippets.fieldCommand', language)}</span>
+                  <textarea
+                    value={snippetDraft.command}
+                    onChange={(event) => setSnippetDraft((currentDraft) => ({ ...currentDraft, command: event.target.value }))}
+                    placeholder="systemctl status nginx"
+                  />
+                </label>
+
+                <section className="snippet-ai-inline" aria-label={t('snippets.ai.title', language)}>
                   <div className="snippet-ai-heading">
                     <span>
                       <strong>{t('snippets.ai.title', language)}</strong>
@@ -714,15 +723,6 @@ function SnippetsPage({ settings, onSettingsChange }: SnippetsPageProps) {
                   />
                   {aiError ? <div className="snippet-form-error">{aiError}</div> : null}
                 </section>
-
-                <label className="snippet-field-card">
-                  <span>{t('terminal.snippets.fieldCommand', language)}</span>
-                  <textarea
-                    value={snippetDraft.command}
-                    onChange={(event) => setSnippetDraft((currentDraft) => ({ ...currentDraft, command: event.target.value }))}
-                    placeholder="systemctl status nginx"
-                  />
-                </label>
 
                 <label className="snippet-field-card">
                   <span>{t('terminal.snippets.fieldShortcut', language)}</span>

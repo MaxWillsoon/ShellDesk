@@ -360,18 +360,10 @@
   font-weight: 780;
 }
 
-.snippet-ai-card {
+.snippet-ai-inline {
   display: grid;
-  gap: 10px;
-  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
-  border-radius: 10px;
-  padding: 12px;
-  background:
-    linear-gradient(
-      135deg,
-      color-mix(in srgb, var(--accent) 8%, transparent),
-      var(--surface-soft)
-    );
+  gap: 8px;
+  padding: 0 2px 2px;
 }
 
 .snippet-ai-heading {
@@ -404,7 +396,7 @@
 
 .snippet-field-card input,
 .snippet-field-card textarea,
-.snippet-ai-card textarea {
+.snippet-ai-inline textarea {
   box-sizing: border-box;
   width: 100%;
   border: 1px solid var(--border);
@@ -416,7 +408,7 @@
   font: inherit;
 }
 
-.snippet-ai-card textarea {
+.snippet-ai-inline textarea {
   min-height: 74px;
   resize: vertical;
   color: var(--text);
@@ -434,7 +426,7 @@
 
 .snippet-field-card input:focus,
 .snippet-field-card textarea:focus,
-.snippet-ai-card textarea:focus {
+.snippet-ai-inline textarea:focus {
   border-color: var(--focus-border);
   box-shadow: 0 0 0 3px var(--focus-ring);
 }
