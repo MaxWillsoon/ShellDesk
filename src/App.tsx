@@ -12,12 +12,15 @@ const RemoteDesktop = lazy(() =>
   Promise.all([loadFullMessageCatalog(), import('./RemoteDesktopShell')]).then(([, module]) => module));
 const KeysPage = lazy(() =>
   Promise.all([loadFullMessageCatalog(), import('./pages/KeysPage')]).then(([, module]) => module));
+const SnippetsPage = lazy(() =>
+  Promise.all([loadFullMessageCatalog(), import('./pages/SnippetsPage')]).then(([, module]) => module));
 const LogsPage = lazy(() =>
   Promise.all([loadFullMessageCatalog(), import('./pages/LogsPage')]).then(([, module]) => module));
 const SettingsPage = lazy(() =>
   Promise.all([loadFullMessageCatalog(), import('./pages/SettingsPage')]).then(([, module]) => module));
 
 const hostsStorageKey = 'shelldesk:hosts';
+const terminalSnippetsStorageKey = 'shelldesk:terminal-snippets';
 const hostGroupPanelCollapsedStorageKey = 'shelldesk:host-groups-collapsed';
 const hostListSortModeStorageKey = 'shelldesk:host-list-sort-mode';
 const dismissedUpdateReadyVersionStorageKey = 'shelldesk:update-ready-dismissed-version';
@@ -42,8 +45,42 @@ const defaultRemoteDesktopLayout: ShellDeskRemoteDesktopLayout = {
     { id: 'app:settings', type: 'app', appKey: 'settings' },
   ],
 };
+
+function createDefaultTerminalSnippets(language: AppLanguage): ShellDeskTerminalSnippet[] {
+  const isChinese = language === 'zh-CN';
+  const timestamp = '2026-01-01T00:00:00.000Z';
+  const group = isChinese ? '常用巡检' : 'Common Checks';
+  const snippets = isChinese
+    ? [
+        ['system-overview', '系统概览', 'uname -a && uptime'],
+        ['disk-usage', '磁盘占用', 'df -h'],
+        ['memory-usage', '内存占用', 'free -h'],
+        ['listening-ports', '监听端口', 'ss -tulpen || netstat -tulpen'],
+        ['recent-logins', '最近登录', 'last -a | head -20'],
+      ]
+    : [
+        ['system-overview', 'System overview', 'uname -a && uptime'],
+        ['disk-usage', 'Disk usage', 'df -h'],
+        ['memory-usage', 'Memory usage', 'free -h'],
+        ['listening-ports', 'Listening ports', 'ss -tulpen || netstat -tulpen'],
+        ['recent-logins', 'Recent logins', 'last -a | head -20'],
+      ];
+
+  return snippets.map(([id, label, command]) => ({
+    id: `builtin:${id}`,
+    label,
+    command,
+    group,
+    shortcut: '',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }));
+}
+
+const defaultAppLanguage = getSystemLanguage();
+
 const defaultAppSettings: ShellDeskAppSettings = {
-  language: getSystemLanguage(),
+  language: defaultAppLanguage,
   interfaceFont: 'Microsoft YaHei UI',
   theme: 'dark',
   accentColor: '#43c7ff',
@@ -83,9 +120,10 @@ const defaultAppSettings: ShellDeskAppSettings = {
   terminalBracketedPasteMode: true,
   terminalMinimumContrastRatio: 1,
   terminalScreenReaderMode: false,
+  terminalSnippets: createDefaultTerminalSnippets(defaultAppLanguage),
 };
 
-type AppPage = 'hosts' | 'keys' | 'logs' | 'settings';
+type AppPage = 'hosts' | 'keys' | 'snippets' | 'logs' | 'settings';
 type HostListSortMode = 'createdDesc' | 'createdAsc' | 'updatedDesc' | 'updatedAsc' | 'nameAsc' | 'nameDesc' | 'addressAsc';
 type SyncConflictNotice = Pick<ShellDeskSyncResult, 'conflictCount' | 'conflicts' | 'config'>;
 type UpdateReadyNotice = Pick<ShellDeskUpdateStatus, 'version' | 'releaseDate' | 'releaseNotes'>;
@@ -119,6 +157,7 @@ type HostSystemType =
 const navigationItems: ReadonlyArray<{ page: Exclude<AppPage, 'settings'>; icon: NavIconName; labelId: MessageId }> = [
   { page: 'hosts', icon: 'hosts', labelId: 'app.nav.hosts' },
   { page: 'keys', icon: 'keys', labelId: 'app.nav.keys' },
+  { page: 'snippets', icon: 'snippets', labelId: 'app.nav.snippets' },
   { page: 'logs', icon: 'logs', labelId: 'app.nav.logs' },
 ];
 
@@ -275,6 +314,87 @@ function protectRemoteDesktopLayoutFromStaleSnapshot(
     ...incomingSettings,
     remoteDesktopLayout: currentSettings.remoteDesktopLayout,
   };
+}
+
+function readTerminalSnippetRevision(snippet: ShellDeskTerminalSnippet) {
+  const updatedAt = Date.parse(snippet.updatedAt);
+  const createdAt = Date.parse(snippet.createdAt);
+
+  return Math.max(
+    Number.isFinite(updatedAt) ? updatedAt : 0,
+    Number.isFinite(createdAt) ? createdAt : 0,
+  );
+}
+
+function protectTerminalSnippetsFromStaleSnapshot(
+  incomingSettings: ShellDeskAppSettings,
+  currentSettings: ShellDeskAppSettings,
+) {
+  const incomingSnippets = incomingSettings.terminalSnippets ?? [];
+  const currentSnippets = currentSettings.terminalSnippets ?? [];
+
+  if (!currentSnippets.length) {
+    return incomingSettings;
+  }
+
+  const incomingById = new Map(incomingSnippets.map((snippet) => [snippet.id, snippet]));
+  const protectedSnippetIds = new Set<string>();
+
+  for (const currentSnippet of currentSnippets) {
+    const incomingSnippet = incomingById.get(currentSnippet.id);
+    const currentRevision = readTerminalSnippetRevision(currentSnippet);
+
+    if (incomingSnippet) {
+      if (currentRevision > readTerminalSnippetRevision(incomingSnippet)) {
+        protectedSnippetIds.add(currentSnippet.id);
+      }
+    } else {
+      protectedSnippetIds.add(currentSnippet.id);
+    }
+  }
+
+  if (!protectedSnippetIds.size) {
+    return incomingSettings;
+  }
+
+  const nextSnippets: ShellDeskTerminalSnippet[] = [];
+  const addedIds = new Set<string>();
+
+  for (const currentSnippet of currentSnippets) {
+    if (protectedSnippetIds.has(currentSnippet.id)) {
+      nextSnippets.push(currentSnippet);
+      addedIds.add(currentSnippet.id);
+      continue;
+    }
+
+    const incomingSnippet = incomingById.get(currentSnippet.id);
+
+    if (incomingSnippet) {
+      nextSnippets.push(incomingSnippet);
+      addedIds.add(incomingSnippet.id);
+    }
+  }
+
+  for (const incomingSnippet of incomingSnippets) {
+    if (!addedIds.has(incomingSnippet.id)) {
+      nextSnippets.push(incomingSnippet);
+    }
+  }
+
+  return {
+    ...incomingSettings,
+    terminalSnippets: nextSnippets,
+  };
+}
+
+function protectSettingsFromStaleSnapshot(
+  incomingSettings: ShellDeskAppSettings,
+  currentSettings: ShellDeskAppSettings,
+) {
+  return protectTerminalSnippetsFromStaleSnapshot(
+    protectRemoteDesktopLayoutFromStaleSnapshot(incomingSettings, currentSettings),
+    currentSettings,
+  );
 }
 
 const hostSystemIconUrls: Record<HostSystemType, string> = {
@@ -494,6 +614,8 @@ interface VaultCollectionsSavePayload {
   sshKeys: SshKey[];
   settings: ShellDeskAppSettings;
 }
+
+type SettingsUpdate = ShellDeskAppSettings | ((currentSettings: ShellDeskAppSettings) => ShellDeskAppSettings);
 
 interface ConnectionErrorNotice {
   hostName: string;
@@ -927,6 +1049,65 @@ function readStoredHosts(): Host[] {
   }
 }
 
+function readStoredTerminalSnippets(fallbackSnippets: ShellDeskTerminalSnippet[]) {
+  try {
+    const rawSnippets = window.localStorage.getItem(terminalSnippetsStorageKey);
+
+    if (!rawSnippets) {
+      return fallbackSnippets;
+    }
+
+    const parsedSnippets: unknown = JSON.parse(rawSnippets);
+
+    if (!Array.isArray(parsedSnippets)) {
+      return fallbackSnippets;
+    }
+
+    const snippets: ShellDeskTerminalSnippet[] = [];
+    const seenIds = new Set<string>();
+
+    for (const rawSnippet of parsedSnippets.slice(0, 80)) {
+      if (!rawSnippet || typeof rawSnippet !== 'object') {
+        continue;
+      }
+
+      const snippet = rawSnippet as Partial<ShellDeskTerminalSnippet>;
+      const label = typeof snippet.label === 'string' ? snippet.label.trim().slice(0, 80) : '';
+      const command = typeof snippet.command === 'string' ? snippet.command.trimEnd().slice(0, 20000) : '';
+
+      if (!label || !command) {
+        continue;
+      }
+
+      const rawId = typeof snippet.id === 'string' ? snippet.id.slice(0, 128) : '';
+      const id = rawId && !seenIds.has(rawId) ? rawId : createId();
+      seenIds.add(id);
+
+      snippets.push({
+        id,
+        label,
+        command,
+        group: typeof snippet.group === 'string' ? snippet.group.trim().slice(0, 80) : '',
+        shortcut: typeof snippet.shortcut === 'string' ? snippet.shortcut.replace(/\s*\+\s*/g, ' + ').trim().slice(0, 80) : '',
+        createdAt: typeof snippet.createdAt === 'string' ? snippet.createdAt.slice(0, 64) : new Date().toISOString(),
+        updatedAt: typeof snippet.updatedAt === 'string' ? snippet.updatedAt.slice(0, 64) : new Date().toISOString(),
+      });
+    }
+
+    return snippets.length ? snippets : fallbackSnippets;
+  } catch {
+    return fallbackSnippets;
+  }
+}
+
+function storeTerminalSnippets(snippets: ShellDeskTerminalSnippet[]) {
+  try {
+    window.localStorage.setItem(terminalSnippetsStorageKey, JSON.stringify(snippets));
+  } catch {
+    // Ignore localStorage write failures in restricted environments.
+  }
+}
+
 function readHostGroupPanelCollapsed() {
   try {
     const storedValue = window.localStorage.getItem(hostGroupPanelCollapsedStorageKey);
@@ -1310,7 +1491,20 @@ function App() {
   const [keyFormError, setKeyFormError] = useState('');
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isKeyEditorOpen, setIsKeyEditorOpen] = useState(false);
-  const [settings, setSettings] = useState<ShellDeskAppSettings>(initialPublicSnapshot?.settings ?? defaultAppSettings);
+  const [settings, setSettings] = useState<ShellDeskAppSettings>(() => {
+    if (initialPublicSnapshot) {
+      return initialPublicSnapshot.settings;
+    }
+
+    if (window.guiSSH?.vault) {
+      return defaultAppSettings;
+    }
+
+    return {
+      ...defaultAppSettings,
+      terminalSnippets: readStoredTerminalSnippets(defaultAppSettings.terminalSnippets),
+    };
+  });
   const [storageInfo, setStorageInfo] = useState<ShellDeskStorageInfo | null>(initialPublicSnapshot?.storage ?? null);
   const [bookmarkCount, setBookmarkCount] = useState(() => (
     initialPublicSnapshot?.browserBookmarks.reduce((total, collection) => total + collection.bookmarks.length, 0) ?? 0
@@ -1346,6 +1540,7 @@ function App() {
   const lastPersistedCollectionsRef = useRef('');
   const collectionsSaveInFlightRef = useRef(false);
   const collectionsSaveInFlightSerializedRef = useRef('');
+  const collectionsSavePromiseRef = useRef<Promise<void> | null>(null);
   const pendingCollectionsSaveRef = useRef<{ payload: VaultCollectionsSavePayload; serialized: string } | null>(null);
   const lastPersistedLogsRef = useRef('');
   const platform = window.guiSSH?.platform;
@@ -1441,8 +1636,8 @@ function App() {
   const applyVaultSnapshot = (snapshot: ShellDeskVaultSnapshot, options: { updateCollections?: boolean; hydrated?: boolean } = {}) => {
     const { updateCollections = true, hydrated = true } = options;
 
-    const nextSettings = protectRemoteDesktopLayoutFromStaleSnapshot(snapshot.settings, settingsRef.current);
-    const shouldRepairPersistedDesktopLayout = nextSettings !== snapshot.settings;
+    const nextSettings = protectSettingsFromStaleSnapshot(snapshot.settings, settingsRef.current);
+    const shouldRepairPersistedSettings = nextSettings !== snapshot.settings;
 
     if (updateCollections) {
       const nextHosts = normalizeStoredHosts(snapshot.hosts.filter(isStoredHost));
@@ -1457,7 +1652,7 @@ function App() {
         lastPersistedCollectionsRef.current = JSON.stringify({
           hosts: nextHosts,
           sshKeys: nextKeys,
-          settings: shouldRepairPersistedDesktopLayout ? snapshot.settings : nextSettings,
+          settings: shouldRepairPersistedSettings ? snapshot.settings : nextSettings,
         });
       }
     }
@@ -1472,7 +1667,7 @@ function App() {
       setIsVaultHydrated(true);
     }
 
-    if (shouldRepairPersistedDesktopLayout) {
+    if (shouldRepairPersistedSettings) {
       queueCollectionsSaveIfChanged({
         hosts: hostsRef.current,
         sshKeys: sshKeysRef.current,
@@ -1496,7 +1691,7 @@ function App() {
     collectionsSaveInFlightRef.current = true;
     collectionsSaveInFlightSerializedRef.current = pendingSave.serialized;
 
-    void vaultControls.saveCollections(pendingSave.payload).then((snapshot) => {
+    const savePromise = vaultControls.saveCollections(pendingSave.payload).then((snapshot) => {
       lastPersistedCollectionsRef.current = pendingSave.serialized;
       setStorageInfo(snapshot.storage);
       setBookmarkCount(snapshot.browserBookmarks.reduce((total: number, collection: ShellDeskBrowserBookmarkCollection) => total + collection.bookmarks.length, 0));
@@ -1506,11 +1701,17 @@ function App() {
     }).finally(() => {
       collectionsSaveInFlightRef.current = false;
       collectionsSaveInFlightSerializedRef.current = '';
+      if (collectionsSavePromiseRef.current === savePromise) {
+        collectionsSavePromiseRef.current = null;
+      }
 
       if (pendingCollectionsSaveRef.current) {
         flushCollectionsSave();
       }
     });
+
+    collectionsSavePromiseRef.current = savePromise;
+    void savePromise;
   }, [vaultControls]);
 
   const scheduleCollectionsSave = useCallback((payload: VaultCollectionsSavePayload, serialized: string) => {
@@ -1546,6 +1747,10 @@ function App() {
       return;
     }
 
+    if (collectionsSavePromiseRef.current) {
+      await collectionsSavePromiseRef.current;
+    }
+
     const payload: VaultCollectionsSavePayload = {
       hosts: hostsRef.current,
       sshKeys: sshKeysRef.current,
@@ -1558,12 +1763,28 @@ function App() {
     }
 
     pendingCollectionsSaveRef.current = null;
+    collectionsSaveInFlightRef.current = true;
+    collectionsSaveInFlightSerializedRef.current = serializedPayload;
 
-    const snapshot = await vaultControls.saveCollections(payload);
-    lastPersistedCollectionsRef.current = serializedPayload;
-    setStorageInfo(snapshot.storage);
-    setBookmarkCount(snapshot.browserBookmarks.reduce((total: number, collection: ShellDeskBrowserBookmarkCollection) => total + collection.bookmarks.length, 0));
-  }, [isVaultHydrated, isVaultReady, vaultControls]);
+    const savePromise = vaultControls.saveCollections(payload).then((snapshot) => {
+      lastPersistedCollectionsRef.current = serializedPayload;
+      setStorageInfo(snapshot.storage);
+      setBookmarkCount(snapshot.browserBookmarks.reduce((total: number, collection: ShellDeskBrowserBookmarkCollection) => total + collection.bookmarks.length, 0));
+    }).finally(() => {
+      collectionsSaveInFlightRef.current = false;
+      collectionsSaveInFlightSerializedRef.current = '';
+      if (collectionsSavePromiseRef.current === savePromise) {
+        collectionsSavePromiseRef.current = null;
+      }
+
+      if (pendingCollectionsSaveRef.current) {
+        flushCollectionsSave();
+      }
+    });
+
+    collectionsSavePromiseRef.current = savePromise;
+    await savePromise;
+  }, [flushCollectionsSave, isVaultHydrated, isVaultReady, vaultControls]);
 
   const commitCollectionsState = useCallback((
     nextHosts: Host[],
@@ -1578,8 +1799,11 @@ function App() {
     setHosts(orderedHosts);
     setSshKeys(nextSshKeys);
     setSettings(nextSettings);
+    if (!vaultControls) {
+      storeTerminalSnippets(nextSettings.terminalSnippets ?? []);
+    }
     queueCollectionsSaveIfChanged({ hosts: orderedHosts, sshKeys: nextSshKeys, settings: nextSettings });
-  }, [queueCollectionsSaveIfChanged]);
+  }, [queueCollectionsSaveIfChanged, vaultControls]);
 
   const commitHosts = useCallback((nextHosts: Host[]) => {
     commitCollectionsState(nextHosts, sshKeysRef.current, settingsRef.current);
@@ -2068,6 +2292,15 @@ function App() {
   const updateSettings = useCallback((nextSettings: ShellDeskAppSettings) => {
     commitCollectionsState(hostsRef.current, sshKeysRef.current, nextSettings);
   }, [commitCollectionsState]);
+
+  const updateSettingsAndPersist = useCallback(async (settingsUpdate: SettingsUpdate) => {
+    const nextSettings = typeof settingsUpdate === 'function'
+      ? settingsUpdate(settingsRef.current)
+      : settingsUpdate;
+
+    commitCollectionsState(hostsRef.current, sshKeysRef.current, nextSettings);
+    await persistCurrentCollections();
+  }, [commitCollectionsState, persistCurrentCollections]);
 
   const addLog = (category: LogCategory, level: LogLevel, message: string, detail = '') => {
     setLogs((current) => {
@@ -3299,6 +3532,10 @@ function App() {
                 onDeleteKey={deleteSshKey}
                 onCopyPublicKey={copyPublicKey}
               />
+            </Suspense>
+          ) : activePage === 'snippets' ? (
+            <Suspense fallback={<LazyContentFallback language={appLanguage} />}>
+              <SnippetsPage settings={settings} onSettingsChange={updateSettingsAndPersist} />
             </Suspense>
           ) : activePage === 'logs' ? (
             <Suspense fallback={<LazyContentFallback language={appLanguage} />}>

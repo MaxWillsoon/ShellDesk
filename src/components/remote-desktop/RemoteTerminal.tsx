@@ -23,6 +23,7 @@ import {
   terminalThemeChoices,
   toTerminalFontWeight,
 } from './terminalPresets';
+import { isMacClient, matchesSnippetShortcut } from './terminalSnippetShortcuts';
 import type { RemoteSystemType } from './types';
 import { t } from '../../i18n';
 
@@ -1013,6 +1014,17 @@ function RemoteTerminal({
     foregroundTaskSourceRef.current = null;
 
     terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type === 'keydown' && isTerminalReadyRef.current) {
+        const matchingSnippet = (settingsRef.current.terminalSnippets ?? [])
+          .find((snippet) => snippet.shortcut && matchesSnippetShortcut(event, snippet.shortcut, isMacClient()));
+
+        if (matchingSnippet) {
+          terminal.focus();
+          terminal.paste(matchingSnippet.command);
+          return false;
+        }
+      }
+
       const shouldOpenSearch = event.type === 'keydown' &&
         (event.ctrlKey || event.metaKey) &&
         event.key.toLowerCase() === 'f';

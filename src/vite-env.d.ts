@@ -32,6 +32,16 @@ interface ShellDeskAppInfo {
   isPackaged: boolean;
 }
 
+interface ShellDeskTerminalSnippet {
+  id: string;
+  label: string;
+  command: string;
+  group: string;
+  shortcut: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface ShellDeskUpdateCheckResult {
   repository: string;
   currentVersion: string;
@@ -256,6 +266,7 @@ interface ShellDeskAppSettings {
   terminalBracketedPasteMode: boolean;
   terminalMinimumContrastRatio: number;
   terminalScreenReaderMode: boolean;
+  terminalSnippets: ShellDeskTerminalSnippet[];
 }
 
 interface ShellDeskStoredKeyRecord {

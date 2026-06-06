@@ -1,4 +1,4 @@
-export type NavIconName = 'hosts' | 'keys' | 'logs' | 'settings';
+export type NavIconName = 'hosts' | 'keys' | 'snippets' | 'logs' | 'settings';
 
 interface NavIconProps {
   name: NavIconName;
@@ -29,6 +29,16 @@ function NavIcon({ name }: NavIconProps) {
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M8 4h8l2 2v14H6V4h2Z" />
         <path d="M9 9h6M9 13h6M9 17h4" />
+      </svg>
+    );
+  }
+
+  if (name === 'snippets') {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m8 6-5 6 5 6" />
+        <path d="m16 6 5 6-5 6" />
+        <path d="M13.5 4.5 10.5 19.5" />
       </svg>
     );
   }

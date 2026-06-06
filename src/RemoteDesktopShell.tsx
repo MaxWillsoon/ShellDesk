@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import type { RemoteProcessManagerLaunchOptions } from './components/remote-desktop/RemoteProcessManager';
 import type {
   RemoteTerminalChromePayload,
+  RemoteTerminalCommandRequest,
   RemoteTerminalLaunchOptions,
   RemoteTerminalSessionEvent,
   RemoteTerminalSessionState,
@@ -214,6 +215,7 @@ interface DesktopWindowState {
   terminalStatus?: RemoteTerminalSessionStatus;
   terminalHasForegroundTask?: boolean;
   terminalToolRequest?: RemoteTerminalToolRequest;
+  terminalCommandRequest?: RemoteTerminalCommandRequest;
   chromeTitle?: string;
   chromeStatus?: string;
   chromeTone?: 'idle' | 'loading' | 'error';
@@ -1020,6 +1022,28 @@ function getDesktopWallpaperStyle(settings: ShellDeskAppSettings, presetWallpape
   };
 }
 
+function getTerminalSnippetGroups(snippets: ShellDeskTerminalSnippet[], language: ShellDeskAppSettings['language']) {
+  const groups = new Map<string, ShellDeskTerminalSnippet[]>();
+  const ungroupedLabel = t('terminal.snippets.ungrouped', language);
+
+  snippets.forEach((snippet) => {
+    const groupLabel = snippet.group.trim() || ungroupedLabel;
+    const groupSnippets = groups.get(groupLabel) ?? [];
+
+    groupSnippets.push(snippet);
+    groups.set(groupLabel, groupSnippets);
+  });
+
+  return Array.from(groups.entries()).map(([label, groupSnippets]) => ({
+    label,
+    snippets: groupSnippets,
+  }));
+}
+
+function getTerminalSnippetPreview(snippet: ShellDeskTerminalSnippet) {
+  return snippet.command.split(/\r?\n/u)[0].trim();
+}
+
 function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminalSessionEvent }: RemoteDesktopProps) {
   const desktopSurfaceRef = useRef<HTMLElement | null>(null);
   const windowPointerStateRef = useRef<DesktopWindowPointerState | null>(null);
@@ -1027,6 +1051,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
   const desktopDragPayloadRef = useRef<DesktopDragPayload | null>(null);
   const windowSequenceRef = useRef(0);
   const terminalToolRequestSequenceRef = useRef(0);
+  const terminalCommandRequestSequenceRef = useRef(0);
   const zIndexRef = useRef(0);
   const launchpadCloseTimerRef = useRef<number | null>(null);
   const folderCloseTimerRef = useRef<number | null>(null);
@@ -1826,10 +1851,35 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
     setTerminalTitlebarMenu(null);
   };
 
+  const requestTerminalCommand = (windowId: string, command: string, source: RemoteTerminalCommandRequest['source'] = 'external') => {
+    terminalCommandRequestSequenceRef.current += 1;
+    const terminalCommandRequest: RemoteTerminalCommandRequest = {
+      id: `terminal-command-${terminalCommandRequestSequenceRef.current}`,
+      command,
+      mode: 'insert',
+      source,
+    };
+
+    setDesktopWindows((currentWindows) => currentWindows.map((desktopWindow) => (
+      desktopWindow.id === windowId
+        ? { ...desktopWindow, terminalCommandRequest }
+        : desktopWindow
+    )));
+    setTerminalTitlebarMenu(null);
+  };
+
   const completeTerminalToolRequest = (windowId: string, requestId: string) => {
     setDesktopWindows((currentWindows) => currentWindows.map((desktopWindow) => (
       desktopWindow.id === windowId && desktopWindow.terminalToolRequest?.id === requestId
         ? { ...desktopWindow, terminalToolRequest: undefined }
+        : desktopWindow
+    )));
+  };
+
+  const completeTerminalCommandRequest = (windowId: string, requestId: string) => {
+    setDesktopWindows((currentWindows) => currentWindows.map((desktopWindow) => (
+      desktopWindow.id === windowId && desktopWindow.terminalCommandRequest?.id === requestId
+        ? { ...desktopWindow, terminalCommandRequest: undefined }
         : desktopWindow
     )));
   };
@@ -1843,8 +1893,10 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
           settings={settings}
           systemType={connection.host.systemType}
           launchOptions={desktopWindow.terminalLaunchOptions}
+          commandRequest={desktopWindow.terminalCommandRequest}
           toolRequest={desktopWindow.terminalToolRequest}
           onChromeChange={(payload) => updateWindowChrome(desktopWindow.id, payload)}
+          onCommandRequestHandled={(requestId) => completeTerminalCommandRequest(desktopWindow.id, requestId)}
           onToolRequestHandled={(requestId) => completeTerminalToolRequest(desktopWindow.id, requestId)}
           onOpenTerminal={openTerminalWindow}
           onOpenNote={openNotepadNote}
@@ -2136,7 +2188,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
                         }
 
                         const buttonRect = event.currentTarget.getBoundingClientRect();
-                        const menuWidth = 190;
+                        const menuWidth = 210;
                         const menuEdgePadding = 8;
                         setTerminalTitlebarMenu({
                           windowId: desktopWindow.id,
@@ -2645,6 +2697,40 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
           <button type="button" role="menuitem" onClick={() => requestTerminalTool(terminalTitlebarMenuWindow.id, 'clear')}>
             {t('terminal.titlebar.clear', settings.language)}
           </button>
+          {(settings.terminalSnippets ?? []).length ? (
+            <div className="context-menu-item-has-submenu terminal-titlebar-snippets-menu">
+              <button type="button" role="menuitem" aria-haspopup="menu">
+                {t('terminal.titlebar.snippets', settings.language)}
+              </button>
+              <div className="context-submenu terminal-titlebar-snippets-submenu" role="menu" aria-label={t('terminal.titlebar.snippets', settings.language)}>
+                {getTerminalSnippetGroups(settings.terminalSnippets ?? [], settings.language).map((group) => (
+                  <div key={group.label} className="terminal-titlebar-snippet-group" role="presentation">
+                    <div className="terminal-titlebar-snippet-group-label">{group.label}</div>
+                    {group.snippets.map((snippet) => (
+                      <button
+                        key={snippet.id}
+                        type="button"
+                        role="menuitem"
+                        className="terminal-titlebar-snippet-button"
+                        title={snippet.command}
+                        onClick={() => requestTerminalCommand(terminalTitlebarMenuWindow.id, snippet.command, 'snippet')}
+                      >
+                        <span className="terminal-titlebar-snippet-text">
+                          <strong>{snippet.label}</strong>
+                          <small>{getTerminalSnippetPreview(snippet)}</small>
+                        </span>
+                        {snippet.shortcut ? <kbd>{snippet.shortcut}</kbd> : null}
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <button type="button" role="menuitem" disabled>
+              {t('terminal.titlebar.noSnippets', settings.language)}
+            </button>
+          )}
           <div className="context-menu-sep" />
           <button type="button" role="menuitem" onClick={() => requestTerminalTool(terminalTitlebarMenuWindow.id, 'toggle-follow')}>
             {t('terminal.titlebar.toggleFollow', settings.language)}

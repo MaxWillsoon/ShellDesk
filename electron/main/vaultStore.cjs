@@ -132,6 +132,37 @@ function createDefaultAiSettings() {
   };
 }
 
+function createDefaultTerminalSnippets(language = getDefaultLanguage()) {
+  const isChinese = language === 'zh-CN';
+  const timestamp = '2026-01-01T00:00:00.000Z';
+  const group = isChinese ? '常用巡检' : 'Common Checks';
+  const snippets = isChinese
+    ? [
+        ['system-overview', '系统概览', 'uname -a && uptime'],
+        ['disk-usage', '磁盘占用', 'df -h'],
+        ['memory-usage', '内存占用', 'free -h'],
+        ['listening-ports', '监听端口', 'ss -tulpen || netstat -tulpen'],
+        ['recent-logins', '最近登录', 'last -a | head -20'],
+      ]
+    : [
+        ['system-overview', 'System overview', 'uname -a && uptime'],
+        ['disk-usage', 'Disk usage', 'df -h'],
+        ['memory-usage', 'Memory usage', 'free -h'],
+        ['listening-ports', 'Listening ports', 'ss -tulpen || netstat -tulpen'],
+        ['recent-logins', 'Recent logins', 'last -a | head -20'],
+      ];
+
+  return snippets.map(([id, label, command]) => ({
+    id: `builtin:${id}`,
+    label,
+    command,
+    group,
+    shortcut: '',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }));
+}
+
 function getDefaultAiProviderName(provider) {
   if (provider === 'anthropic') {
     return 'Claude / Anthropic';
@@ -186,6 +217,7 @@ function createDefaultSettings() {
     terminalBracketedPasteMode: true,
     terminalMinimumContrastRatio: 1,
     terminalScreenReaderMode: false,
+    terminalSnippets: createDefaultTerminalSnippets(),
     ...defaultAiSettings,
   };
 }
@@ -320,6 +352,66 @@ function readRemoteDesktopLayout(rawLayout) {
     sortMode,
     items: migrateLegacyAllRemoteDesktopApps(items, appCatalogVersion),
   };
+}
+
+function readTerminalSnippetShortcut(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  return readBoundedString(value.replace(/\s*\+\s*/g, ' + '), '代码片段快捷键', 80, {
+    required: false,
+  });
+}
+
+function readTerminalSnippets(rawSnippets, fallbackSnippets) {
+  if (rawSnippets === undefined) {
+    return fallbackSnippets;
+  }
+
+  if (!Array.isArray(rawSnippets)) {
+    return fallbackSnippets;
+  }
+
+  const snippets = [];
+  const seenIds = new Set();
+
+  for (const rawSnippet of rawSnippets.slice(0, 80)) {
+    if (!isPlainObject(rawSnippet)) {
+      continue;
+    }
+
+    const label = readBoundedString(rawSnippet.label ?? '', '代码片段名称', 80, { required: false });
+    const command = readBoundedString(rawSnippet.command ?? '', '代码片段命令', 20000, {
+      required: false,
+      trim: false,
+      rejectLineBreaks: false,
+    }).trimEnd();
+
+    if (!label || !command) {
+      continue;
+    }
+
+    const rawId = readBoundedString(rawSnippet.id ?? '', '代码片段 ID', 128, { required: false });
+    let id = rawId || crypto.randomUUID();
+
+    if (seenIds.has(id)) {
+      id = crypto.randomUUID();
+    }
+
+    seenIds.add(id);
+    snippets.push({
+      id,
+      label,
+      command,
+      group: readBoundedString(rawSnippet.group ?? '', '代码片段分组', 80, { required: false }),
+      shortcut: readTerminalSnippetShortcut(rawSnippet.shortcut),
+      createdAt: readBoundedString(rawSnippet.createdAt ?? new Date().toISOString(), '代码片段创建时间', 64, { required: false }) || new Date().toISOString(),
+      updatedAt: readBoundedString(rawSnippet.updatedAt ?? new Date().toISOString(), '代码片段更新时间', 64, { required: false }) || new Date().toISOString(),
+    });
+  }
+
+  return snippets;
 }
 
 function getVaultFilePath() {
@@ -532,6 +624,7 @@ function readAppSettings(rawSettings) {
       '终端屏幕阅读器支持',
       defaults.terminalScreenReaderMode,
     ),
+    terminalSnippets: readTerminalSnippets(rawSettings.terminalSnippets, defaults.terminalSnippets),
   };
 }
 
