@@ -154,20 +154,20 @@ contextBridge.exposeInMainWorld('guiSSH', {
     },
     closeTerminal: (connectionId, terminalId) =>
       ipcRenderer.invoke('connection:close-terminal', connectionId, terminalId).catch(() => false),
-    listDirectory: (connectionId, remotePath) => ipcRenderer.invoke('connection:list-directory', connectionId, remotePath),
-    createDirectory: (connectionId, remotePath) => ipcRenderer.invoke('connection:create-directory', connectionId, remotePath),
-    deletePath: (connectionId, remotePath, entryType) =>
-      ipcRenderer.invoke('connection:delete-path', connectionId, remotePath, entryType),
-    renamePath: (connectionId, oldPath, newPath) =>
-      ipcRenderer.invoke('connection:rename-path', connectionId, oldPath, newPath),
-    createFile: (connectionId, remotePath) => ipcRenderer.invoke('connection:create-file', connectionId, remotePath),
+    listDirectory: (connectionId, remotePath, options) => ipcRenderer.invoke('connection:list-directory', connectionId, remotePath, options),
+    createDirectory: (connectionId, remotePath, options) => ipcRenderer.invoke('connection:create-directory', connectionId, remotePath, options),
+    deletePath: (connectionId, remotePath, entryType, options) =>
+      ipcRenderer.invoke('connection:delete-path', connectionId, remotePath, entryType, options),
+    renamePath: (connectionId, oldPath, newPath, options) =>
+      ipcRenderer.invoke('connection:rename-path', connectionId, oldPath, newPath, options),
+    createFile: (connectionId, remotePath, options) => ipcRenderer.invoke('connection:create-file', connectionId, remotePath, options),
     readFile: (connectionId, remotePath, options) => ipcRenderer.invoke('connection:read-file', connectionId, remotePath, options),
     writeFile: (connectionId, remotePath, content, options) => ipcRenderer.invoke('connection:write-file', connectionId, remotePath, content, options),
-    downloadFile: (connectionId, remotePath) => ipcRenderer.invoke('connection:download-file', connectionId, remotePath),
-    downloadPaths: (connectionId, remotePaths) => ipcRenderer.invoke('connection:download-paths', connectionId, remotePaths),
-    uploadFile: (connectionId, remotePath) => ipcRenderer.invoke('connection:upload-file', connectionId, remotePath),
-    uploadFiles: (connectionId, remotePath) => ipcRenderer.invoke('connection:upload-files', connectionId, remotePath),
-    uploadPaths: (connectionId, remotePath) => ipcRenderer.invoke('connection:upload-paths', connectionId, remotePath),
+    downloadFile: (connectionId, remotePath, options) => ipcRenderer.invoke('connection:download-file', connectionId, remotePath, options),
+    downloadPaths: (connectionId, remotePaths, options) => ipcRenderer.invoke('connection:download-paths', connectionId, remotePaths, options),
+    uploadFile: (connectionId, remotePath, options) => ipcRenderer.invoke('connection:upload-file', connectionId, remotePath, options),
+    uploadFiles: (connectionId, remotePath, options) => ipcRenderer.invoke('connection:upload-files', connectionId, remotePath, options),
+    uploadPaths: (connectionId, remotePath, options) => ipcRenderer.invoke('connection:upload-paths', connectionId, remotePath, options),
     cancelTransfer: (connectionId) => ipcRenderer.invoke('connection:cancel-transfer', connectionId),
     checkSftp: (connectionId) => ipcRenderer.invoke('connection:check-sftp', connectionId),
     selectZmodemUploadFiles: () => ipcRenderer.invoke('connection:zmodem-select-upload-files'),
@@ -177,7 +177,7 @@ contextBridge.exposeInMainWorld('guiSSH', {
     saveZmodemFile: (fileName, content) => ipcRenderer.invoke('connection:zmodem-save-file', fileName, content),
     compress: (connectionId, sourcePaths, format, destPath) => ipcRenderer.invoke('connection:compress', connectionId, sourcePaths, format, destPath),
     decompress: (connectionId, archivePath, destDir) => ipcRenderer.invoke('connection:decompress', connectionId, archivePath, destDir),
-    statPath: (connectionId, remotePath) => ipcRenderer.invoke('connection:stat-path', connectionId, remotePath),
+    statPath: (connectionId, remotePath, options) => ipcRenderer.invoke('connection:stat-path', connectionId, remotePath, options),
     setPathPermissions: (connectionId, remotePath, options) =>
       ipcRenderer.invoke('connection:set-path-permissions', connectionId, remotePath, options),
     getStatus: (connectionId) => ipcRenderer.invoke('connection:get-status', connectionId),

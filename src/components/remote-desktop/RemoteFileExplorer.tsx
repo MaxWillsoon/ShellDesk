@@ -64,6 +64,13 @@ interface ContextMenuState {
   targetEntry: RemoteFileEntry | null;
 }
 
+interface ExplorerSudoPrompt {
+  operation: string;
+  target: string;
+  error: string;
+  password: string;
+}
+
 type PermissionGroupKey = 'owner' | 'group' | 'others';
 type PermissionActionKey = 'read' | 'write' | 'execute';
 
@@ -87,6 +94,27 @@ const EXPLORER_HEADER_HEIGHT = 44;
 const EXPLORER_ROW_HEIGHT = 42;
 const EXPLORER_ROW_OVERSCAN = 12;
 const DEFAULT_REMOTE_PATH = '.';
+const elevationErrorPrefixes = [
+  'SHELLDESK_ELEVATION_REQUIRED:',
+  'SHELLDESK_ELEVATION_AUTH_FAILED:',
+];
+
+function shouldPromptForSudoPassword(error: unknown) {
+  const message = getErrorMessage(error);
+
+  if (elevationErrorPrefixes.some((prefix) => message.startsWith(prefix))) {
+    return true;
+  }
+
+  return /sudo.*password|password.*sudo|a password is required|authentication failure|sorry, try again/i.test(message);
+}
+
+function getPrivilegeErrorMessage(error: unknown) {
+  const message = getErrorMessage(error);
+  const prefix = elevationErrorPrefixes.find((candidate) => message.startsWith(candidate));
+
+  return prefix ? message.slice(prefix.length).trim() || message : message;
+}
 
 const UNIX_HOME_DIRECTORY_COMMAND = `
 home=\${HOME:-}
@@ -562,9 +590,12 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
   const [deleteConfirmationEntries, setDeleteConfirmationEntries] = useState<RemoteFileEntry[] | null>(null);
   const [transferProgress, setTransferProgress] = useState<ShellDeskTransferProgress | null>(null);
   const [tableViewport, setTableViewport] = useState({ scrollTop: 0, height: 0 });
+  const [sudoPrompt, setSudoPrompt] = useState<ExplorerSudoPrompt | null>(null);
 
   const renameInputRef = useRef<HTMLInputElement>(null);
   const newItemInputRef = useRef<HTMLInputElement>(null);
+  const sudoPasswordInputRef = useRef<HTMLInputElement>(null);
+  const sudoPromptResolverRef = useRef<((password: string | null) => void) | null>(null);
   const tableRef = useRef<HTMLDivElement>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialPathRef = useRef(initialRemotePath);
@@ -595,9 +626,70 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
     });
   }, [updateTableViewport]);
 
+  const requestSudoPassword = useCallback((
+    operation: string,
+    target: string,
+    error: string,
+  ) => new Promise<string | null>((resolve) => {
+    sudoPromptResolverRef.current?.(null);
+    sudoPromptResolverRef.current = resolve;
+    setSudoPrompt({
+      operation,
+      target,
+      error,
+      password: '',
+    });
+  }), []);
+
+  const resolveSudoPrompt = useCallback((password: string | null) => {
+    sudoPromptResolverRef.current?.(password);
+    sudoPromptResolverRef.current = null;
+    setSudoPrompt(null);
+  }, []);
+
+  const runWithSudoRetry = useCallback(async <T,>(
+    operation: string,
+    target: string,
+    run: (options?: ShellDeskSudoPasswordOptions) => Promise<T>,
+  ): Promise<T> => {
+    try {
+      return await run();
+    } catch (error) {
+      if (isWindowsHost || !shouldPromptForSudoPassword(error)) {
+        throw error;
+      }
+
+      let lastError = getPrivilegeErrorMessage(error);
+
+      for (;;) {
+        const sudoPassword = await requestSudoPassword(operation, target, lastError);
+
+        if (sudoPassword === null) {
+          throw new Error(lastError);
+        }
+
+        try {
+          return await run({ sudoPassword });
+        } catch (retryError) {
+          if (!shouldPromptForSudoPassword(retryError)) {
+            throw retryError;
+          }
+
+          lastError = getPrivilegeErrorMessage(retryError);
+        }
+      }
+    }
+  }, [isWindowsHost, requestSudoPassword]);
+
   useEffect(() => {
     setPathDraft(remotePath);
   }, [remotePath]);
+
+  useEffect(() => {
+    if (sudoPrompt) {
+      sudoPasswordInputRef.current?.focus();
+    }
+  }, [sudoPrompt?.operation, sudoPrompt?.target]);
 
   useEffect(() => {
     const explicitPath = getExplicitInitialPath(initialPath, isWindowsHost);
@@ -654,6 +746,8 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
   useEffect(() => {
     return () => {
       if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      sudoPromptResolverRef.current?.(null);
+      sudoPromptResolverRef.current = null;
     };
   }, []);
 
@@ -678,7 +772,11 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
       setContextMenu(null);
 
       try {
-        const result: RemoteDirectoryResult = await window.guiSSH!.connections.listDirectory(connectionId, remotePath);
+        const result: RemoteDirectoryResult = await runWithSudoRetry(
+          t('fileExplorer.sudo.operation.list', language),
+          remotePath,
+          (options) => window.guiSSH!.connections.listDirectory(connectionId, remotePath, options),
+        );
 
         if (!cancelled) {
           pendingDefaultPathRef.current = false;
@@ -721,7 +819,7 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
     return () => {
       cancelled = true;
     };
-  }, [connectionId, filesRefreshToken, historyIndex, isResolvingDefaultPath, language, remotePath]);
+  }, [connectionId, filesRefreshToken, historyIndex, isResolvingDefaultPath, language, remotePath, runWithSudoRetry]);
 
   useEffect(() => {
     if (renamingName && renameInputRef.current) {
@@ -1231,7 +1329,11 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
       for (const entry of targets) {
         const entryPath = joinRemotePath(remotePath, entry.name, isWindowsHost);
         try {
-          await window.guiSSH?.connections.deletePath(connectionId, entryPath, entry.type);
+          await runWithSudoRetry(
+            t('fileExplorer.sudo.operation.delete', language),
+            entryPath,
+            (options) => window.guiSSH!.connections.deletePath(connectionId, entryPath, entry.type, options),
+          );
         } catch (error) {
           errors.push(`${entry.name}: ${getErrorMessage(error)}`);
         }
@@ -1245,7 +1347,7 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
     } catch (error) {
       setFilesError(getErrorMessage(error));
     }
-  }, [connectionId, deleteConfirmationEntries, isWindowsHost, language, remotePath, refreshFiles]);
+  }, [connectionId, deleteConfirmationEntries, isWindowsHost, language, remotePath, refreshFiles, runWithSudoRetry]);
 
   const startRename = useCallback((entry: RemoteFileEntry) => {
     closeContextMenu();
@@ -1273,14 +1375,18 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
       setFilesError('');
       const oldPath = joinRemotePath(remotePath, renamingName, isWindowsHost);
       const newPath = joinRemotePath(remotePath, trimmed, isWindowsHost);
-      await window.guiSSH?.connections.renamePath(connectionId, oldPath, newPath);
+      await runWithSudoRetry(
+        t('fileExplorer.sudo.operation.rename', language),
+        oldPath,
+        (options) => window.guiSSH!.connections.renamePath(connectionId, oldPath, newPath, options),
+      );
       setRenamingName(null);
       refreshFiles();
     } catch (error) {
       setFilesError(getErrorMessage(error));
       setRenamingName(null);
     }
-  }, [connectionId, isWindowsHost, language, remotePath, renamingName, renameDraft, refreshFiles]);
+  }, [connectionId, isWindowsHost, language, remotePath, renamingName, renameDraft, refreshFiles, runWithSudoRetry]);
 
   const cancelRename = useCallback(() => {
     setRenamingName(null);
@@ -1311,9 +1417,19 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
     try {
       setFilesError('');
       if (isCreatingNew === 'folder') {
-        await window.guiSSH?.connections.createDirectory(connectionId, joinRemotePath(remotePath, trimmed, isWindowsHost));
+        const targetPath = joinRemotePath(remotePath, trimmed, isWindowsHost);
+        await runWithSudoRetry(
+          t('fileExplorer.sudo.operation.createFolder', language),
+          targetPath,
+          (options) => window.guiSSH!.connections.createDirectory(connectionId, targetPath, options),
+        );
       } else {
-        await window.guiSSH?.connections.createFile(connectionId, joinRemotePath(remotePath, trimmed, isWindowsHost));
+        const targetPath = joinRemotePath(remotePath, trimmed, isWindowsHost);
+        await runWithSudoRetry(
+          t('fileExplorer.sudo.operation.createFile', language),
+          targetPath,
+          (options) => window.guiSSH!.connections.createFile(connectionId, targetPath, options),
+        );
       }
       setIsCreatingNew(null);
       refreshFiles();
@@ -1321,7 +1437,7 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
       setFilesError(getErrorMessage(error));
       setIsCreatingNew(null);
     }
-  }, [connectionId, isWindowsHost, language, remotePath, isCreatingNew, newItemDraft, refreshFiles]);
+  }, [connectionId, isWindowsHost, language, remotePath, isCreatingNew, newItemDraft, refreshFiles, runWithSudoRetry]);
 
   const cancelNewItem = useCallback(() => {
     setIsCreatingNew(null);
@@ -1345,7 +1461,11 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
 
     try {
       const entryPath = joinRemotePath(remotePath, entry.name, isWindowsHost);
-      const stat = await window.guiSSH?.connections.statPath(connectionId, entryPath);
+      const stat = await runWithSudoRetry(
+        t('fileExplorer.sudo.operation.properties', language),
+        entryPath,
+        (options) => window.guiSSH!.connections.statPath(connectionId, entryPath, options),
+      );
       setPropertiesData(stat ?? null);
       setPermissionDraft(stat ? formatOctalMode(stat.mode) : '');
     } catch (error) {
@@ -1354,7 +1474,7 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
     } finally {
       setPropertiesLoading(false);
     }
-  }, [closeContextMenu, connectionId, isWindowsHost, remotePath]);
+  }, [closeContextMenu, connectionId, isWindowsHost, language, remotePath, runWithSudoRetry]);
 
   const submitPropertiesPermissions = useCallback(async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1374,11 +1494,20 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
       setPropertiesSaving(true);
       setPropertiesError('');
       const entryPath = joinRemotePath(remotePath, propertiesEntry.name, isWindowsHost);
-      await window.guiSSH?.connections.setPathPermissions(connectionId, entryPath, {
-        mode: nextMode,
-        recursive: propertiesEntry.type === 'directory' && permissionRecursive,
-      });
-      const stat = await window.guiSSH?.connections.statPath(connectionId, entryPath);
+      await runWithSudoRetry(
+        t('fileExplorer.sudo.operation.permissions', language),
+        entryPath,
+        (options) => window.guiSSH!.connections.setPathPermissions(connectionId, entryPath, {
+          mode: nextMode,
+          recursive: propertiesEntry.type === 'directory' && permissionRecursive,
+          ...options,
+        }),
+      );
+      const stat = await runWithSudoRetry(
+        t('fileExplorer.sudo.operation.properties', language),
+        entryPath,
+        (options) => window.guiSSH!.connections.statPath(connectionId, entryPath, options),
+      );
       setPropertiesData(stat ?? null);
       setPermissionDraft(stat ? formatOctalMode(stat.mode) : formatOctalMode(nextMode));
       setPermissionRecursive(false);
@@ -1399,6 +1528,7 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
     refreshFiles,
     remotePath,
     language,
+    runWithSudoRetry,
   ]);
 
   const downloadFile = useCallback(async (entry: RemoteFileEntry) => {
@@ -1406,14 +1536,18 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
     try {
       setFilesError('');
       const entryPath = joinRemotePath(remotePath, entry.name, isWindowsHost);
-      const result = await window.guiSSH?.connections.downloadFile(connectionId, entryPath);
+      const result = await runWithSudoRetry(
+        t('fileExplorer.sudo.operation.download', language),
+        entryPath,
+        (options) => window.guiSSH!.connections.downloadFile(connectionId, entryPath, options),
+      );
       if (!result?.canceled && result?.filePath) {
         setFilesError('');
       }
     } catch (error) {
       setFilesError(getErrorMessage(error));
     }
-  }, [closeContextMenu, connectionId, isWindowsHost, remotePath]);
+  }, [closeContextMenu, connectionId, isWindowsHost, language, remotePath, runWithSudoRetry]);
 
   const downloadEntries = useCallback(async (entries: RemoteFileEntry[]) => {
     closeContextMenu();
@@ -1430,7 +1564,11 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
     try {
       setFilesError('');
       const remotePaths = entries.map((entry) => joinRemotePath(remotePath, entry.name, isWindowsHost));
-      const result = await window.guiSSH?.connections.downloadPaths(connectionId, remotePaths);
+      const result = await runWithSudoRetry(
+        t('fileExplorer.sudo.operation.download', language),
+        remotePath,
+        (options) => window.guiSSH!.connections.downloadPaths(connectionId, remotePaths, options),
+      );
 
       if (!result?.canceled) {
         setFilesError('');
@@ -1438,33 +1576,41 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
     } catch (error) {
       setFilesError(getErrorMessage(error));
     }
-  }, [closeContextMenu, connectionId, downloadFile, isWindowsHost, remotePath]);
+  }, [closeContextMenu, connectionId, downloadFile, isWindowsHost, language, remotePath, runWithSudoRetry]);
 
   const uploadFiles = useCallback(async () => {
     closeContextMenu();
     try {
       setFilesError('');
-      const result = await window.guiSSH?.connections.uploadFiles(connectionId, remotePath);
+      const result = await runWithSudoRetry(
+        t('fileExplorer.sudo.operation.upload', language),
+        remotePath,
+        (options) => window.guiSSH!.connections.uploadFiles(connectionId, remotePath, options),
+      );
       if (!result?.canceled) {
         refreshFiles();
       }
     } catch (error) {
       setFilesError(getErrorMessage(error));
     }
-  }, [closeContextMenu, connectionId, remotePath, refreshFiles]);
+  }, [closeContextMenu, connectionId, language, remotePath, refreshFiles, runWithSudoRetry]);
 
   const uploadFolders = useCallback(async () => {
     closeContextMenu();
     try {
       setFilesError('');
-      const result = await window.guiSSH?.connections.uploadPaths(connectionId, remotePath);
+      const result = await runWithSudoRetry(
+        t('fileExplorer.sudo.operation.upload', language),
+        remotePath,
+        (options) => window.guiSSH!.connections.uploadPaths(connectionId, remotePath, options),
+      );
       if (!result?.canceled) {
         refreshFiles();
       }
     } catch (error) {
       setFilesError(getErrorMessage(error));
     }
-  }, [closeContextMenu, connectionId, remotePath, refreshFiles]);
+  }, [closeContextMenu, connectionId, language, remotePath, refreshFiles, runWithSudoRetry]);
 
   const cancelTransfer = useCallback(async () => {
     try {
@@ -2166,6 +2312,47 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
               <button type="button" className="notepad-modal-btn danger" onClick={() => void confirmDeleteSelectedEntries()}>{t('fileExplorer.context.delete', language)}</button>
             </div>
           </div>
+        </div>,
+        document.body,
+      ) : null}
+
+      {sudoPrompt ? createPortal(
+        <div className="notepad-modal-overlay" role="presentation" onClick={() => resolveSudoPrompt(null)}>
+          <form
+            className="notepad-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="explorer-sudo-title"
+            onSubmit={(event) => {
+              event.preventDefault();
+              resolveSudoPrompt(sudoPrompt.password);
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div id="explorer-sudo-title" className="notepad-modal-title">{t('fileExplorer.sudo.title', language)}</div>
+            <div className="notepad-modal-message">
+              {t('fileExplorer.sudo.message', language, {
+                operation: sudoPrompt.operation,
+                target: sudoPrompt.target,
+              })}
+            </div>
+            {sudoPrompt.error ? <div className="notepad-modal-message">{sudoPrompt.error}</div> : null}
+            <label className="notepad-modal-field">
+              <span>{t('fileExplorer.sudo.password', language)}</span>
+              <input
+                ref={sudoPasswordInputRef}
+                className="notepad-modal-input"
+                type="password"
+                value={sudoPrompt.password}
+                autoComplete="current-password"
+                onChange={(event) => setSudoPrompt((current) => current ? { ...current, password: event.target.value } : current)}
+              />
+            </label>
+            <div className="notepad-modal-actions">
+              <button type="button" className="notepad-modal-btn" onClick={() => resolveSudoPrompt(null)}>{t('common.cancel', language)}</button>
+              <button type="submit" className="notepad-modal-btn primary">{t('fileExplorer.sudo.continue', language)}</button>
+            </div>
+          </form>
         </div>,
         document.body,
       ) : null}

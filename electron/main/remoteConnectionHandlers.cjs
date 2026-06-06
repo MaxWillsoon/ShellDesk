@@ -11,6 +11,7 @@ const {
 } = require('./constants.cjs');
 const {
   getActiveConnection,
+  registerConnectionCleanup,
   withActiveConnectionClientRetry,
 } = require('./connectionManager.cjs');
 const {
@@ -31,6 +32,15 @@ const maxZmodemUploadSelectionAgeMs = 30 * 60 * 1000;
 const maxDirectorySymlinkTargetStats = 80;
 const remoteEntryCollator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
 const zmodemUploadSelections = new Map();
+const elevatedSftpSessions = new Map();
+
+let SFTPWrapper = null;
+try {
+  const sftpModule = require('ssh2/lib/protocol/SFTP');
+  SFTPWrapper = sftpModule.SFTP || sftpModule;
+} catch (error) {
+  console.info(`[shelldesk] sudo SFTP wrapper unavailable: ${error?.message ?? error}`);
+}
 
 function validateRemotePath(rawPath) {
   const remotePath = typeof rawPath === 'string' && rawPath.trim() ? rawPath.trim() : '.';
@@ -1690,6 +1700,10 @@ function execRemoteCommandStream(event, client, command, stdin = '', streamId) {
 }
 
 function registerRemoteConnectionHandlers(registerIpcHandler) {
+  registerConnectionCleanup((connectionId) => {
+    closeElevatedSftpSession(connectionId);
+  });
+
   registerIpcHandler('connection:start-terminal', async (event, connectionId, rawTerminalId, rawColumns, rawRows, rawLaunchOptions) => {
     const terminalId = validateTerminalId(rawTerminalId);
     const columns = Number(rawColumns) || 100;
@@ -1903,85 +1917,80 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     return true;
   });
 
-  registerIpcHandler('connection:list-directory', async (_event, connectionId, rawPath) => {
+  registerIpcHandler('connection:list-directory', async (_event, connectionId, rawPath, rawOptions) => {
     const remotePath = validateRemotePath(rawPath);
+    const options = readFilePrivilegeOptions(rawOptions);
     const directory = await withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
-      try {
-        return await listRemoteDirectory(activeConnection.client, remotePath);
-      } catch (error) {
-        if (activeConnection.displayHost.systemType === 'windows' || !isPermissionDeniedError(error) || !getConfiguredPrivilege(activeConnection)) {
-          throw error;
-        }
-
-        return listRemoteDirectoryWithPrivilege(activeConnection, remotePath);
-      }
+      return withSftpPermissionFallback(
+        activeConnection,
+        options,
+        () => listRemoteDirectory(activeConnection.client, remotePath),
+        (_sftp, sudoClient) => listRemoteDirectory(sudoClient, remotePath),
+        () => listRemoteDirectoryWithPrivilege(activeConnection, remotePath, options),
+      );
     });
 
     return directory;
   });
 
-  registerIpcHandler('connection:create-directory', async (_event, connectionId, rawPath) => {
+  registerIpcHandler('connection:create-directory', async (_event, connectionId, rawPath, rawOptions) => {
     const remotePath = validateMutableRemotePath(rawPath);
+    const options = readFilePrivilegeOptions(rawOptions);
     await withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
-      try {
-        await createRemoteDirectory(activeConnection.client, remotePath);
-      } catch (error) {
-        if (activeConnection.displayHost.systemType === 'windows' || !isPermissionDeniedError(error) || !getConfiguredPrivilege(activeConnection)) {
-          throw error;
-        }
-
-        await createRemoteDirectoryWithPrivilege(activeConnection, remotePath);
-      }
+      await withSftpPermissionFallback(
+        activeConnection,
+        options,
+        () => createRemoteDirectory(activeConnection.client, remotePath),
+        (_sftp, sudoClient) => createRemoteDirectory(sudoClient, remotePath),
+        () => createRemoteDirectoryWithPrivilege(activeConnection, remotePath, options),
+      );
     });
     return true;
   });
 
-  registerIpcHandler('connection:delete-path', async (_event, connectionId, rawPath, rawType) => {
+  registerIpcHandler('connection:delete-path', async (_event, connectionId, rawPath, rawType, rawOptions) => {
     const remotePath = validateMutableRemotePath(rawPath);
     const entryType = rawType === 'directory' ? 'directory' : 'file';
+    const options = readFilePrivilegeOptions(rawOptions);
     await withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
-      try {
-        await deleteRemotePath(activeConnection.client, remotePath, entryType);
-      } catch (error) {
-        if (activeConnection.displayHost.systemType === 'windows' || !isPermissionDeniedError(error) || !getConfiguredPrivilege(activeConnection)) {
-          throw error;
-        }
-
-        await deleteRemotePathWithPrivilege(activeConnection, remotePath, entryType);
-      }
+      await withSftpPermissionFallback(
+        activeConnection,
+        options,
+        () => deleteRemotePath(activeConnection.client, remotePath, entryType),
+        (_sftp, sudoClient) => deleteRemotePath(sudoClient, remotePath, entryType),
+        () => deleteRemotePathWithPrivilege(activeConnection, remotePath, entryType, options),
+      );
     });
     return true;
   });
 
-  registerIpcHandler('connection:rename-path', async (_event, connectionId, rawOldPath, rawNewPath) => {
+  registerIpcHandler('connection:rename-path', async (_event, connectionId, rawOldPath, rawNewPath, rawOptions) => {
     const oldPath = validateMutableRemotePath(rawOldPath);
     const newPath = validateMutableRemotePath(rawNewPath);
+    const options = readFilePrivilegeOptions(rawOptions);
     await withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
-      try {
-        await renameRemotePath(activeConnection.client, oldPath, newPath);
-      } catch (error) {
-        if (activeConnection.displayHost.systemType === 'windows' || !isPermissionDeniedError(error) || !getConfiguredPrivilege(activeConnection)) {
-          throw error;
-        }
-
-        await renameRemotePathWithPrivilege(activeConnection, oldPath, newPath);
-      }
+      await withSftpPermissionFallback(
+        activeConnection,
+        options,
+        () => renameRemotePath(activeConnection.client, oldPath, newPath),
+        (_sftp, sudoClient) => renameRemotePath(sudoClient, oldPath, newPath),
+        () => renameRemotePathWithPrivilege(activeConnection, oldPath, newPath, options),
+      );
     });
     return true;
   });
 
-  registerIpcHandler('connection:create-file', async (_event, connectionId, rawPath) => {
+  registerIpcHandler('connection:create-file', async (_event, connectionId, rawPath, rawOptions) => {
     const remotePath = validateMutableRemotePath(rawPath);
+    const options = readFilePrivilegeOptions(rawOptions);
     await withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
-      try {
-        await createRemoteFile(activeConnection.client, remotePath);
-      } catch (error) {
-        if (activeConnection.displayHost.systemType === 'windows' || !isPermissionDeniedError(error) || !getConfiguredPrivilege(activeConnection)) {
-          throw error;
-        }
-
-        await createRemoteFileWithPrivilege(activeConnection, remotePath);
-      }
+      await withSftpPermissionFallback(
+        activeConnection,
+        options,
+        () => createRemoteFile(activeConnection.client, remotePath),
+        (_sftp, sudoClient) => createRemoteFile(sudoClient, remotePath),
+        () => createRemoteFileWithPrivilege(activeConnection, remotePath, options),
+      );
     });
     return true;
   });
@@ -2039,18 +2048,20 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
 
   function readFilePrivilegeOptions(rawOptions) {
     if (!rawOptions || typeof rawOptions !== 'object' || Array.isArray(rawOptions)) {
-      return { sudoPassword: '' };
+      return {};
     }
 
-    const sudoPassword = typeof rawOptions.sudoPassword === 'string'
-      ? readBoundedString(rawOptions.sudoPassword, 'sudo 密码', 4096, {
+    const options = {};
+
+    if (typeof rawOptions.sudoPassword === 'string') {
+      options.sudoPassword = readBoundedString(rawOptions.sudoPassword, 'sudo 密码', 4096, {
           required: false,
           trim: false,
           rejectLineBreaks: true,
-        })
-      : '';
+        });
+    }
 
-    return { sudoPassword };
+    return options;
   }
 
   function getConfiguredPrivilege(activeConnection, options = {}) {
@@ -2058,10 +2069,10 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       return null;
     }
 
-    if (options.sudoPassword) {
+    if (Object.prototype.hasOwnProperty.call(options, 'sudoPassword')) {
       return {
         mode: 'sudo',
-        password: options.sudoPassword,
+        password: options.sudoPassword ?? '',
       };
     }
 
@@ -2078,7 +2089,7 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
   }
 
   function createPrivilegeStdin(privilege, stdin = '') {
-    return privilege?.password ? `${privilege.password}\n${stdin}` : stdin;
+    return privilege ? `${privilege.password ?? ''}\n${stdin}` : stdin;
   }
 
   function stripSuRootPasswordPrompt(stderr) {
@@ -2222,6 +2233,364 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     }
   }
 
+  function hasSudoPasswordOption(options = {}) {
+    return Object.prototype.hasOwnProperty.call(options, 'sudoPassword');
+  }
+
+  function isSudoPrivilegeMode(activeConnection) {
+    return activeConnection.displayHost.systemType !== 'windows' &&
+      activeConnection.privilegeConfig?.mode === 'sudo';
+  }
+
+  function canAttemptSudoSftp(activeConnection) {
+    return Boolean(SFTPWrapper) && isSudoPrivilegeMode(activeConnection);
+  }
+
+  function isElevationPromptError(error) {
+    const message = String(error?.message ?? error ?? '');
+
+    return message.startsWith('SHELLDESK_ELEVATION_REQUIRED:') ||
+      message.startsWith('SHELLDESK_ELEVATION_AUTH_FAILED:');
+  }
+
+  function closeElevatedSftpSession(connectionId) {
+    const entry = elevatedSftpSessions.get(connectionId);
+    elevatedSftpSessions.delete(connectionId);
+
+    if (!entry || entry.pending) {
+      return;
+    }
+
+    entry.closed = true;
+
+    try {
+      if (entry.sftp && typeof entry.sftp.end === 'function') {
+        entry.sftp.end();
+      } else if (entry.sftp && typeof entry.sftp.close === 'function') {
+        entry.sftp.close();
+      }
+    } catch {
+      // Ignore cleanup failures; the owning SSH client is closing too.
+    }
+  }
+
+  function createBorrowedSftpChannel(sftp) {
+    return new Proxy(sftp, {
+      get(target, prop) {
+        if (prop === 'end' || prop === 'close') {
+          return () => undefined;
+        }
+
+        const value = target[prop];
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+  }
+
+  function createBorrowedSftpClient(sftp) {
+    return {
+      sftp(callback) {
+        callback(null, createBorrowedSftpChannel(sftp));
+      },
+    };
+  }
+
+  function buildSudoSftpCommand() {
+    const prompt = 'SHELLDESK_SUDO_PASSWORD:';
+    const readyMarker = 'SHELLDESK_SFTP_READY';
+    const serverScript = [
+      'server_path=',
+      'for candidate in /usr/lib/openssh/sftp-server /usr/libexec/openssh/sftp-server /usr/lib/ssh/sftp-server /usr/libexec/sftp-server /usr/local/libexec/sftp-server /usr/local/lib/sftp-server; do',
+      '  if [ -x "$candidate" ]; then server_path=$candidate; break; fi',
+      'done',
+      'if [ -z "$server_path" ] && command -v sftp-server >/dev/null 2>&1; then server_path=$(command -v sftp-server); fi',
+      'if [ -z "$server_path" ]; then exit 127; fi',
+      `printf ${escapeShellSingleQuotedArg(readyMarker)}`,
+      'exec "$server_path" -e',
+    ].join('\n');
+    const quotedScript = escapeShellSingleQuotedArg(serverScript);
+    const quotedPrompt = escapeShellSingleQuotedArg(prompt);
+
+    return {
+      command: [
+        'if [ "$(id -u 2>/dev/null)" = "0" ]; then',
+        `sh -c ${quotedScript};`,
+        'else',
+        `sudo -S -p ${quotedPrompt} sh -c ${quotedScript};`,
+        'fi',
+      ].join(' '),
+      prompt,
+      readyMarker,
+    };
+  }
+
+  function connectSudoSftpChannel(activeConnection, options = {}) {
+    if (!SFTPWrapper) {
+      return Promise.reject(new Error('当前 ssh2 版本无法创建 sudo SFTP 通道。'));
+    }
+
+    const hasPassword = hasSudoPasswordOption(options);
+    const sudoPassword = hasPassword ? options.sudoPassword ?? '' : '';
+    const { command, prompt, readyMarker } = buildSudoSftpCommand();
+    const readyMarkerBuffer = Buffer.from(readyMarker);
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let sftpInitialized = false;
+      let sftpCreated = false;
+      let passwordSent = false;
+      let stdoutBuffer = Buffer.alloc(0);
+      let pendingAfterMarker = null;
+      let stderrText = '';
+      let sftp = null;
+      let streamRef = null;
+
+      const finish = (error, result) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        clearTimeout(timeout);
+
+        if (streamRef) {
+          streamRef.removeListener('data', onStdout);
+          streamRef.stderr?.removeListener('data', onStderr);
+        }
+
+        if (error) {
+          try { streamRef?.destroy?.(); } catch { /* ignore */ }
+          reject(error);
+          return;
+        }
+
+        resolve(result);
+      };
+
+      const createFailureFromExit = (code) => {
+        const result = { stdout: '', stderr: stderrText.trim(), code: code ?? 1 };
+
+        if (isSudoPasswordRequired(result)) {
+          return createElevationRequiredError(result);
+        }
+
+        if (passwordSent || isSudoAuthenticationFailure(result)) {
+          return createElevationAuthFailedError(result);
+        }
+
+        if (code === 127) {
+          return new Error('远程系统未找到可执行的 sftp-server，无法启用 sudo SFTP 通道。');
+        }
+
+        return new Error(result.stderr || `sudo SFTP 启动失败，退出码 ${code ?? 1}`);
+      };
+
+      const createSftp = () => {
+        if (sftpCreated) {
+          return;
+        }
+
+        sftpCreated = true;
+        const chanInfo = {
+          type: 'sftp',
+          incoming: streamRef.incoming,
+          outgoing: streamRef.outgoing,
+        };
+
+        try {
+          sftp = new SFTPWrapper(activeConnection.client, chanInfo);
+
+          if (activeConnection.client._chanMgr && typeof streamRef.incoming?.id === 'number') {
+            activeConnection.client._chanMgr.update(streamRef.incoming.id, sftp);
+          }
+
+          sftp.once('ready', () => {
+            sftpInitialized = true;
+            finish(null, sftp);
+          });
+          sftp.once('error', (error) => {
+            if (!sftpInitialized) {
+              finish(error);
+            }
+          });
+          streamRef.once('end', () => {
+            try { sftp.push(null); } catch { /* ignore */ }
+          });
+
+          sftp._init();
+
+          if (pendingAfterMarker?.length) {
+            sftp.push(pendingAfterMarker);
+            pendingAfterMarker = null;
+          }
+        } catch (error) {
+          finish(error);
+        }
+      };
+
+      const onStdout = (chunk) => {
+        const buffer = Buffer.from(chunk);
+        stdoutBuffer = stdoutBuffer.length ? Buffer.concat([stdoutBuffer, buffer]) : buffer;
+        const markerIndex = stdoutBuffer.indexOf(readyMarkerBuffer);
+
+        if (markerIndex === -1) {
+          if (stdoutBuffer.length > 1024) {
+            stdoutBuffer = stdoutBuffer.subarray(stdoutBuffer.length - 1024);
+          }
+          return;
+        }
+
+        const afterMarkerIndex = markerIndex + readyMarkerBuffer.length;
+        pendingAfterMarker = afterMarkerIndex < stdoutBuffer.length
+          ? stdoutBuffer.subarray(afterMarkerIndex)
+          : null;
+        stdoutBuffer = Buffer.alloc(0);
+        streamRef.removeListener('data', onStdout);
+        createSftp();
+      };
+
+      const onStderr = (chunk) => {
+        stderrText = `${stderrText}${Buffer.from(chunk).toString('utf8')}`.slice(-4096);
+
+        if (!stderrText.includes(prompt)) {
+          return;
+        }
+
+        stderrText = '';
+
+        if (!hasPassword) {
+          finish(createElevationRequiredError({
+            stderr: '需要 sudo 密码以打开提权 SFTP 通道。',
+            code: 1,
+          }));
+          return;
+        }
+
+        passwordSent = true;
+        streamRef.write(`${sudoPassword}\n`);
+      };
+
+      const timeout = setTimeout(() => {
+        finish(new Error('sudo SFTP 握手超时。可能是 sudo 密码错误、sudo 需要 TTY，或当前账号没有 sudo 权限。'));
+      }, 20000);
+
+      activeConnection.client.exec(command, { pty: false }, (error, stream) => {
+        if (error) {
+          finish(error);
+          return;
+        }
+
+        streamRef = stream;
+        stream.on('data', onStdout);
+        stream.stderr.on('data', onStderr);
+        stream.once('error', finish);
+        stream.once('exit', (code) => {
+          if (!sftpInitialized && code !== 0) {
+            finish(createFailureFromExit(code));
+          }
+        });
+      });
+    });
+  }
+
+  async function getSudoSftpChannel(activeConnection, options = {}) {
+    const cached = elevatedSftpSessions.get(activeConnection.id);
+
+    if (cached?.pending) {
+      return cached.promise;
+    }
+
+    if (cached?.sftp && cached.client === activeConnection.client && !cached.closed) {
+      return cached.sftp;
+    }
+
+    closeElevatedSftpSession(activeConnection.id);
+
+    const pending = connectSudoSftpChannel(activeConnection, options)
+      .then((sftp) => {
+        const entry = {
+          client: activeConnection.client,
+          sftp,
+          closed: false,
+        };
+        const markClosed = () => {
+          entry.closed = true;
+          if (elevatedSftpSessions.get(activeConnection.id) === entry) {
+            elevatedSftpSessions.delete(activeConnection.id);
+          }
+        };
+
+        sftp.once?.('close', markClosed);
+        sftp.once?.('end', markClosed);
+        sftp.once?.('error', markClosed);
+        elevatedSftpSessions.set(activeConnection.id, entry);
+        return sftp;
+      })
+      .catch((error) => {
+        const current = elevatedSftpSessions.get(activeConnection.id);
+        if (current?.promise === pending) {
+          elevatedSftpSessions.delete(activeConnection.id);
+        }
+        throw error;
+      });
+
+    elevatedSftpSessions.set(activeConnection.id, {
+      pending: true,
+      promise: pending,
+      client: activeConnection.client,
+    });
+
+    return pending;
+  }
+
+  async function createSudoSftpSession(activeConnection, options, callback) {
+    const sftp = await getSudoSftpChannel(activeConnection, options);
+    return callback(createBorrowedSftpChannel(sftp), createBorrowedSftpClient(sftp));
+  }
+
+  async function withSftpPermissionFallback(activeConnection, options, regularOperation, sudoSftpOperation, privilegedOperation) {
+    try {
+      return await regularOperation();
+    } catch (error) {
+      if (activeConnection.displayHost.systemType === 'windows' || !isPermissionDeniedError(error)) {
+        throw error;
+      }
+
+      let sudoSftpError = null;
+
+      if (canAttemptSudoSftp(activeConnection)) {
+        try {
+          return await createSudoSftpSession(activeConnection, options, sudoSftpOperation);
+        } catch (errorWithSudoSftp) {
+          if (isElevationPromptError(errorWithSudoSftp)) {
+            throw errorWithSudoSftp;
+          }
+
+          sudoSftpError = errorWithSudoSftp;
+        }
+      }
+
+      const configuredPrivilege = getConfiguredPrivilege(activeConnection, options);
+
+      if (privilegedOperation && configuredPrivilege) {
+        return privilegedOperation();
+      }
+
+      if (isSudoPrivilegeMode(activeConnection) && !hasSudoPasswordOption(options)) {
+        throw createElevationRequiredError({
+          stderr: '需要 sudo 密码才能访问该远程路径。',
+          code: 1,
+        });
+      }
+
+      if (sudoSftpError) {
+        throw sudoSftpError;
+      }
+
+      throw error;
+    }
+  }
+
   async function readRemoteFileWithPrivilege(client, remotePath, privilege = null) {
     const script = [
       'remote_path=$1',
@@ -2307,8 +2676,8 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     throw new Error(result.stderr.trim() || `提权写入文件失败，退出码 ${result.code}`);
   }
 
-  async function execPrivilegedFileScript(activeConnection, script, args, label) {
-    const privilege = getConfiguredPrivilege(activeConnection);
+  async function execPrivilegedFileScript(activeConnection, script, args, label, options = {}) {
+    const privilege = getConfiguredPrivilege(activeConnection, options);
 
     if (!privilege) {
       throw new Error(`${label}失败：当前主机未配置可用的提权方式。`);
@@ -2328,7 +2697,7 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     throw new Error(result.stderr.trim() || `${label}失败，退出码 ${result.code}`);
   }
 
-  async function listRemoteDirectoryWithPrivilege(activeConnection, remotePath) {
+  async function listRemoteDirectoryWithPrivilege(activeConnection, remotePath, options = {}) {
     const script = [
       'target=$1',
       'if [ ! -d "$target" ]; then printf "%s\\n" "远程目录不存在。" >&2; exit 40; fi',
@@ -2352,33 +2721,33 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       '  printf "ENTRY\\t%s\\t%s\\t%s\\t%s\\t%s\\n" "$(printf "%s" "$name" | base64 | tr -d "\\n")" "$type" "$target_type" "$size" "$mtime"',
       'done',
     ].join('\n');
-    const result = await execPrivilegedFileScript(activeConnection, script, [remotePath], '提权读取目录');
+    const result = await execPrivilegedFileScript(activeConnection, script, [remotePath], '提权读取目录', options);
 
     return parsePrivilegedDirectoryListing(result.stdout, remotePath);
   }
 
-  async function createRemoteDirectoryWithPrivilege(activeConnection, remotePath) {
+  async function createRemoteDirectoryWithPrivilege(activeConnection, remotePath, options = {}) {
     const script = [
       'target=$1',
       'mkdir -- "$target"',
     ].join('\n');
 
-    await execPrivilegedFileScript(activeConnection, script, [remotePath], '提权创建目录');
+    await execPrivilegedFileScript(activeConnection, script, [remotePath], '提权创建目录', options);
     return true;
   }
 
-  async function ensureRemoteDirectoryWithPrivilege(activeConnection, remotePath) {
+  async function ensureRemoteDirectoryWithPrivilege(activeConnection, remotePath, options = {}) {
     const script = [
       'target=$1',
       'if [ -d "$target" ]; then exit 0; fi',
       'mkdir -- "$target"',
     ].join('\n');
 
-    await execPrivilegedFileScript(activeConnection, script, [remotePath], '提权创建目录');
+    await execPrivilegedFileScript(activeConnection, script, [remotePath], '提权创建目录', options);
     return true;
   }
 
-  async function createRemoteFileWithPrivilege(activeConnection, remotePath) {
+  async function createRemoteFileWithPrivilege(activeConnection, remotePath, options = {}) {
     const script = [
       'target=$1',
       'parent_dir=$(dirname -- "$target") || exit 1',
@@ -2386,22 +2755,22 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       ': > "$target"',
     ].join('\n');
 
-    await execPrivilegedFileScript(activeConnection, script, [remotePath], '提权创建文件');
+    await execPrivilegedFileScript(activeConnection, script, [remotePath], '提权创建文件', options);
     return true;
   }
 
-  async function renameRemotePathWithPrivilege(activeConnection, oldPath, newPath) {
+  async function renameRemotePathWithPrivilege(activeConnection, oldPath, newPath, options = {}) {
     const script = [
       'old_path=$1',
       'new_path=$2',
       'mv -- "$old_path" "$new_path"',
     ].join('\n');
 
-    await execPrivilegedFileScript(activeConnection, script, [oldPath, newPath], '提权重命名');
+    await execPrivilegedFileScript(activeConnection, script, [oldPath, newPath], '提权重命名', options);
     return true;
   }
 
-  async function deleteRemotePathWithPrivilege(activeConnection, remotePath, entryType) {
+  async function deleteRemotePathWithPrivilege(activeConnection, remotePath, entryType, options = {}) {
     const script = [
       'target=$1',
       'entry_type=$2',
@@ -2418,11 +2787,11 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       'fi',
     ].join('\n');
 
-    await execPrivilegedFileScript(activeConnection, script, [remotePath, entryType, String(maxRemoteDeleteTargets)], '提权删除');
+    await execPrivilegedFileScript(activeConnection, script, [remotePath, entryType, String(maxRemoteDeleteTargets)], '提权删除', options);
     return true;
   }
 
-  async function chmodRemotePathWithPrivilege(activeConnection, remotePath, mode, recursive) {
+  async function chmodRemotePathWithPrivilege(activeConnection, remotePath, mode, recursive, options = {}) {
     const script = [
       'target=$1',
       'mode=$2',
@@ -2444,29 +2813,36 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       script,
       [remotePath, mode.toString(8), recursive ? '1' : '0', String(maxRemotePermissionTargets)],
       '提权修改权限',
+      options,
     );
     return true;
   }
 
-  registerIpcHandler('connection:stat-path', async (_event, connectionId, rawPath) => {
+  registerIpcHandler('connection:stat-path', async (_event, connectionId, rawPath, rawOptions) => {
     const remotePath = validateRemotePath(rawPath);
+    const privilegeOptions = readFilePrivilegeOptions(rawOptions);
     return withActiveConnectionClientRetry(connectionId, (activeConnection) =>
-      statRemotePath(activeConnection.client, remotePath));
+      withSftpPermissionFallback(
+        activeConnection,
+        privilegeOptions,
+        () => statRemotePath(activeConnection.client, remotePath),
+        (_sftp, sudoClient) => statRemotePath(sudoClient, remotePath),
+        null,
+      ));
   });
 
   registerIpcHandler('connection:set-path-permissions', async (_event, connectionId, rawPath, rawOptions) => {
     const remotePath = validateMutableRemotePath(rawPath);
     const options = readPathPermissionOptions(rawOptions);
+    const privilegeOptions = readFilePrivilegeOptions(rawOptions);
     await withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
-      try {
-        await chmodRemotePath(activeConnection.client, remotePath, options.mode, options.recursive);
-      } catch (error) {
-        if (activeConnection.displayHost.systemType === 'windows' || !isPermissionDeniedError(error) || !getConfiguredPrivilege(activeConnection)) {
-          throw error;
-        }
-
-        await chmodRemotePathWithPrivilege(activeConnection, remotePath, options.mode, options.recursive);
-      }
+      await withSftpPermissionFallback(
+        activeConnection,
+        privilegeOptions,
+        () => chmodRemotePath(activeConnection.client, remotePath, options.mode, options.recursive),
+        (_sftp, sudoClient) => chmodRemotePath(sudoClient, remotePath, options.mode, options.recursive),
+        () => chmodRemotePathWithPrivilege(activeConnection, remotePath, options.mode, options.recursive, privilegeOptions),
+      );
     });
     return true;
   });
@@ -2900,7 +3276,7 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     return { directories, files, totalBytes, itemCount };
   }
 
-  async function collectRemoteDownloadPlanWithPrivilege(activeConnection, roots, queue) {
+  async function collectRemoteDownloadPlanWithPrivilege(activeConnection, roots, queue, options = {}) {
     const directories = [];
     const files = [];
     let totalBytes = 0;
@@ -3012,6 +3388,7 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
         script,
         [root.remotePath, root.relativePath, root.fileOnly ? '1' : '0'],
         '提权准备下载',
+        options,
       );
       parseOutput(result.stdout, root);
     }
@@ -3182,8 +3559,8 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     return new Error(result.stderr.trim() || fallbackMessage);
   }
 
-  function transferRemoteFileToLocalWithPrivilege(activeConnection, file, queue) {
-    const privilege = getConfiguredPrivilege(activeConnection);
+  function transferRemoteFileToLocalWithPrivilege(activeConnection, file, queue, options = {}) {
+    const privilege = getConfiguredPrivilege(activeConnection, options);
 
     if (!privilege) {
       throw new Error('下载失败：当前主机未配置可用的提权方式。');
@@ -3279,8 +3656,8 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     });
   }
 
-  function transferLocalFileToRemoteWithPrivilege(activeConnection, file, queue) {
-    const privilege = getConfiguredPrivilege(activeConnection);
+  function transferLocalFileToRemoteWithPrivilege(activeConnection, file, queue, options = {}) {
+    const privilege = getConfiguredPrivilege(activeConnection, options);
 
     if (!privilege) {
       throw new Error('上传失败：当前主机未配置可用的提权方式。');
@@ -3389,27 +3766,55 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     }
   }
 
-  async function runDownloadTransfer(connectionId, sender, roots) {
+  async function runDownloadTransfer(connectionId, sender, roots, options = {}) {
     return runTransferQueue(connectionId, 'download', sender, async (queue) => {
       let totalBytes = 0;
       let totalFiles = 0;
       let totalItems = 0;
 
       await withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
-        const privilege = getConfiguredPrivilege(activeConnection);
         let plan = null;
-        let privilegedPlan = false;
+        let privilegedPlan = '';
 
         try {
           plan = await createSftpSession(activeConnection.client, (sftp) =>
             collectRemoteDownloadPlan(sftp, roots, queue));
         } catch (error) {
-          if (activeConnection.displayHost.systemType === 'windows' || !isPermissionDeniedError(error) || !privilege) {
+          if (activeConnection.displayHost.systemType === 'windows' || !isPermissionDeniedError(error)) {
             throw error;
           }
 
-          plan = await collectRemoteDownloadPlanWithPrivilege(activeConnection, roots, queue);
-          privilegedPlan = true;
+          let sudoSftpError = null;
+
+          if (canAttemptSudoSftp(activeConnection)) {
+            try {
+              plan = await createSudoSftpSession(activeConnection, options, (sudoSftp) =>
+                collectRemoteDownloadPlan(sudoSftp, roots, queue));
+              privilegedPlan = 'sudo-sftp';
+            } catch (errorWithSudoSftp) {
+              if (isElevationPromptError(errorWithSudoSftp)) {
+                throw errorWithSudoSftp;
+              }
+
+              sudoSftpError = errorWithSudoSftp;
+            }
+          }
+
+          if (!plan && getConfiguredPrivilege(activeConnection, options)) {
+            plan = await collectRemoteDownloadPlanWithPrivilege(activeConnection, roots, queue, options);
+            privilegedPlan = 'command';
+          }
+
+          if (!plan && isSudoPrivilegeMode(activeConnection) && !hasSudoPasswordOption(options)) {
+            throw createElevationRequiredError({
+              stderr: '需要 sudo 密码才能下载该远程路径。',
+              code: 1,
+            });
+          }
+
+          if (!plan) {
+            throw sudoSftpError || error;
+          }
         }
 
         totalBytes = plan.totalBytes;
@@ -3423,10 +3828,20 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
           queue.completeDirectory(directory.relativePath);
         }
 
-        if (privilegedPlan) {
+        if (privilegedPlan === 'sudo-sftp') {
+          await createSudoSftpSession(activeConnection, options, async (sudoSftp) => {
+            for (const file of plan.files) {
+              queue.assertActive();
+              await transferRemoteFileToLocal(sudoSftp, file, queue);
+            }
+          });
+          return;
+        }
+
+        if (privilegedPlan === 'command') {
           for (const file of plan.files) {
             queue.assertActive();
-            await transferRemoteFileToLocalWithPrivilege(activeConnection, file, queue);
+            await transferRemoteFileToLocalWithPrivilege(activeConnection, file, queue, options);
           }
           return;
         }
@@ -3438,11 +3853,44 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
             try {
               await transferRemoteFileToLocal(sftp, file, queue);
             } catch (error) {
-              if (activeConnection.displayHost.systemType === 'windows' || !isPermissionDeniedError(error) || !privilege) {
+              if (activeConnection.displayHost.systemType === 'windows' || !isPermissionDeniedError(error)) {
                 throw error;
               }
 
-              await transferRemoteFileToLocalWithPrivilege(activeConnection, file, queue);
+              let sudoSftpError = null;
+              let transferredWithSudoSftp = false;
+
+              if (canAttemptSudoSftp(activeConnection)) {
+                try {
+                  await createSudoSftpSession(activeConnection, options, (sudoSftp) =>
+                    transferRemoteFileToLocal(sudoSftp, file, queue));
+                  transferredWithSudoSftp = true;
+                } catch (errorWithSudoSftp) {
+                  if (isElevationPromptError(errorWithSudoSftp)) {
+                    throw errorWithSudoSftp;
+                  }
+
+                  sudoSftpError = errorWithSudoSftp;
+                }
+              }
+
+              if (transferredWithSudoSftp) {
+                continue;
+              }
+
+              if (getConfiguredPrivilege(activeConnection, options)) {
+                await transferRemoteFileToLocalWithPrivilege(activeConnection, file, queue, options);
+                continue;
+              }
+
+              if (isSudoPrivilegeMode(activeConnection) && !hasSudoPasswordOption(options)) {
+                throw createElevationRequiredError({
+                  stderr: '需要 sudo 密码才能下载该远程文件。',
+                  code: 1,
+                });
+              }
+
+              throw sudoSftpError || error;
             }
           }
         });
@@ -3452,14 +3900,12 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     });
   }
 
-  async function runUploadTransfer(connectionId, sender, localPaths, remoteDirectory) {
+  async function runUploadTransfer(connectionId, sender, localPaths, remoteDirectory, options = {}) {
     return runTransferQueue(connectionId, 'upload', sender, async (queue) => {
       const plan = collectLocalUploadPlan(localPaths, remoteDirectory, queue);
       queue.setTotals(plan.totalBytes, plan.files.length, plan.itemCount);
 
       await withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
-        const privilege = getConfiguredPrivilege(activeConnection);
-
         await createSftpSession(activeConnection.client, async (sftp) => {
           for (const directory of plan.directories) {
             queue.assertActive();
@@ -3467,11 +3913,42 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
             try {
               await makeSftpDirectory(sftp, directory.remotePath);
             } catch (error) {
-              if (activeConnection.displayHost.systemType === 'windows' || !isPermissionDeniedError(error) || !privilege) {
+              if (activeConnection.displayHost.systemType === 'windows' || !isPermissionDeniedError(error)) {
                 throw error;
               }
 
-              await ensureRemoteDirectoryWithPrivilege(activeConnection, directory.remotePath);
+              let sudoSftpError = null;
+              let createdWithSudoSftp = false;
+
+              if (canAttemptSudoSftp(activeConnection)) {
+                try {
+                  await createSudoSftpSession(activeConnection, options, (sudoSftp) =>
+                    makeSftpDirectory(sudoSftp, directory.remotePath));
+                  createdWithSudoSftp = true;
+                } catch (errorWithSudoSftp) {
+                  if (isElevationPromptError(errorWithSudoSftp)) {
+                    throw errorWithSudoSftp;
+                  }
+
+                  sudoSftpError = errorWithSudoSftp;
+                }
+              }
+
+              if (!createdWithSudoSftp && getConfiguredPrivilege(activeConnection, options)) {
+                await ensureRemoteDirectoryWithPrivilege(activeConnection, directory.remotePath, options);
+                createdWithSudoSftp = true;
+              }
+
+              if (!createdWithSudoSftp && isSudoPrivilegeMode(activeConnection) && !hasSudoPasswordOption(options)) {
+                throw createElevationRequiredError({
+                  stderr: '需要 sudo 密码才能创建远程目录。',
+                  code: 1,
+                });
+              }
+
+              if (!createdWithSudoSftp) {
+                throw sudoSftpError || error;
+              }
             }
 
             queue.completeDirectory(directory.relativePath);
@@ -3483,11 +3960,44 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
             try {
               await transferLocalFileToRemote(sftp, file, queue);
             } catch (error) {
-              if (activeConnection.displayHost.systemType === 'windows' || !isPermissionDeniedError(error) || !privilege) {
+              if (activeConnection.displayHost.systemType === 'windows' || !isPermissionDeniedError(error)) {
                 throw error;
               }
 
-              await transferLocalFileToRemoteWithPrivilege(activeConnection, file, queue);
+              let sudoSftpError = null;
+              let uploadedWithSudoSftp = false;
+
+              if (canAttemptSudoSftp(activeConnection)) {
+                try {
+                  await createSudoSftpSession(activeConnection, options, (sudoSftp) =>
+                    transferLocalFileToRemote(sudoSftp, file, queue));
+                  uploadedWithSudoSftp = true;
+                } catch (errorWithSudoSftp) {
+                  if (isElevationPromptError(errorWithSudoSftp)) {
+                    throw errorWithSudoSftp;
+                  }
+
+                  sudoSftpError = errorWithSudoSftp;
+                }
+              }
+
+              if (uploadedWithSudoSftp) {
+                continue;
+              }
+
+              if (getConfiguredPrivilege(activeConnection, options)) {
+                await transferLocalFileToRemoteWithPrivilege(activeConnection, file, queue, options);
+                continue;
+              }
+
+              if (isSudoPrivilegeMode(activeConnection) && !hasSudoPasswordOption(options)) {
+                throw createElevationRequiredError({
+                  stderr: '需要 sudo 密码才能上传到该远程路径。',
+                  code: 1,
+                });
+              }
+
+              throw sudoSftpError || error;
             }
           }
         });
@@ -3503,8 +4013,9 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     });
   }
 
-  registerIpcHandler('connection:download-file', async (event, connectionId, rawPath) => {
+  registerIpcHandler('connection:download-file', async (event, connectionId, rawPath, rawOptions) => {
     const remotePath = validateRemotePath(rawPath);
+    const options = readFilePrivilegeOptions(rawOptions);
     const remoteFileName = getRemoteFileName(remotePath);
     const senderWindow = BrowserWindow.fromWebContents(event.sender);
 
@@ -3522,13 +4033,14 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       localPath: result.filePath,
       relativePath: remoteFileName,
       fileOnly: true,
-    }]);
+    }], options);
 
     return { ...transferResult, filePath: result.filePath };
   });
 
-  registerIpcHandler('connection:download-paths', async (event, connectionId, rawPaths) => {
+  registerIpcHandler('connection:download-paths', async (event, connectionId, rawPaths, rawOptions) => {
     const remotePaths = readRemotePathList(rawPaths);
+    const options = readFilePrivilegeOptions(rawOptions);
     const senderWindow = BrowserWindow.fromWebContents(event.sender);
 
     const result = await dialog.showOpenDialog(senderWindow ?? BrowserWindow.getAllWindows()[0], {
@@ -3549,13 +4061,14 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
         relativePath: fileName,
       };
     });
-    const transferResult = await runDownloadTransfer(connectionId, event.sender, roots);
+    const transferResult = await runDownloadTransfer(connectionId, event.sender, roots, options);
 
     return { ...transferResult, directoryPath: localDirectory };
   });
 
-  registerIpcHandler('connection:upload-file', async (event, connectionId, rawRemotePath) => {
+  registerIpcHandler('connection:upload-file', async (event, connectionId, rawRemotePath, rawOptions) => {
     const currentPath = validateRemotePath(rawRemotePath);
+    const options = readFilePrivilegeOptions(rawOptions);
     const senderWindow = BrowserWindow.fromWebContents(event.sender);
 
     const result = await dialog.showOpenDialog(senderWindow ?? BrowserWindow.getAllWindows()[0], {
@@ -3567,11 +4080,12 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       return { canceled: true };
     }
 
-    return runUploadTransfer(connectionId, event.sender, result.filePaths.slice(0, 1), currentPath);
+    return runUploadTransfer(connectionId, event.sender, result.filePaths.slice(0, 1), currentPath, options);
   });
 
-  registerIpcHandler('connection:upload-files', async (event, connectionId, rawRemotePath) => {
+  registerIpcHandler('connection:upload-files', async (event, connectionId, rawRemotePath, rawOptions) => {
     const currentPath = validateRemotePath(rawRemotePath);
+    const options = readFilePrivilegeOptions(rawOptions);
     const senderWindow = BrowserWindow.fromWebContents(event.sender);
 
     const result = await dialog.showOpenDialog(senderWindow ?? BrowserWindow.getAllWindows()[0], {
@@ -3584,11 +4098,12 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       return { canceled: true };
     }
 
-    return runUploadTransfer(connectionId, event.sender, result.filePaths, currentPath);
+    return runUploadTransfer(connectionId, event.sender, result.filePaths, currentPath, options);
   });
 
-  registerIpcHandler('connection:upload-paths', async (event, connectionId, rawRemotePath) => {
+  registerIpcHandler('connection:upload-paths', async (event, connectionId, rawRemotePath, rawOptions) => {
     const currentPath = validateRemotePath(rawRemotePath);
+    const options = readFilePrivilegeOptions(rawOptions);
     const senderWindow = BrowserWindow.fromWebContents(event.sender);
 
     const result = await dialog.showOpenDialog(senderWindow ?? BrowserWindow.getAllWindows()[0], {
@@ -3600,7 +4115,7 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       return { canceled: true };
     }
 
-    return runUploadTransfer(connectionId, event.sender, result.filePaths, currentPath);
+    return runUploadTransfer(connectionId, event.sender, result.filePaths, currentPath, options);
   });
 
   registerIpcHandler('connection:get-status', async (_event, connectionId) => {

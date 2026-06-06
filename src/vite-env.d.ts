@@ -299,6 +299,10 @@ type ShellDeskHostSystemType =
 
 type ShellDeskPrivilegeMode = 'sudo' | 'su-root';
 
+interface ShellDeskSudoPasswordOptions {
+  sudoPassword?: string;
+}
+
 interface ShellDeskStoredHostRecord {
   id: string;
   name: string;
@@ -443,7 +447,7 @@ interface ShellDeskRemotePathStat {
   accessedAt: string;
 }
 
-interface ShellDeskRemotePathPermissionOptions {
+interface ShellDeskRemotePathPermissionOptions extends ShellDeskSudoPasswordOptions {
   mode: number;
   recursive?: boolean;
 }
@@ -531,18 +535,18 @@ interface ShellDeskConnectionControls {
     options?: ShellDeskTerminalIpcOptions,
   ) => Promise<boolean>;
   closeTerminal: (connectionId: string, terminalId: string) => Promise<boolean>;
-  listDirectory: (connectionId: string, remotePath: string) => Promise<ShellDeskRemoteDirectoryResult>;
-  createDirectory: (connectionId: string, remotePath: string) => Promise<boolean>;
-  deletePath: (connectionId: string, remotePath: string, entryType: 'directory' | 'file' | 'symlink') => Promise<boolean>;
-  renamePath: (connectionId: string, oldPath: string, newPath: string) => Promise<boolean>;
-  createFile: (connectionId: string, remotePath: string) => Promise<boolean>;
-  readFile: (connectionId: string, remotePath: string, options?: { sudoPassword?: string }) => Promise<string>;
-  writeFile: (connectionId: string, remotePath: string, content: string, options?: { sudoPassword?: string }) => Promise<boolean>;
-  downloadFile: (connectionId: string, remotePath: string) => Promise<{ canceled: boolean; filePath?: string; size?: number }>;
-  downloadPaths: (connectionId: string, remotePaths: string[]) => Promise<{ canceled: boolean; directoryPath?: string; size?: number; fileCount?: number; itemCount?: number }>;
-  uploadFile: (connectionId: string, remotePath: string) => Promise<{ canceled: boolean; remotePath?: string; remotePaths?: string[]; size?: number; fileCount?: number; itemCount?: number }>;
-  uploadFiles: (connectionId: string, remotePath: string) => Promise<{ canceled: boolean; remotePath?: string; remotePaths?: string[]; size?: number; fileCount?: number; itemCount?: number }>;
-  uploadPaths: (connectionId: string, remotePath: string) => Promise<{ canceled: boolean; remotePath?: string; remotePaths?: string[]; size?: number; fileCount?: number; itemCount?: number }>;
+  listDirectory: (connectionId: string, remotePath: string, options?: ShellDeskSudoPasswordOptions) => Promise<ShellDeskRemoteDirectoryResult>;
+  createDirectory: (connectionId: string, remotePath: string, options?: ShellDeskSudoPasswordOptions) => Promise<boolean>;
+  deletePath: (connectionId: string, remotePath: string, entryType: 'directory' | 'file' | 'symlink', options?: ShellDeskSudoPasswordOptions) => Promise<boolean>;
+  renamePath: (connectionId: string, oldPath: string, newPath: string, options?: ShellDeskSudoPasswordOptions) => Promise<boolean>;
+  createFile: (connectionId: string, remotePath: string, options?: ShellDeskSudoPasswordOptions) => Promise<boolean>;
+  readFile: (connectionId: string, remotePath: string, options?: ShellDeskSudoPasswordOptions) => Promise<string>;
+  writeFile: (connectionId: string, remotePath: string, content: string, options?: ShellDeskSudoPasswordOptions) => Promise<boolean>;
+  downloadFile: (connectionId: string, remotePath: string, options?: ShellDeskSudoPasswordOptions) => Promise<{ canceled: boolean; filePath?: string; size?: number }>;
+  downloadPaths: (connectionId: string, remotePaths: string[], options?: ShellDeskSudoPasswordOptions) => Promise<{ canceled: boolean; directoryPath?: string; size?: number; fileCount?: number; itemCount?: number }>;
+  uploadFile: (connectionId: string, remotePath: string, options?: ShellDeskSudoPasswordOptions) => Promise<{ canceled: boolean; remotePath?: string; remotePaths?: string[]; size?: number; fileCount?: number; itemCount?: number }>;
+  uploadFiles: (connectionId: string, remotePath: string, options?: ShellDeskSudoPasswordOptions) => Promise<{ canceled: boolean; remotePath?: string; remotePaths?: string[]; size?: number; fileCount?: number; itemCount?: number }>;
+  uploadPaths: (connectionId: string, remotePath: string, options?: ShellDeskSudoPasswordOptions) => Promise<{ canceled: boolean; remotePath?: string; remotePaths?: string[]; size?: number; fileCount?: number; itemCount?: number }>;
   cancelTransfer: (connectionId: string) => Promise<boolean>;
   checkSftp: (connectionId: string) => Promise<{ available: boolean; error?: string }>;
   selectZmodemUploadFiles: () => Promise<{ canceled: boolean; files: ShellDeskZmodemUploadFile[] }>;
@@ -551,7 +555,7 @@ interface ShellDeskConnectionControls {
   saveZmodemFile: (fileName: string, content: ArrayBuffer | ArrayBufferView | number[]) => Promise<{ canceled: boolean; filePath?: string; size?: number }>;
   compress: (connectionId: string, sourcePaths: string[], format: string, destPath: string) => Promise<{ format: string; destPath: string }>;
   decompress: (connectionId: string, archivePath: string, destDir?: string) => Promise<{ archivePath: string; destDir: string }>;
-  statPath: (connectionId: string, remotePath: string) => Promise<ShellDeskRemotePathStat>;
+  statPath: (connectionId: string, remotePath: string, options?: ShellDeskSudoPasswordOptions) => Promise<ShellDeskRemotePathStat>;
   setPathPermissions: (connectionId: string, remotePath: string, options: ShellDeskRemotePathPermissionOptions) => Promise<boolean>;
   getStatus: (connectionId: string) => Promise<ShellDeskRemoteStatusReport>;
   getSystemInfo: (connectionId: string) => Promise<ShellDeskRemoteSystemInfoReport>;
