@@ -309,6 +309,12 @@
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
+[data-theme="light"] .host-form .privilege-switch button.active {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface-control));
+  box-shadow: none;
+}
+
 [data-theme="light"] .error-banner {
   border-color: rgba(200, 48, 78, 0.25);
   background: rgba(200, 48, 78, 0.06);

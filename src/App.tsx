@@ -472,6 +472,7 @@ interface Host {
   privilegeMode: PrivilegeMode;
   rootPassword: string;
   jumpHostId: string;
+  canBeJumpHost: boolean;
   systemType: HostSystemType;
   systemName: string;
   group: string;
@@ -502,8 +503,8 @@ interface ConnectionErrorNotice {
 
 type ConnectionLaunchSource = 'host-card' | 'quick-connect' | 'credential';
 
-type StoredHost = Omit<Host, 'authMethod' | 'password' | 'keyId' | 'keyPath' | 'passphrase' | 'privilegeMode' | 'rootPassword' | 'jumpHostId' | 'systemType' | 'systemName' | 'lastConnectionStatus' | 'lastConnectionAt' | 'lastConnectionError'> &
-  Partial<Pick<Host, 'authMethod' | 'password' | 'keyId' | 'keyPath' | 'passphrase' | 'privilegeMode' | 'rootPassword' | 'jumpHostId' | 'systemType' | 'systemName' | 'lastConnectionStatus' | 'lastConnectionAt' | 'lastConnectionError'>>;
+type StoredHost = Omit<Host, 'authMethod' | 'password' | 'keyId' | 'keyPath' | 'passphrase' | 'privilegeMode' | 'rootPassword' | 'jumpHostId' | 'canBeJumpHost' | 'systemType' | 'systemName' | 'lastConnectionStatus' | 'lastConnectionAt' | 'lastConnectionError'> &
+  Partial<Pick<Host, 'authMethod' | 'password' | 'keyId' | 'keyPath' | 'passphrase' | 'privilegeMode' | 'rootPassword' | 'jumpHostId' | 'canBeJumpHost' | 'systemType' | 'systemName' | 'lastConnectionStatus' | 'lastConnectionAt' | 'lastConnectionError'>>;
 
 interface HostFormState {
   name: string;
@@ -518,6 +519,7 @@ interface HostFormState {
   privilegeMode: PrivilegeMode;
   rootPassword: string;
   jumpHostId: string;
+  canBeJumpHost: boolean;
   group: string;
   tags: string;
   note: string;
@@ -581,6 +583,7 @@ const emptyHostForm: HostFormState = {
   privilegeMode: 'sudo',
   rootPassword: '',
   jumpHostId: '',
+  canBeJumpHost: false,
   group: '',
   tags: '',
   note: '',
@@ -720,6 +723,7 @@ function normalizeStoredHost(host: StoredHost): Host {
     privilegeMode: getPrivilegeMode(host.privilegeMode),
     rootPassword: getPrivilegeMode(host.privilegeMode) === 'su-root' && typeof host.rootPassword === 'string' ? host.rootPassword : '',
     jumpHostId: typeof host.jumpHostId === 'string' ? host.jumpHostId : '',
+    canBeJumpHost: host.canBeJumpHost === true,
     systemType: getHostSystemType(host.systemType, host.systemName),
     systemName: typeof host.systemName === 'string' ? host.systemName : '',
     lastConnectionStatus: getHostConnectionStatus(host.lastConnectionStatus),
@@ -753,13 +757,32 @@ function sortHostsByListOrder(hosts: Host[]) {
   return [...hosts].sort(compareHostsByListOrder);
 }
 
-function sanitizeHostJumpHostReferences(hosts: Host[]) {
+function preserveReferencedJumpHostCapability(hosts: Host[]) {
   const hostsById = new Map(hosts.map((host) => [host.id, host]));
-  const directOrExistingHosts = hosts.map((host): Host => {
+  const referencedJumpHostIds = new Set(hosts
+    .map((host) => {
+      const jumpHostId = host.jumpHostId.trim();
+      const jumpHost = jumpHostId ? hostsById.get(jumpHostId) : null;
+
+      return jumpHost && jumpHost.id !== host.id ? jumpHost.id : '';
+    })
+    .filter(Boolean));
+
+  return hosts.map((host): Host => (
+    referencedJumpHostIds.has(host.id) && !host.canBeJumpHost
+      ? { ...host, canBeJumpHost: true }
+      : host
+  ));
+}
+
+function sanitizeHostJumpHostReferences(hosts: Host[]) {
+  const hostsWithJumpCapability = preserveReferencedJumpHostCapability(hosts);
+  const hostsById = new Map(hostsWithJumpCapability.map((host) => [host.id, host]));
+  const directOrExistingHosts = hostsWithJumpCapability.map((host): Host => {
     const jumpHostId = host.jumpHostId.trim();
     const jumpHost = jumpHostId ? hostsById.get(jumpHostId) : null;
 
-    if (!jumpHostId || jumpHostId === host.id || !jumpHost) {
+    if (!jumpHostId || jumpHostId === host.id || !jumpHost || !jumpHost.canBeJumpHost) {
       return {
         ...host,
         jumpHostId: '',
@@ -976,8 +999,20 @@ function validateHostForm(
       return t('app.host.validation.jumpHostMissing', language);
     }
 
+    if (!jumpHost.canBeJumpHost) {
+      return t('app.host.validation.jumpHostUnavailable', language);
+    }
+
     if (jumpHost.jumpHostId) {
       return t('app.host.validation.jumpHostNested', language);
+    }
+  }
+
+  if (editingHostId && !form.canBeJumpHost) {
+    const isUsedAsJumpHost = hosts.some((host) => host.id !== editingHostId && host.jumpHostId === editingHostId);
+
+    if (isUsedAsJumpHost) {
+      return t('app.host.validation.jumpHostInUse', language);
     }
   }
 
@@ -1015,6 +1050,7 @@ function createHostFromForm(form: HostFormState, selectedKey: SshKey | null): Ho
     privilegeMode,
     rootPassword: privilegeMode === 'su-root' ? form.rootPassword : '',
     jumpHostId: form.jumpHostId.trim(),
+    canBeJumpHost: form.canBeJumpHost,
     systemType: 'unknown',
     systemName: '',
     group: form.group.trim(),
@@ -1063,6 +1099,7 @@ function updateHostFromForm(host: Host, form: HostFormState, selectedKey: SshKey
     privilegeMode: nextPrivilegeMode,
     rootPassword: nextRootPassword,
     jumpHostId: nextJumpHostId,
+    canBeJumpHost: form.canBeJumpHost,
     systemType: endpointChanged || jumpHostChanged ? 'unknown' : host.systemType,
     systemName: endpointChanged || jumpHostChanged ? '' : host.systemName,
     group: form.group.trim(),
@@ -1089,6 +1126,7 @@ function toFormState(host: Host): HostFormState {
     privilegeMode: host.privilegeMode,
     rootPassword: host.rootPassword,
     jumpHostId: host.jumpHostId,
+    canBeJumpHost: host.canBeJumpHost,
     group: host.group,
     tags: formatTags(host.tags),
     note: host.note,
@@ -1325,7 +1363,7 @@ function App() {
   const sshKeyById = useMemo(() => new Map(sshKeys.map((key) => [key.id, key])), [sshKeys]);
   const hostById = useMemo(() => new Map(hosts.map((host) => [host.id, host])), [hosts]);
   const jumpHostOptions = useMemo(
-    () => hosts.filter((host) => host.id !== editingHostId && !host.jumpHostId),
+    () => hosts.filter((host) => host.id !== editingHostId && host.canBeJumpHost && !host.jumpHostId),
     [editingHostId, hosts],
   );
   const appLanguage = settings.language;
@@ -2674,6 +2712,7 @@ function App() {
       privilegeMode: 'sudo',
       rootPassword: '',
       jumpHostId: '',
+      canBeJumpHost: false,
       systemType: 'unknown',
       systemName: '',
       group: '',
@@ -3399,12 +3438,14 @@ function App() {
 
                 {!hostFormUsesRootLogin ? (
                   <>
-                    <div className="auth-method-section">
+                    <div className="auth-method-section privilege-section">
                       <span className="field-label">{t('app.host.field.privilegeMode', appLanguage)}</span>
-                      <div className="auth-switch" role="group" aria-label={t('app.host.field.privilegeMode', appLanguage)}>
+                      <div className="auth-switch privilege-switch" role="group" aria-label={t('app.host.field.privilegeMode', appLanguage)}>
                         <button
                           type="button"
                           className={form.privilegeMode === 'sudo' ? 'active' : ''}
+                          aria-pressed={form.privilegeMode === 'sudo'}
+                          title={t('app.host.privilege.sudoSummary', appLanguage)}
                           onClick={() => {
                             updateFormField('privilegeMode', 'sudo');
                             updateFormField('rootPassword', '');
@@ -3416,6 +3457,8 @@ function App() {
                         <button
                           type="button"
                           className={form.privilegeMode === 'su-root' ? 'active' : ''}
+                          aria-pressed={form.privilegeMode === 'su-root'}
+                          title={t('app.host.privilege.suRootSummary', appLanguage)}
                           onClick={() => updateFormField('privilegeMode', 'su-root')}
                         >
                           <strong>{t('app.host.privilege.suRoot', appLanguage)}</strong>
@@ -3456,6 +3499,18 @@ function App() {
                       : t('app.host.field.jumpHostEmpty', appLanguage)}
                   </small>
                 </label>
+
+                <div className="host-form-check-block">
+                  <label className="check-field">
+                    <input
+                      type="checkbox"
+                      checked={form.canBeJumpHost}
+                      onChange={(event) => updateFormField('canBeJumpHost', event.target.checked)}
+                    />
+                    <span>{t('app.host.field.canBeJumpHost', appLanguage)}</span>
+                  </label>
+                  <small className="field-note">{t('app.host.field.canBeJumpHostHint', appLanguage)}</small>
+                </div>
 
                 <label className="field">
                   <span>{t('app.host.field.group', appLanguage)}</span>

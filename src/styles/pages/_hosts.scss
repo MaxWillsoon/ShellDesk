@@ -915,6 +915,70 @@
   font-weight: 600;
 }
 
+.privilege-section {
+  gap: 5px;
+}
+
+.host-form .privilege-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.host-form .privilege-switch button {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 8px;
+  padding: 5px 9px;
+  background: var(--surface-control);
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 720;
+  box-shadow: none;
+  text-align: center;
+}
+
+.host-form .privilege-switch button::before {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 60%, transparent);
+  content: "";
+}
+
+.host-form .privilege-switch button.active {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-control));
+  color: var(--text);
+  box-shadow: none;
+}
+
+.host-form .privilege-switch button.active::before {
+  background: var(--accent);
+}
+
+.host-form .privilege-switch strong {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.host-form .privilege-switch small {
+  display: none;
+}
+
+.host-form-check-block {
+  display: grid;
+  gap: 4px;
+  padding: 2px 0;
+}
+
+.host-form-check-block .check-field {
+  justify-content: flex-start;
+}
+
 .key-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(250px, 300px));

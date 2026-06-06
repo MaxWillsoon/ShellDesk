@@ -636,6 +636,7 @@ function readStoredHostRecord(rawHost) {
       rejectLineBreaks: true,
     }),
     jumpHostId: readBoundedString(rawHost.jumpHostId ?? '', '跳板机 ID', 128, { required: false }),
+    canBeJumpHost: readBoolean(rawHost.canBeJumpHost, '可作为跳板机', false),
     systemType: readRemoteSystemType(rawHost.systemType),
     systemName: readBoundedString(rawHost.systemName ?? '', '系统名称', 160, { required: false }),
     lastConnectionStatus: readHostConnectionStatus(rawHost.lastConnectionStatus),
@@ -783,13 +784,32 @@ function sortHostsByListOrder(hosts) {
   return hosts.slice().sort(compareHostsByListOrder);
 }
 
-function sanitizeHostJumpHostReferences(hosts) {
+function preserveReferencedJumpHostCapability(hosts) {
   const hostsById = new Map(hosts.map((host) => [host.id, host]));
-  const directOrExistingHosts = hosts.map((host) => {
+  const referencedJumpHostIds = new Set(hosts
+    .map((host) => {
+      const jumpHostId = typeof host.jumpHostId === 'string' ? host.jumpHostId.trim() : '';
+      const jumpHost = jumpHostId ? hostsById.get(jumpHostId) : null;
+
+      return jumpHost && jumpHost.id !== host.id ? jumpHost.id : '';
+    })
+    .filter(Boolean));
+
+  return hosts.map((host) => (
+    referencedJumpHostIds.has(host.id) && !host.canBeJumpHost
+      ? { ...host, canBeJumpHost: true }
+      : host
+  ));
+}
+
+function sanitizeHostJumpHostReferences(hosts) {
+  const hostsWithJumpCapability = preserveReferencedJumpHostCapability(hosts);
+  const hostsById = new Map(hostsWithJumpCapability.map((host) => [host.id, host]));
+  const directOrExistingHosts = hostsWithJumpCapability.map((host) => {
     const jumpHostId = typeof host.jumpHostId === 'string' ? host.jumpHostId.trim() : '';
     const jumpHost = jumpHostId ? hostsById.get(jumpHostId) : null;
 
-    if (!jumpHostId || jumpHostId === host.id || !jumpHost) {
+    if (!jumpHostId || jumpHostId === host.id || !jumpHost || !jumpHost.canBeJumpHost) {
       return {
         ...host,
         jumpHostId: '',
@@ -1767,6 +1787,10 @@ function validateHostRequest(rawHost) {
 
     if (!jumpHost) {
       throw new Error('跳板机不存在，请重新选择。');
+    }
+
+    if (!jumpHost.canBeJumpHost) {
+      throw new Error(`主机「${jumpHost.name}」未勾选“可作为跳板机”，请先编辑该主机。`);
     }
 
     if (jumpHost.jumpHostId) {

@@ -317,6 +317,7 @@ interface ShellDeskStoredHostRecord {
   privilegeMode?: ShellDeskPrivilegeMode;
   rootPassword?: string;
   jumpHostId?: string;
+  canBeJumpHost?: boolean;
   systemType?: ShellDeskHostSystemType;
   systemName?: string;
   lastConnectionStatus?: 'unknown' | 'success' | 'failed';
