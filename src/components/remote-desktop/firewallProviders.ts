@@ -2,8 +2,8 @@ import { powershellCommand, powershellSingleQuote } from './remoteSystem';
 import { tCurrent } from '../../i18n';
 
 export type FirewallBackend = 'ufw' | 'firewalld' | 'windows' | 'unknown';
-export type FirewallAction = 'allow' | 'deny' | 'reject' | 'limit' | 'unknown';
-export type FirewallProtocol = 'tcp' | 'udp' | 'any';
+type FirewallAction = 'allow' | 'deny' | 'reject' | 'limit' | 'unknown';
+type FirewallProtocol = 'tcp' | 'udp' | 'any';
 
 export interface FirewallRule {
   id: string;
@@ -385,7 +385,7 @@ export function parseFirewallSnapshot(stdout: string, stderr: string, isWindowsH
   };
 }
 
-export function validateFirewallDraft(draft: FirewallRuleDraft, backend: FirewallBackend) {
+function validateFirewallDraft(draft: FirewallRuleDraft, backend: FirewallBackend) {
   const port = draft.port.trim();
   const source = draft.source.trim();
   const portMatch = port.match(/^(\d{1,5})(?:[:-](\d{1,5}))?$/);

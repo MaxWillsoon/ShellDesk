@@ -1,8 +1,8 @@
 import { tCurrent } from '../../i18n';
 export type IptablesFamily = 'ipv4' | 'ipv6';
-export type IptablesTable = 'filter' | 'nat' | 'mangle' | 'raw' | 'security';
-export type IptablesProtocol = 'tcp' | 'udp' | 'icmp' | 'any' | string;
-export type IptablesTarget = 'ACCEPT' | 'DROP' | 'REJECT' | 'RETURN' | string;
+type IptablesTable = 'filter' | 'nat' | 'mangle' | 'raw' | 'security';
+type IptablesProtocol = 'tcp' | 'udp' | 'icmp' | 'any' | string;
+type IptablesTarget = 'ACCEPT' | 'DROP' | 'REJECT' | 'RETURN' | string;
 
 export interface IptablesPolicy {
   family: IptablesFamily;
@@ -301,7 +301,7 @@ export function parseIptablesSnapshot(stdout: string, stderr: string): IptablesS
   };
 }
 
-export function validateIptablesDraft(draft: IptablesRuleDraft) {
+function validateIptablesDraft(draft: IptablesRuleDraft) {
   const chain = draft.chain.trim();
   const port = draft.port.trim();
   const source = draft.source.trim();
@@ -420,10 +420,3 @@ export function getIptablesTargetTone(target: string) {
   return 'custom';
 }
 
-export function getIptablesDefaultPolicy(policies: IptablesPolicy[]) {
-  const filterPolicies = policies
-    .filter((policy) => policy.table === 'filter')
-    .map((policy) => `${policy.family} ${policy.chain} ${policy.policy}`);
-
-  return filterPolicies.length ? filterPolicies.join(' · ') : tCurrent('auto.iptablesProviders.unhp5');
-}

@@ -5,7 +5,7 @@ import DismissibleAlert from './DismissibleAlert';
 import { t, translateStructuredText, type AppLanguage, type MessageId } from '../../i18n';
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import MarkdownReport from './MarkdownReport';
-import { isWindowsSystem, powershellCommand, powershellStdinCommand, type RemoteCommandInput } from './remoteSystem';
+import { isWindowsSystem, powershellCommand, powershellStdinCommand } from './remoteSystem';
 import { useSudoCommand } from './sudoPrompt';
 import type { RemoteSystemType } from './types';
 
@@ -575,7 +575,7 @@ function parseLinuxProcessOutput(stdout: string, language: AppLanguage): RemoteP
     .filter((process): process is RemoteProcessEntry => Boolean(process));
 }
 
-function parseWindowsProcessOutput(stdout: string, language: AppLanguage): RemoteProcessEntry[] {
+function parseWindowsProcessOutput(stdout: string): RemoteProcessEntry[] {
   const text = stdout.trim();
 
   if (!text) {
@@ -1139,7 +1139,7 @@ function ProcessManager({ connectionId, settings, systemType, launchOptions }: R
       const result = await runCommand(isWindowsHost ? getWindowsProcessListCommand(language) : getLinuxProcessListCommand(language));
       const stdout = result.stdout || '';
       const nextProcesses = isWindowsHost
-        ? parseWindowsProcessOutput(stdout, language)
+        ? parseWindowsProcessOutput(stdout)
         : parseLinuxProcessOutput(stdout, language);
 
       if (!isMountedRef.current) {

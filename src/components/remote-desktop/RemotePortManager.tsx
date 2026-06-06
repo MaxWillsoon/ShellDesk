@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import DismissibleAlert from './DismissibleAlert';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
-import { isWindowsSystem, powershellCommand, powershellStdinCommand, type RemoteCommandInput } from './remoteSystem';
+import { isWindowsSystem, powershellStdinCommand } from './remoteSystem';
 import type { RemoteProcessManagerLaunchOptions } from './RemoteProcessManager';
 import { useSudoCommand } from './sudoPrompt';
 import type { RemoteSystemType } from './types';

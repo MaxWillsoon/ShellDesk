@@ -15,13 +15,6 @@ export interface RemotePackageInfo {
   source?: string;
 }
 
-export interface PackageActionDefinition {
-  action: PackageAction;
-  label: string;
-  command: string;
-  danger?: boolean;
-}
-
 function shellSingleQuote(value: string) {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
@@ -92,7 +85,7 @@ export function getPackageManagerLabel(kind: PackageManagerKind) {
   return labels[kind];
 }
 
-export function isValidPackageName(name: string) {
+function isValidPackageName(name: string) {
   return /^[a-zA-Z0-9][a-zA-Z0-9+._:@/-]{0,160}$/.test(name.trim());
 }
 

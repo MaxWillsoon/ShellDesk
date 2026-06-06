@@ -1,6 +1,6 @@
 import { powershellCommand, powershellSingleQuote, type RemoteCommandInput } from './remoteSystem';
 
-export type DiskManagerPlatform = 'linux' | 'windows';
+type DiskManagerPlatform = 'linux' | 'windows';
 
 export interface ManagedDisk {
   id: string;
@@ -59,7 +59,7 @@ export interface ManagedMount {
   options: string;
 }
 
-export interface LvmPhysicalVolume {
+interface LvmPhysicalVolume {
   id: string;
   name: string;
   vgName: string;
@@ -70,7 +70,7 @@ export interface LvmPhysicalVolume {
   attr: string;
 }
 
-export interface LvmVolumeGroup {
+interface LvmVolumeGroup {
   id: string;
   name: string;
   pvCount: number;
@@ -82,7 +82,7 @@ export interface LvmVolumeGroup {
   attr: string;
 }
 
-export interface LvmLogicalVolume {
+interface LvmLogicalVolume {
   id: string;
   name: string;
   vgName: string;
@@ -92,7 +92,7 @@ export interface LvmLogicalVolume {
   attr: string;
 }
 
-export interface LvmSnapshot {
+interface LvmSnapshot {
   available: boolean;
   physicalVolumes: LvmPhysicalVolume[];
   volumeGroups: LvmVolumeGroup[];

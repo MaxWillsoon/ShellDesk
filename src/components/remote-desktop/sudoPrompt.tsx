@@ -118,7 +118,7 @@ function isAuthFailureText(text: string) {
   return hasPattern(text, sudoAuthFailurePatterns);
 }
 
-export function getCachedSudoPassword(connectionId: string): string | null {
+function getCachedSudoPassword(connectionId: string): string | null {
   return sudoPasswordCache.has(connectionId) ? sudoPasswordCache.get(connectionId) ?? '' : null;
 }
 

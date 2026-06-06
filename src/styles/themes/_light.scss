@@ -42,7 +42,6 @@
 
 [data-theme="light"] .command-button,
 [data-theme="light"] .primary-action,
-[data-theme="light"] .view-switch button,
 [data-theme="light"] .editor-header button {
   border-color: rgba(16, 32, 51, 0.12);
   background: var(--surface-control);
@@ -51,7 +50,6 @@
 
 [data-theme="light"] .command-button:hover,
 [data-theme="light"] .primary-action:hover,
-[data-theme="light"] .view-switch button:hover,
 [data-theme="light"] .editor-header button:hover {
   border-color: rgba(16, 32, 51, 0.2);
 }
@@ -70,16 +68,6 @@
     );
   color: var(--accent-contrast);
   box-shadow: 0 8px 20px color-mix(in srgb, var(--accent) 22%, transparent);
-}
-
-[data-theme="light"] .view-switch {
-  border-color: rgba(16, 32, 51, 0.12);
-  background: var(--surface-control);
-}
-
-[data-theme="light"] .view-switch button.active {
-  background: var(--accent-soft);
-  color: var(--accent);
 }
 
 [data-theme="light"] .filter-tab.active {

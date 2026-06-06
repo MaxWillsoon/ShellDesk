@@ -824,7 +824,6 @@ module.exports = {
   activeConnections,
   bindActiveConnectionClient,
   closeActiveConnection,
-  connectSshClient,
   connectSshClientWithJump,
   createBufferedReader,
   createSocksProxy,
@@ -832,8 +831,6 @@ module.exports = {
   forwardOut,
   getActiveConnection,
   registerConnectionCleanup,
-  reconnectActiveConnection,
-  setClientConnectionMetadata,
   toConnectionInfo,
   withActiveConnectionClientRetry,
 };

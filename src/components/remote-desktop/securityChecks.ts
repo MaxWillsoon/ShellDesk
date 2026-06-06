@@ -16,7 +16,7 @@ export interface SecurityCheckResult {
   suggestions: string[];
 }
 
-export interface SecurityCommandResult {
+interface SecurityCommandResult {
   stdout: string;
   stderr: string;
   code: number;
@@ -38,10 +38,6 @@ export interface SecurityScoreSummary {
 }
 
 const highRiskPorts = new Set(['22', '3389', '3306', '5432', '6379', '9200', '9300', '11211', '27017']);
-
-function shellSingleQuote(value: string) {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
 
 function raw(result: SecurityCommandResult) {
   return [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
@@ -951,6 +947,3 @@ export function getStatusLabel(status: SecurityStatus, language: AppLanguage) {
   return t('securityCheck.status.unknown', language);
 }
 
-export function safeGrepPattern(value: string) {
-  return shellSingleQuote(value.replace(/[^\w .:@/-]/g, ''));
-}

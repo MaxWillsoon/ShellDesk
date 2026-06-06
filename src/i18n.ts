@@ -48,7 +48,7 @@ export function getSystemLanguage(): AppLanguage {
   return locales.some((locale) => /^zh\b|^zh-/i.test(locale)) ? 'zh-CN' : 'en-US';
 }
 
-export function normalizeAppLanguage(value: unknown): AppLanguage {
+function normalizeAppLanguage(value: unknown): AppLanguage {
   return value === 'zh-CN' || value === 'en-US' ? value : getSystemLanguage();
 }
 
@@ -99,11 +99,6 @@ export function t(id: MessageId, language: AppLanguage, params?: MessageParams) 
 
 export function tCurrent(id: MessageId, params?: MessageParams) {
   return t(id, getCurrentAppLanguage(), params);
-}
-
-export function translateText(value: string, language: AppLanguage) {
-  void language;
-  return value;
 }
 
 export function translateStructuredText(value: string, language: AppLanguage) {

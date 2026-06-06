@@ -1,5 +1,5 @@
 import { tCurrent } from '../../i18n';
-export type CronLineKind = 'task' | 'comment' | 'blank';
+type CronLineKind = 'task' | 'comment' | 'blank';
 
 export interface CronLine {
   id: string;

@@ -1,4 +1,4 @@
-export type ContextMenuIconName =
+type ContextMenuIconName =
   | 'archive'
   | 'copy'
   | 'database'

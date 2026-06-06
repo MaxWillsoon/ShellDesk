@@ -342,10 +342,6 @@
   color: var(--accent);
 }
 
-[data-theme="light"] .net-iface-edit {
-  border-top-color: rgba(16, 32, 51, 0.08);
-}
-
 /* ─── Light: System Info ────────────────────────────────────────────────── */
 
 [data-theme="light"] .sysinfo-card {
@@ -439,8 +435,7 @@
 }
 
 [data-theme="light"] .global-search,
-[data-theme="light"] .command-button,
-[data-theme="light"] .view-switch {
+[data-theme="light"] .command-button {
   background: var(--surface);
   box-shadow: 0 12px 28px rgba(34, 55, 84, 0.08);
 }
@@ -874,28 +869,10 @@
 
 [data-theme="light"] .dns-server-item {
   border-color: rgba(16, 32, 51, 0.08);
-  background: #f6f8fa;
-}
-
-[data-theme="light"] .dns-server-addr {
-  color: var(--accent);
-}
-
-[data-theme="light"] .sysinfo-card {
-  border-color: rgba(16, 32, 51, 0.08);
-  background: var(--surface);
 }
 
 [data-theme="light"] .sysinfo-card:hover {
   border-color: rgba(16, 32, 51, 0.18);
-}
-
-[data-theme="light"] .sysinfo-card-label {
-  color: #656d76;
-}
-
-[data-theme="light"] .sysinfo-card-value {
-  color: #1f2328;
 }
 
 /* Win11 simulation final light cascade */

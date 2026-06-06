@@ -1153,7 +1153,6 @@
 .desktop-window {
   grid-template-rows: 52px minmax(0, 1fr);
   border-color: rgba(154, 177, 210, 0.24);
-  border-radius: 10px;
   background: rgba(17, 25, 36, 0.9);
   box-shadow:
     0 34px 90px rgba(0, 0, 0, 0.48),
@@ -1253,9 +1252,6 @@
 }
 
 .desktop-icons button {
-  width: 74px;
-  height: 84px;
-  align-content: start;
   gap: 5px;
   border: 1px solid transparent;
   border-radius: 3px;
@@ -1279,7 +1275,6 @@
 
 .desktop-icons strong {
   max-width: 68px;
-  color: #ffffff;
   font-size: 12px;
   font-weight: 500;
   line-height: 1.18;
@@ -1295,7 +1290,6 @@
 .desktop-window {
   grid-template-rows: 38px minmax(0, 1fr);
   border-color: var(--win11-border);
-  border-radius: 8px;
   background: var(--win11-mica-strong);
   box-shadow:
     0 22px 54px rgba(0, 0, 0, 0.34),
@@ -1342,19 +1336,16 @@
 .desktop-window-kicker,
 .desktop-window-state-pill {
   color: var(--win11-muted);
-  font-size: 11px;
   font-weight: 500;
 }
 
 .desktop-window-state-pill {
   border-color: rgba(255, 255, 255, 0.1);
   padding: 3px 7px;
-  background: rgba(255, 255, 255, 0.05);
   letter-spacing: 0;
 }
 
 .win-titlebar-controls .win-btn {
-  width: 46px;
   color: rgba(245, 247, 251, 0.72);
 }
 
@@ -1397,7 +1388,6 @@
 }
 
 .desktop-folder-panel {
-  width: min(520px, calc(100vw - 56px));
   border-color: var(--win11-border);
   border-radius: 10px;
   background: var(--win11-mica);
@@ -1414,7 +1404,6 @@
 }
 
 .desktop-folder-grid {
-  grid-template-columns: repeat(auto-fill, minmax(82px, 1fr));
   gap: 8px;
   padding: 8px 24px 26px;
 }

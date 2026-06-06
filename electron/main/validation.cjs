@@ -140,23 +140,6 @@ function readDesktopWallpaperDataUrl(value, fallback = '') {
   return value;
 }
 
-function readTimestampString(value, label) {
-  return readBoundedString(value, label, 64);
-}
-
-function readStringList(value, label, maxItems, maxItemLength) {
-  if (!Array.isArray(value) || value.length > maxItems) {
-    throw new Error(`${label}无效。`);
-  }
-
-  return value.map((item) => readBoundedString(item, label, maxItemLength, { required: false }));
-}
-
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 function escapeShellSingleQuotedArg(arg) {
   return `'${String(arg).replace(/'/g, "'\\''")}'`;
 }
@@ -181,7 +164,6 @@ try { chcp.com 65001 > $null } catch {}
 
 module.exports = {
   createPowerShellCommand,
-  escapeRegExp,
   escapeShellSingleQuotedArg,
   isPlainObject,
   quotePowerShellString,
@@ -191,8 +173,6 @@ module.exports = {
   readDesktopWallpaperDataUrl,
   readIntegerInRange,
   readNumberInRange,
-  readStringList,
-  readTimestampString,
   toConnectionErrorMessage,
   toErrorMessage,
 };

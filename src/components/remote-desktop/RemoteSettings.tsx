@@ -438,7 +438,7 @@ function createDnsConfigPreview(current: DnsConfig, draft: DnsConfig, language: 
   ].join('\n');
 }
 
-function NetworkPanel({ connectionId }: { connectionId: string }) {
+function NetworkPanel() {
   const language = useCurrentAppLanguage();
   const runCommand = useRemoteSettingsCommand();
   const [ifaces, setIfaces] = useState<NetIface[]>([]);
@@ -1025,23 +1025,23 @@ function createAptSourceInspectionCommand() {
     'fi',
     'apt_source_path=',
     'apt_source_format=legacy',
-    'if [ "${ID:-}" = "ubuntu" ] && [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then',
-    '  apt_source_path=/etc/apt/sources.list.d/ubuntu.sources',
+    `if [ "\${ID:-}" = "ubuntu" ] && [ -f ${UBUNTU_DEB822_SOURCE_PATH} ]; then`,
+    `  apt_source_path=${UBUNTU_DEB822_SOURCE_PATH}`,
     '  apt_source_format=deb822',
-    'elif [ "${ID:-}" = "debian" ] && [ -f /etc/apt/sources.list.d/debian.sources ]; then',
-    '  apt_source_path=/etc/apt/sources.list.d/debian.sources',
+    `elif [ "\${ID:-}" = "debian" ] && [ -f ${DEBIAN_DEB822_SOURCE_PATH} ]; then`,
+    `  apt_source_path=${DEBIAN_DEB822_SOURCE_PATH}`,
     '  apt_source_format=deb822',
-    'elif [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then',
-    '  apt_source_path=/etc/apt/sources.list.d/ubuntu.sources',
+    `elif [ -f ${UBUNTU_DEB822_SOURCE_PATH} ]; then`,
+    `  apt_source_path=${UBUNTU_DEB822_SOURCE_PATH}`,
     '  apt_source_format=deb822',
-    'elif [ -f /etc/apt/sources.list.d/debian.sources ]; then',
-    '  apt_source_path=/etc/apt/sources.list.d/debian.sources',
+    `elif [ -f ${DEBIAN_DEB822_SOURCE_PATH} ]; then`,
+    `  apt_source_path=${DEBIAN_DEB822_SOURCE_PATH}`,
     '  apt_source_format=deb822',
     'elif [ -f /etc/apt/sources.list ]; then',
     '  apt_source_path=/etc/apt/sources.list',
     '  apt_source_format=legacy',
     'elif [ "${ID:-}" = "ubuntu" ]; then',
-    '  apt_source_path=/etc/apt/sources.list.d/ubuntu.sources',
+    `  apt_source_path=${UBUNTU_DEB822_SOURCE_PATH}`,
     '  apt_source_format=deb822',
     'else',
     '  apt_source_path=/etc/apt/sources.list',
@@ -1241,7 +1241,7 @@ function buildAptSourcesContent(mirrorUrl: string, target: AptSourceTarget, code
     : buildDebianLegacySources(mirrorUrl, codename);
 }
 
-function MirrorsPanel({ connectionId }: { connectionId: string }) {
+function MirrorsPanel() {
   const language = useCurrentAppLanguage();
   const runCommand = useRemoteSettingsCommand();
   const [distroType, setDistroType] = useState<MirrorDistroType>('unknown');
@@ -1490,7 +1490,7 @@ MIRROR_EOF`;
 
 /* ─── System Update ───────────────────────────────────────────────────────── */
 
-function UpdatePanel({ connectionId }: { connectionId: string }) {
+function UpdatePanel() {
   const language = useCurrentAppLanguage();
   const runCommand = useRemoteSettingsCommand();
   const [distroType, setDistroType] = useState<'debian' | 'redhat' | 'unknown'>('unknown');
@@ -1646,7 +1646,7 @@ function UpdatePanel({ connectionId }: { connectionId: string }) {
 
 /* ─── Hosts ───────────────────────────────────────────────────────────────── */
 
-function HostsPanel({ connectionId }: { connectionId: string }) {
+function HostsPanel() {
   const language = useCurrentAppLanguage();
   const runCommand = useRemoteSettingsCommand();
   const [hostsContent, setHostsContent] = useState('');
@@ -1815,7 +1815,7 @@ function HostsPanel({ connectionId }: { connectionId: string }) {
 
 /* ─── Route ───────────────────────────────────────────────────────────────── */
 
-function RoutePanel({ connectionId }: { connectionId: string }) {
+function RoutePanel() {
   const language = useCurrentAppLanguage();
   const runCommand = useRemoteSettingsCommand();
   const [routes, setRoutes] = useState('');
@@ -1966,7 +1966,7 @@ function RoutePanel({ connectionId }: { connectionId: string }) {
 
 /* ─── Disk ────────────────────────────────────────────────────────────────── */
 
-function DiskPanel({ connectionId }: { connectionId: string }) {
+function DiskPanel() {
   const language = useCurrentAppLanguage();
   const runCommand = useRemoteSettingsCommand();
   const [diskInfo, setDiskInfo] = useState('');
@@ -2380,7 +2380,7 @@ function WindowsSystemInfoPanel({ connectionId }: { connectionId: string }) {
   );
 }
 
-function WindowsNetworkPanel({ connectionId }: { connectionId: string }) {
+function WindowsNetworkPanel() {
   const language = useCurrentAppLanguage();
   const runCommand = useRemoteSettingsCommand();
   const [hostname, setHostname] = useState('');
@@ -2571,7 +2571,7 @@ function WindowsHostsPanel({ connectionId }: { connectionId: string }) {
   );
 }
 
-function WindowsRoutePanel({ connectionId }: { connectionId: string }) {
+function WindowsRoutePanel() {
   const language = useCurrentAppLanguage();
   const runCommand = useRemoteSettingsCommand();
   const [routes, setRoutes] = useState('');
@@ -2617,7 +2617,7 @@ function WindowsRoutePanel({ connectionId }: { connectionId: string }) {
   );
 }
 
-function WindowsDiskPanel({ connectionId }: { connectionId: string }) {
+function WindowsDiskPanel() {
   const language = useCurrentAppLanguage();
   const runCommand = useRemoteSettingsCommand();
   const [diskInfo, setDiskInfo] = useState('');
@@ -2822,22 +2822,22 @@ Write-Output ("PRIV=" + $privilege)
     if (isWindowsHost) {
       switch (activeTab) {
         case 'systeminfo': return <WindowsSystemInfoPanel connectionId={connectionId} />;
-        case 'network': return <WindowsNetworkPanel connectionId={connectionId} />;
+        case 'network': return <WindowsNetworkPanel />;
         case 'hosts': return <WindowsHostsPanel connectionId={connectionId} />;
-        case 'route': return <WindowsRoutePanel connectionId={connectionId} />;
-        case 'disk': return <WindowsDiskPanel connectionId={connectionId} />;
+        case 'route': return <WindowsRoutePanel />;
+        case 'disk': return <WindowsDiskPanel />;
         default: return <WindowsSystemInfoPanel connectionId={connectionId} />;
       }
     }
 
     switch (activeTab) {
       case 'systeminfo': return <SystemInfoPanel connectionId={connectionId} />;
-      case 'network': return <NetworkPanel connectionId={connectionId} />;
-      case 'mirrors': return <MirrorsPanel connectionId={connectionId} />;
-      case 'update': return <UpdatePanel connectionId={connectionId} />;
-      case 'hosts': return <HostsPanel connectionId={connectionId} />;
-      case 'route': return <RoutePanel connectionId={connectionId} />;
-      case 'disk': return <DiskPanel connectionId={connectionId} />;
+      case 'network': return <NetworkPanel />;
+      case 'mirrors': return <MirrorsPanel />;
+      case 'update': return <UpdatePanel />;
+      case 'hosts': return <HostsPanel />;
+      case 'route': return <RoutePanel />;
+      case 'disk': return <DiskPanel />;
       default: return null;
     }
   };

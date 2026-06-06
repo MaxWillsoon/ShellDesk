@@ -364,5 +364,4 @@ function registerAutoUpdateHandlers(registerIpcHandler) {
 module.exports = {
   registerAutoUpdateHandlers,
   startAutoUpdateCheck,
-  isAutoUpdateSupported,
 };

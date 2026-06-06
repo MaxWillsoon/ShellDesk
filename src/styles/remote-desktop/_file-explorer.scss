@@ -667,10 +667,6 @@ button.explorer-row {
   color: rgba(196, 206, 219, 0.58);
 }
 
-.explorer-main {
-  position: relative;
-}
-
 .explorer-header .sort-header {
   border: 0;
   background: transparent;
@@ -1283,11 +1279,8 @@ button.explorer-row {
   display: flex;
   width: 100%;
   height: 100%;
-  min-width: 0;
-  min-height: 0;
   flex-direction: column;
   gap: 0;
-  overflow: hidden;
   padding: 0;
 }
 
@@ -1295,7 +1288,6 @@ button.explorer-row {
   width: 100%;
   max-width: 100%;
   max-height: 100%;
-  flex: 1 1 auto;
   border-radius: 0;
 }
 
@@ -1469,13 +1461,11 @@ button.explorer-row {
 
 .explorer-commandbar button,
 .explorer-details-actions button {
-  height: 30px;
   border-color: transparent;
   border-radius: 4px;
   padding: 0 9px;
   background: transparent;
   color: var(--explorer-text);
-  font-size: 12px;
   font-weight: 500;
 }
 
@@ -1592,9 +1582,7 @@ button.explorer-row {
   border-color: transparent;
   border-radius: 4px;
   padding: 0 8px;
-  background: transparent;
   color: var(--explorer-text);
-  font-size: 12px;
   font-weight: 500;
 }
 
@@ -1688,10 +1676,7 @@ button.explorer-row {
 }
 
 .file-kind-icon.directory::after {
-  top: 5px;
-  left: 3px;
   width: 10px;
-  height: 5px;
   background: #ffe28a;
 }
 

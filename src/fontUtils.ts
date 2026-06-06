@@ -18,7 +18,7 @@ function normalizeFontFamily(fontFamily: string) {
   return fontFamily.replace(/\s+/g, ' ').trim();
 }
 
-export function quoteCssFontFamily(fontFamily: string) {
+function quoteCssFontFamily(fontFamily: string) {
   const normalizedFontFamily = normalizeFontFamily(fontFamily);
 
   if (!normalizedFontFamily) {

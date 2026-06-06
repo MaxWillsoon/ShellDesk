@@ -78,7 +78,7 @@ function getEnabledHeaders(request: ApiDebugRequest) {
     }));
 }
 
-export function validateApiRequest(request: ApiDebugRequest) {
+function validateApiRequest(request: ApiDebugRequest) {
   validateUrl(request.url);
 
   getEnabledHeaders(request).forEach((header) => {

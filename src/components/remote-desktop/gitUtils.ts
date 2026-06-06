@@ -1,7 +1,7 @@
 import { powershellCommand, powershellSingleQuote, powershellStdinCommand, type RemoteCommandInput } from './remoteSystem';
 import { tCurrent } from '../../i18n';
 
-export type GitFileStatusKind = 'modified' | 'added' | 'deleted' | 'renamed' | 'copied' | 'untracked' | 'conflicted' | 'typechange' | 'unknown';
+type GitFileStatusKind = 'modified' | 'added' | 'deleted' | 'renamed' | 'copied' | 'untracked' | 'conflicted' | 'typechange' | 'unknown';
 
 export interface GitFileChange {
   path: string;
@@ -26,7 +26,7 @@ export interface GitBranchSummary {
   upstream?: string;
 }
 
-export interface GitTagSummary {
+interface GitTagSummary {
   name: string;
   subject?: string;
 }
@@ -89,7 +89,7 @@ function validateGitCommitMessage(value: string) {
   return normalizedValue;
 }
 
-export function validateGitPath(value: string) {
+function validateGitPath(value: string) {
   return validateText(value, tCurrent('auto.gitUtils.7axb6o'));
 }
 
@@ -97,7 +97,7 @@ function validateGitFilePath(value: string) {
   return validateText(value, tCurrent('auto.gitUtils.1fcx4tn'), 800);
 }
 
-export function validateGitBranchName(value: string) {
+function validateGitBranchName(value: string) {
   const trimmedValue = validateText(value, tCurrent('auto.gitUtils.16bro71'), 220);
 
   if (

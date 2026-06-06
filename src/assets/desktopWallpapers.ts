@@ -30,7 +30,7 @@ export const desktopWallpaperPresets = [
 ] as const satisfies ReadonlyArray<{ id: string; labelId: MessageId }>;
 
 export type DesktopWallpaperPreset = (typeof desktopWallpaperPresets)[number];
-export type DesktopWallpaperPresetId = DesktopWallpaperPreset['id'];
+type DesktopWallpaperPresetId = DesktopWallpaperPreset['id'];
 
 type WallpaperModule = { default: string };
 type WallpaperLoader = () => Promise<WallpaperModule>;

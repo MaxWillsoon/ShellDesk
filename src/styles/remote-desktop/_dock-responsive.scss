@@ -40,14 +40,6 @@
     filter 140ms ease;
 }
 
-.dock-separator {
-  height: 32px;
-}
-
-.dock-app-icon .desktop-app-icon {
-  width: 100%;
-  height: 100%;
-}
 
 .mac-dock button.open::after {
   position: absolute;
@@ -166,10 +158,6 @@
     justify-self: start;
   }
 
-  .view-switch {
-    display: none;
-  }
-
   .group-grid,
   .host-grid.grid {
     grid-template-columns: minmax(0, 1fr);
@@ -220,7 +208,6 @@
 .mac-dock button {
   width: 42px;
   height: 42px;
-  border-radius: 9px;
 }
 
 .dock-separator {

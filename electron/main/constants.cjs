@@ -15,7 +15,6 @@ const vaultFileName = 'vault.json';
 const configStoreFormat = 'shelldesk-config-store';
 const vaultFormat = 'shelldesk-vault';
 const vaultSchemaVersion = 1;
-const bookmarkScopePrefix = 'shelldesk:browser-bookmarks:';
 const logFileName = 'logs.json';
 const maxLogEntries = 500;
 const desktopWallpaperPresetIds = ['default', 'midnight-ops', 'amber-routes', 'mist-console', 'green-health', 'indigo-traces'];
@@ -122,7 +121,6 @@ module.exports = {
   accentColorChoices,
   aiApiFormatChoices,
   aiProviderChoices,
-  bookmarkScopePrefix,
   configBundleFormat,
   configBundleVersion,
   configFileName,
@@ -130,7 +128,6 @@ module.exports = {
   defaultAiApiBaseUrls,
   defaultIdentityFileNames,
   desktopWallpaperPresetIdSet,
-  desktopWallpaperPresetIds,
   logFileName,
   maxAiApiBaseUrlLength,
   maxAiApiKeyLength,
