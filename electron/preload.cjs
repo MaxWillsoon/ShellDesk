@@ -29,7 +29,7 @@ function chatStream(request, callbacks = {}) {
   });
 }
 
-function runCommandStream(connectionId, command, stdin, callbacks = {}) {
+function runCommandStream(connectionId, command, stdin, callbacks = {}, options) {
   const streamId = createIpcRequestId('command-stream');
   const removeChunkListener = onIpc('connection:run-command-stream:chunk', (payload) => {
     if (payload?.streamId === streamId && typeof payload.chunk === 'string') {
@@ -37,7 +37,7 @@ function runCommandStream(connectionId, command, stdin, callbacks = {}) {
     }
   });
 
-  return ipcRenderer.invoke('connection:run-command-stream', connectionId, command, stdin, streamId).finally(() => {
+  return ipcRenderer.invoke('connection:run-command-stream', connectionId, command, stdin, streamId, options).finally(() => {
     removeChunkListener();
   });
 }
@@ -161,8 +161,8 @@ contextBridge.exposeInMainWorld('guiSSH', {
     renamePath: (connectionId, oldPath, newPath) =>
       ipcRenderer.invoke('connection:rename-path', connectionId, oldPath, newPath),
     createFile: (connectionId, remotePath) => ipcRenderer.invoke('connection:create-file', connectionId, remotePath),
-    readFile: (connectionId, remotePath) => ipcRenderer.invoke('connection:read-file', connectionId, remotePath),
-    writeFile: (connectionId, remotePath, content) => ipcRenderer.invoke('connection:write-file', connectionId, remotePath, content),
+    readFile: (connectionId, remotePath, options) => ipcRenderer.invoke('connection:read-file', connectionId, remotePath, options),
+    writeFile: (connectionId, remotePath, content, options) => ipcRenderer.invoke('connection:write-file', connectionId, remotePath, content, options),
     downloadFile: (connectionId, remotePath) => ipcRenderer.invoke('connection:download-file', connectionId, remotePath),
     downloadPaths: (connectionId, remotePaths) => ipcRenderer.invoke('connection:download-paths', connectionId, remotePaths),
     uploadFile: (connectionId, remotePath) => ipcRenderer.invoke('connection:upload-file', connectionId, remotePath),
@@ -183,7 +183,7 @@ contextBridge.exposeInMainWorld('guiSSH', {
     getStatus: (connectionId) => ipcRenderer.invoke('connection:get-status', connectionId),
     getSystemInfo: (connectionId) => ipcRenderer.invoke('connection:get-system-info', connectionId),
     getMetrics: (connectionId) => ipcRenderer.invoke('connection:get-metrics', connectionId),
-    runCommand: (connectionId, command, stdin) => ipcRenderer.invoke('connection:run-command', connectionId, command, stdin),
+    runCommand: (connectionId, command, stdin, options) => ipcRenderer.invoke('connection:run-command', connectionId, command, stdin, options),
     runCommandStream,
     mysqlConnect: (connectionId, config) => ipcRenderer.invoke('connection:mysql-connect', connectionId, config),
     mysqlDisconnect: (connectionId, mysqlId) => ipcRenderer.invoke('connection:mysql-disconnect', connectionId, mysqlId),

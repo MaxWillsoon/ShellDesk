@@ -4,6 +4,7 @@ import DismissibleAlert from './DismissibleAlert';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import { isWindowsSystem, type RemoteCommandInput } from './remoteSystem';
+import { useSudoCommand } from './sudoPrompt';
 import type { RemoteSystemType } from './types';
 import {
   createWebServerActionCommand,
@@ -34,16 +35,6 @@ interface PendingWebAction {
   danger?: boolean;
 }
 
-function runCmd(connectionId: string, input: RemoteCommandInput) {
-  const api = window.guiSSH?.connections;
-
-  if (!api) {
-    throw new Error(tCurrent('auto.remoteWebServerManager.g77vf3'));
-  }
-
-  return api.runCommand(connectionId, input.command, input.stdin);
-}
-
 function getStatusTone(status?: string) {
   const value = status?.toLowerCase() ?? '';
 
@@ -63,6 +54,7 @@ function getSiteTitle(site: WebSiteConfigSummary) {
 
 function RemoteWebServerManager({ connectionId, systemType, onOpenConfigFile }: RemoteWebServerManagerProps) {
   const isWindowsHost = isWindowsSystem(systemType);
+  const { runCommand, sudoPrompt } = useSudoCommand(connectionId, systemType);
   const [snapshot, setSnapshot] = useState<WebServerSnapshot | null>(null);
   const [activeKind, setActiveKind] = useState<WebServerKind>('nginx');
   const [selectedSiteId, setSelectedSiteId] = useState('');
@@ -93,7 +85,7 @@ function RemoteWebServerManager({ connectionId, systemType, onOpenConfigFile }: 
     setNotice('');
 
     try {
-      const result = await runCmd(connectionId, createWebServerSnapshotCommand(isWindowsHost));
+      const result = await runCommand(createWebServerSnapshotCommand(isWindowsHost));
       const nextSnapshot = parseWebServerSnapshot(result.stdout, result.stderr);
       const nextKind = activeKind && nextSnapshot.services.some((service) => service.kind === activeKind)
         ? activeKind
@@ -116,7 +108,7 @@ function RemoteWebServerManager({ connectionId, systemType, onOpenConfigFile }: 
     } finally {
       setLoading(false);
     }
-  }, [activeKind, connectionId, isWindowsHost]);
+  }, [activeKind, isWindowsHost, runCommand]);
 
   useEffect(() => {
     void refresh();
@@ -152,7 +144,7 @@ function RemoteWebServerManager({ connectionId, systemType, onOpenConfigFile }: 
     setNotice('');
 
     try {
-      const result = await runCmd(connectionId, pendingAction.command);
+      const result = await runCommand(pendingAction.command);
       const output = result.stdout || result.stderr || tCurrent('auto.remoteWebServerManager.105ee9t', { value0: pendingAction.label });
 
       if (result.code !== 0) {
@@ -367,6 +359,7 @@ function RemoteWebServerManager({ connectionId, systemType, onOpenConfigFile }: 
         </div>,
         document.body,
       ) : null}
+      {sudoPrompt}
     </section>
   );
 }

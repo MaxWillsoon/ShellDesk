@@ -3,6 +3,7 @@ import DismissibleAlert from './DismissibleAlert';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import { isWindowsSystem, powershellCommand, powershellSingleQuote } from './remoteSystem';
+import { useSudoCommand } from './sudoPrompt';
 import type { RemoteSystemType } from './types';
 import { tCurrent } from '../../i18n';
 
@@ -96,16 +97,6 @@ const fileLevelPatterns: Record<Exclude<LogLevelFilter, 'all'>, string> = {
 const errorPattern = /\b(error|err|fatal|panic|critical|crit|alert|emerg|exception|failed|failure|denied)\b/i;
 const warningPattern = /\b(warn|warning|deprecated|timeout|retry|slow|unreachable)\b/i;
 const debugPattern = /\b(debug|trace|verbose)\b/i;
-
-function runCmd(connectionId: string, command: string) {
-  const api = window.guiSSH?.connections;
-
-  if (!api) {
-    throw new Error(tCurrent('auto.remoteLogViewer.g77vf3'));
-  }
-
-  return api.runCommand(connectionId, command);
-}
 
 function shellSingleQuote(value: string) {
   return `'${value.replace(/'/g, "'\\''")}'`;
@@ -666,6 +657,7 @@ function renderHighlightedText(text: string, keyword: string) {
 
 function RemoteLogViewer({ connectionId, systemType }: RemoteLogViewerProps) {
   const isWindowsHost = isWindowsSystem(systemType);
+  const { runCommand, sudoPrompt } = useSudoCommand(connectionId, systemType);
   const defaultSourceId = isWindowsHost ? 'event:System' : 'journal:system';
   const isMountedRef = useRef(true);
   const queryRequestIdRef = useRef(0);
@@ -800,7 +792,7 @@ function RemoteLogViewer({ connectionId, systemType }: RemoteLogViewerProps) {
     setNotice('');
 
     try {
-      const result = await runCmd(connectionId, getLinuxLogFilesCommand());
+      const result = await runCommand(getLinuxLogFilesCommand());
       const nextFiles = parseLogFiles(result.stdout || '');
 
       if (!isMountedRef.current) {
@@ -821,7 +813,7 @@ function RemoteLogViewer({ connectionId, systemType }: RemoteLogViewerProps) {
         setFilesLoading(false);
       }
     }
-  }, [connectionId, isWindowsHost]);
+  }, [isWindowsHost, runCommand]);
 
   const executeQuery = useCallback(async (sourceOverride?: LogSource) => {
     const querySource = sourceOverride ?? resolvedSource;
@@ -847,7 +839,7 @@ function RemoteLogViewer({ connectionId, systemType }: RemoteLogViewerProps) {
         : querySource.type === 'file'
           ? getLinuxFileLogCommand(querySource.value, query)
           : getLinuxJournalCommand(querySource.value, query);
-      const result = await runCmd(connectionId, command);
+      const result = await runCommand(command);
       const parsedLines = isWindowsHost
         ? parseWindowsEventOutput(result.stdout || '')
         : parseLinuxLogOutput(result.stdout || '');
@@ -883,7 +875,7 @@ function RemoteLogViewer({ connectionId, systemType }: RemoteLogViewerProps) {
         setLoading(false);
       }
     }
-  }, [connectionId, isWindowsHost, query, resolvedSource]);
+  }, [isWindowsHost, query, resolvedSource, runCommand]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -1215,6 +1207,7 @@ function RemoteLogViewer({ connectionId, systemType }: RemoteLogViewerProps) {
           </footer>
         </section>
       </div>
+      {sudoPrompt}
     </div>
   );
 }

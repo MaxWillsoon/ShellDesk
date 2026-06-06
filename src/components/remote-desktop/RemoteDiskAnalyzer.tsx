@@ -3,6 +3,7 @@ import DismissibleAlert from './DismissibleAlert';
 
 import { getErrorMessage } from './desktopUtils';
 import { isWindowsSystem, powershellCommand, powershellSingleQuote } from './remoteSystem';
+import { useSudoCommand } from './sudoPrompt';
 import type { RemoteSystemType } from './types';
 import { tCurrent } from '../../i18n';
 
@@ -34,16 +35,6 @@ type DiskPanel = 'children' | 'large';
 
 const duMarker = '__SHELLDESK_DU__';
 const metaMarker = '__SHELLDESK_DU_META__';
-
-function runCmd(connectionId: string, command: string) {
-  const api = window.guiSSH?.connections;
-
-  if (!api) {
-    throw new Error(tCurrent('auto.remoteDiskAnalyzer.g77vf3'));
-  }
-
-  return api.runCommand(connectionId, command);
-}
 
 function shellSingleQuote(value: string) {
   return `'${value.replace(/'/g, "'\\''")}'`;
@@ -339,6 +330,7 @@ function parseWindowsLargeFiles(stdout: string): DirectorySizeEntry[] {
 
 function RemoteDiskAnalyzer({ connectionId, systemType, onOpenFileManager }: RemoteDiskAnalyzerProps) {
   const isWindowsHost = isWindowsSystem(systemType);
+  const { runCommand, sudoPrompt } = useSudoCommand(connectionId, systemType);
   const [mounts, setMounts] = useState<DiskUsageMount[]>([]);
   const [currentPath, setCurrentPath] = useState(isWindowsHost ? 'C:\\' : '/');
   const [pathDraft, setPathDraft] = useState(isWindowsHost ? 'C:\\' : '/');
@@ -369,7 +361,7 @@ function RemoteDiskAnalyzer({ connectionId, systemType, onOpenFileManager }: Rem
     setError('');
 
     try {
-      const result = await runCmd(connectionId, isWindowsHost ? createWindowsMountCommand() : createUnixMountCommand());
+      const result = await runCommand(isWindowsHost ? createWindowsMountCommand() : createUnixMountCommand());
       const nextMounts = isWindowsHost ? parseWindowsMounts(result.stdout) : parseUnixMounts(result.stdout);
       setMounts(nextMounts);
     } catch (error) {
@@ -377,7 +369,7 @@ function RemoteDiskAnalyzer({ connectionId, systemType, onOpenFileManager }: Rem
     } finally {
       setMountLoading(false);
     }
-  }, [connectionId, isWindowsHost]);
+  }, [isWindowsHost, runCommand]);
 
   const scanPath = useCallback(async (path: string) => {
     const nextPath = path.trim() || (isWindowsHost ? 'C:\\' : '/');
@@ -387,7 +379,7 @@ function RemoteDiskAnalyzer({ connectionId, systemType, onOpenFileManager }: Rem
     setNotice('');
 
     try {
-      const result = await runCmd(connectionId, isWindowsHost ? createWindowsScanCommand(nextPath) : createUnixScanCommand(nextPath));
+      const result = await runCommand(isWindowsHost ? createWindowsScanCommand(nextPath) : createUnixScanCommand(nextPath));
       const nextEntries = isWindowsHost ? parseWindowsScan(result.stdout) : parseUnixScan(result.stdout, nextPath);
       setCurrentPath(nextPath);
       setPathDraft(nextPath);
@@ -402,7 +394,7 @@ function RemoteDiskAnalyzer({ connectionId, systemType, onOpenFileManager }: Rem
       setScanLoading(false);
       setScanTargetPath('');
     }
-  }, [connectionId, isWindowsHost]);
+  }, [isWindowsHost, runCommand]);
 
   const searchLargeFiles = useCallback(async () => {
     const minMb = Math.min(Math.max(Number.parseInt(minLargeFileMb, 10) || 100, 1), 102400);
@@ -412,7 +404,7 @@ function RemoteDiskAnalyzer({ connectionId, systemType, onOpenFileManager }: Rem
     setNotice('');
 
     try {
-      const result = await runCmd(connectionId, isWindowsHost ? createWindowsLargeFileCommand(currentPath, minMb) : createUnixLargeFileCommand(currentPath, minMb));
+      const result = await runCommand(isWindowsHost ? createWindowsLargeFileCommand(currentPath, minMb) : createUnixLargeFileCommand(currentPath, minMb));
       const nextFiles = isWindowsHost ? parseWindowsLargeFiles(result.stdout) : parseUnixLargeFiles(result.stdout);
       setLargeFiles(nextFiles);
       setActivePanel('large');
@@ -426,7 +418,7 @@ function RemoteDiskAnalyzer({ connectionId, systemType, onOpenFileManager }: Rem
       setLargeLoading(false);
       setLargeTargetPath('');
     }
-  }, [connectionId, currentPath, isWindowsHost, minLargeFileMb]);
+  }, [currentPath, isWindowsHost, minLargeFileMb, runCommand]);
 
   useEffect(() => {
     void refreshMounts();
@@ -558,6 +550,7 @@ function RemoteDiskAnalyzer({ connectionId, systemType, onOpenFileManager }: Rem
           )}
         </aside>
       </div>
+      {sudoPrompt}
     </section>
   );
 }

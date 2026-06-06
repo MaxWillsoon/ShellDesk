@@ -220,6 +220,7 @@ interface DesktopWindowState {
   notepadInitialPath?: string;
   notepadInitialContent?: string;
   notepadInitialTitle?: string;
+  notepadOpenRequest?: { id: string; filePath: string };
   processManagerLaunchOptions?: RemoteProcessManagerLaunchOptions;
   fileExplorerInitialPath?: string;
 }
@@ -1439,6 +1440,27 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
   };
 
   const openNotepadFile = (filePath: string) => {
+    const existingWindow = getTopDesktopWindow(desktopWindows, (desktopWindow) => desktopWindow.appKey === 'notepad');
+
+    if (existingWindow) {
+      zIndexRef.current += 1;
+      const nextZIndex = zIndexRef.current;
+      const requestId = `notepad-open-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+      setFocusedWindowId(existingWindow.id);
+      setDesktopWindows((currentWindows) => currentWindows.map((desktopWindow) => (
+        desktopWindow.id === existingWindow.id
+          ? {
+              ...desktopWindow,
+              isMinimized: false,
+              zIndex: nextZIndex,
+              notepadOpenRequest: { id: requestId, filePath },
+            }
+          : desktopWindow
+      )));
+      return;
+    }
+
     appendDesktopWindow('notepad', (nextWindow) => {
       nextWindow.notepadInitialPath = filePath;
     });
@@ -1856,7 +1878,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
     }
 
     if (desktopWindow.appKey === 'notepad') {
-      return <RemoteNotepad connectionId={connection.id} settings={settings} initialFilePath={desktopWindow.notepadInitialPath} initialContent={desktopWindow.notepadInitialContent} initialTitle={desktopWindow.notepadInitialTitle} systemType={connection.host.systemType} />;
+      return <RemoteNotepad connectionId={connection.id} settings={settings} initialFilePath={desktopWindow.notepadInitialPath} initialContent={desktopWindow.notepadInitialContent} initialTitle={desktopWindow.notepadInitialTitle} openFileRequest={desktopWindow.notepadOpenRequest} systemType={connection.host.systemType} />;
     }
 
     if (desktopWindow.appKey === 'mysql') {

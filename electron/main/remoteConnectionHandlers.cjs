@@ -1485,6 +1485,30 @@ function execRemoteCommandRaw(client, command, stdin = '') {
   });
 }
 
+function execRemoteCommandRawText(client, command, stdin = '') {
+  return new Promise((resolve, reject) => {
+    client.exec(command, (error, stream) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      const stdoutChunks = [];
+      const stderrChunks = [];
+
+      stream.on('data', (chunk) => { stdoutChunks.push(Buffer.from(chunk)); });
+      stream.stderr.on('data', (chunk) => { stderrChunks.push(Buffer.from(chunk)); });
+      stream.end(stdin, 'utf8');
+      stream.on('close', (code) => {
+        const stdout = decodeSshOutputBuffer(Buffer.concat(stdoutChunks));
+        const stderr = decodeSshOutputBuffer(Buffer.concat(stderrChunks));
+        resolve({ stdout, stderr, code: code ?? 0 });
+      });
+      stream.once('error', reject);
+    });
+  });
+}
+
 function execRemoteCommandStream(event, client, command, stdin = '', streamId) {
   return new Promise((resolve, reject) => {
     client.exec(command, (error, stream) => {
@@ -1787,6 +1811,117 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     });
   }
 
+  function isPermissionDeniedError(error) {
+    const message = String(error?.message ?? error ?? '');
+    const code = error?.code;
+
+    return code === 3 ||
+      code === 'EACCES' ||
+      /permission denied|access denied|eacces|eperm/i.test(message);
+  }
+
+  function readFilePrivilegeOptions(rawOptions) {
+    if (!rawOptions || typeof rawOptions !== 'object' || Array.isArray(rawOptions)) {
+      return { sudoPassword: '' };
+    }
+
+    const sudoPassword = typeof rawOptions.sudoPassword === 'string'
+      ? readBoundedString(rawOptions.sudoPassword, 'sudo 密码', 4096, {
+          required: false,
+          trim: false,
+          rejectLineBreaks: true,
+        })
+      : '';
+
+    return { sudoPassword };
+  }
+
+  function isSudoPasswordRequired(result) {
+    return /password is required|a terminal is required|no tty present|askpass/i.test(result.stderr);
+  }
+
+  function isSudoAuthenticationFailure(result) {
+    return /sorry, try again|incorrect password|authentication failure|authentication failed/i.test(result.stderr);
+  }
+
+  function createPrivilegedShellCommand(script, args, verifyPassword = false) {
+    const baseCommand = [
+      'sh',
+      '-c',
+      escapeShellSingleQuotedArg(script),
+      'sh',
+      ...args.map((arg) => escapeShellSingleQuotedArg(String(arg))),
+    ].join(' ');
+
+    if (verifyPassword) {
+      return [
+        'if [ "$(id -u 2>/dev/null)" = "0" ]; then',
+        'IFS= read -r _shelldesk_sudo_password || true;',
+        `${baseCommand};`,
+        'else',
+        'IFS= read -r _shelldesk_sudo_password || exit 43;',
+        'printf "%s\\n" "$_shelldesk_sudo_password" | sudo -S -p \'\' -v &&',
+        `sudo -n ${baseCommand};`,
+        'fi',
+      ].join(' ');
+    }
+
+    return `if [ "$(id -u 2>/dev/null)" = "0" ]; then ${baseCommand}; elif command -v sudo >/dev/null 2>&1; then sudo -n ${baseCommand}; else ${baseCommand}; fi`;
+  }
+
+  function createSudoVerifiedUserCommand(command) {
+    const quotedCommand = escapeShellSingleQuotedArg(command);
+
+    return [
+      'if [ "$(id -u 2>/dev/null)" = "0" ]; then',
+      'IFS= read -r _shelldesk_sudo_password || true;',
+      `sh -c ${quotedCommand};`,
+      'else',
+      'IFS= read -r _shelldesk_sudo_password || exit 43;',
+      'printf "%s\\n" "$_shelldesk_sudo_password" | sudo -S -p \'\' -v &&',
+      `sudo -n sh -c ${quotedCommand};`,
+      'fi',
+    ].join(' ');
+  }
+
+  function createElevationRequiredError(result) {
+    const detail = result.stderr.trim() || '当前账号需要 sudo 密码才能访问该文件。';
+    return new Error(`SHELLDESK_ELEVATION_REQUIRED:${detail}`);
+  }
+
+  function createElevationAuthFailedError(result) {
+    const detail = result.stderr.trim() || 'sudo 密码验证失败或当前账号没有提权权限。';
+    return new Error(`SHELLDESK_ELEVATION_AUTH_FAILED:${detail}`);
+  }
+
+  async function readRemoteFileWithPrivilege(client, remotePath, sudoPassword = '') {
+    const script = [
+      'remote_path=$1',
+      'max_bytes=$2',
+      'if [ ! -f "$remote_path" ]; then printf "%s\\n" "只能用记事本打开远程文件。" >&2; exit 40; fi',
+      'size=$(wc -c < "$remote_path" 2>/dev/null | tr -dc "0-9") || exit 1',
+      'if [ -z "$size" ]; then size=0; fi',
+      'if [ "$size" -gt "$max_bytes" ]; then printf "文件超过 %s MB，请先下载后用本地编辑器打开。\\n" "$((max_bytes / 1024 / 1024))" >&2; exit 41; fi',
+      'cat -- "$remote_path"',
+    ].join('\n');
+    const command = createPrivilegedShellCommand(script, [remotePath, String(maxRemoteTextFileBytes)], Boolean(sudoPassword));
+    const result = await execRemoteCommandRawText(client, command, sudoPassword ? `${sudoPassword}\n` : '');
+
+    if (result.code === 0) {
+      return result.stdout;
+    }
+
+    if (!sudoPassword && isSudoPasswordRequired(result)) {
+      throw createElevationRequiredError(result);
+    }
+
+    if (sudoPassword && isSudoAuthenticationFailure(result)) {
+      throw createElevationAuthFailedError(result);
+    }
+
+    throw new Error(result.stderr.trim() || `提权读取文件失败，退出码 ${result.code}`);
+  }
+
   function writeRemoteFile(client, remotePath, content) {
     if (Buffer.byteLength(content, 'utf8') > maxRemoteTextWriteBytes) {
       throw new Error(`文件内容超过 ${Math.round(maxRemoteTextWriteBytes / 1024 / 1024)} MB，请使用上传功能替换大文件。`);
@@ -1813,6 +1948,35 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     });
   }
 
+  async function writeRemoteFileWithPrivilege(client, remotePath, content, sudoPassword = '') {
+    if (Buffer.byteLength(content, 'utf8') > maxRemoteTextWriteBytes) {
+      throw new Error(`文件内容超过 ${Math.round(maxRemoteTextWriteBytes / 1024 / 1024)} MB，请使用上传功能替换大文件。`);
+    }
+
+    const script = [
+      'remote_path=$1',
+      'parent_dir=$(dirname -- "$remote_path") || exit 1',
+      'if [ ! -d "$parent_dir" ]; then printf "%s\\n" "远程目录不存在。" >&2; exit 40; fi',
+      'cat > "$remote_path"',
+    ].join('\n');
+    const command = createPrivilegedShellCommand(script, [remotePath], Boolean(sudoPassword));
+    const result = await execRemoteCommandRawText(client, command, sudoPassword ? `${sudoPassword}\n${content}` : content);
+
+    if (result.code === 0) {
+      return true;
+    }
+
+    if (!sudoPassword && isSudoPasswordRequired(result)) {
+      throw createElevationRequiredError(result);
+    }
+
+    if (sudoPassword && isSudoAuthenticationFailure(result)) {
+      throw createElevationAuthFailedError(result);
+    }
+
+    throw new Error(result.stderr.trim() || `提权写入文件失败，退出码 ${result.code}`);
+  }
+
   registerIpcHandler('connection:stat-path', async (_event, connectionId, rawPath) => {
     const remotePath = validateRemotePath(rawPath);
     return withActiveConnectionClientRetry(connectionId, (activeConnection) =>
@@ -1827,19 +1991,41 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     return true;
   });
 
-  registerIpcHandler('connection:read-file', async (_event, connectionId, rawPath) => {
+  registerIpcHandler('connection:read-file', async (_event, connectionId, rawPath, rawOptions) => {
     const remotePath = validateRemotePath(rawPath);
-    return withActiveConnectionClientRetry(connectionId, (activeConnection) =>
-      readRemoteFile(activeConnection.client, remotePath));
+    const options = readFilePrivilegeOptions(rawOptions);
+
+    return withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
+      try {
+        return await readRemoteFile(activeConnection.client, remotePath);
+      } catch (error) {
+        if (activeConnection.displayHost.systemType === 'windows' || !isPermissionDeniedError(error)) {
+          throw error;
+        }
+
+        return readRemoteFileWithPrivilege(activeConnection.client, remotePath, options.sudoPassword);
+      }
+    });
   });
 
-  registerIpcHandler('connection:write-file', async (_event, connectionId, rawPath, content) => {
+  registerIpcHandler('connection:write-file', async (_event, connectionId, rawPath, content, rawOptions) => {
     const remotePath = validateMutableRemotePath(rawPath);
     if (typeof content !== 'string') {
       throw new Error('文件内容必须是字符串。');
     }
-    await withActiveConnectionClientRetry(connectionId, (activeConnection) =>
-      writeRemoteFile(activeConnection.client, remotePath, content));
+    const options = readFilePrivilegeOptions(rawOptions);
+
+    await withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
+      try {
+        await writeRemoteFile(activeConnection.client, remotePath, content);
+      } catch (error) {
+        if (activeConnection.displayHost.systemType === 'windows' || !isPermissionDeniedError(error)) {
+          throw error;
+        }
+
+        await writeRemoteFileWithPrivilege(activeConnection.client, remotePath, content, options.sudoPassword);
+      }
+    });
     return true;
   });
 
@@ -2554,23 +2740,47 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       getRemoteMetrics(activeConnection.client, activeConnection.displayHost.systemType));
   });
 
-  registerIpcHandler('connection:run-command', async (_event, connectionId, rawCommand, rawStdin) => {
+  registerIpcHandler('connection:run-command', async (_event, connectionId, rawCommand, rawStdin, rawOptions) => {
     const command = readBoundedString(rawCommand, '命令', maxRemoteCommandLength, { rejectLineBreaks: false });
     const stdin = typeof rawStdin === 'string'
       ? readBoundedString(rawStdin, '命令输入', maxRemoteCommandInputLength, { required: false, trim: false, rejectLineBreaks: false })
       : '';
-    return withActiveConnectionClientRetry(connectionId, (activeConnection) =>
-      execRemoteCommandRaw(activeConnection.client, command, stdin));
+    const options = readFilePrivilegeOptions(rawOptions);
+
+    return withActiveConnectionClientRetry(connectionId, (activeConnection) => {
+      if (options.sudoPassword && activeConnection.displayHost.systemType !== 'windows') {
+        return execRemoteCommandRaw(
+          activeConnection.client,
+          createSudoVerifiedUserCommand(command),
+          `${options.sudoPassword}\n${stdin}`,
+        );
+      }
+
+      return execRemoteCommandRaw(activeConnection.client, command, stdin);
+    });
   });
 
-  registerIpcHandler('connection:run-command-stream', async (event, connectionId, rawCommand, rawStdin, rawStreamId) => {
+  registerIpcHandler('connection:run-command-stream', async (event, connectionId, rawCommand, rawStdin, rawStreamId, rawOptions) => {
     const command = readBoundedString(rawCommand, '命令', maxRemoteCommandLength, { rejectLineBreaks: false });
     const stdin = typeof rawStdin === 'string'
       ? readBoundedString(rawStdin, '命令输入', maxRemoteCommandInputLength, { required: false, trim: false, rejectLineBreaks: false })
       : '';
     const streamId = readBoundedString(rawStreamId, '命令流标识', 120);
-    return withActiveConnectionClientRetry(connectionId, (activeConnection) =>
-      execRemoteCommandStream(event, activeConnection.client, command, stdin, streamId));
+    const options = readFilePrivilegeOptions(rawOptions);
+
+    return withActiveConnectionClientRetry(connectionId, (activeConnection) => {
+      if (options.sudoPassword && activeConnection.displayHost.systemType !== 'windows') {
+        return execRemoteCommandStream(
+          event,
+          activeConnection.client,
+          createSudoVerifiedUserCommand(command),
+          `${options.sudoPassword}\n${stdin}`,
+          streamId,
+        );
+      }
+
+      return execRemoteCommandStream(event, activeConnection.client, command, stdin, streamId);
+    });
   });
 
   registerIpcHandler('connection:compress', async (_event, connectionId, rawSourcePaths, rawFormat, rawDestPath) => {

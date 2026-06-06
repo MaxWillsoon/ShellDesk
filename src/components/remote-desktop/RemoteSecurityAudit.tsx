@@ -15,6 +15,7 @@ import {
   type SecurityCheckDefinition,
   type SecurityCheckResult,
 } from './securityChecks';
+import { useSudoCommand } from './sudoPrompt';
 import type { RemoteSystemType } from './types';
 
 interface RemoteSecurityAuditProps {
@@ -168,16 +169,6 @@ function createGroupedSecurityResult(
     suggestions,
     rawOutput,
   };
-}
-
-function runCmd(connectionId: string, command: string, language: AppLanguage) {
-  const api = window.guiSSH?.connections;
-
-  if (!api) {
-    throw new Error(t('securityAudit.error.ipcNotReady', language));
-  }
-
-  return api.runCommand(connectionId, command);
 }
 
 function createFailedResult(definition: SecurityCheckDefinition, error: unknown, language: AppLanguage): SecurityCheckResult {
@@ -405,6 +396,7 @@ function RemoteSecurityAudit({ connectionId, settings, systemType, hostLabel }: 
   const language = settings.language;
   const effectiveHostLabel = hostLabel || t('securityCheck.report.currentConnection', language);
   const isWindowsHost = isWindowsSystem(systemType);
+  const { runCommand, sudoPrompt } = useSudoCommand(connectionId, systemType);
   const definitions = useMemo(() => createSecurityCheckDefinitions(isWindowsHost, language), [isWindowsHost, language]);
   const checkGroups = useMemo(() => createSecurityCheckListGroups(definitions, language), [definitions, language]);
   const [results, setResults] = useState<SecurityCheckResult[]>([]);
@@ -474,7 +466,7 @@ function RemoteSecurityAudit({ connectionId, settings, systemType, hostLabel }: 
 
     try {
       const command = definition.createCommand();
-      const commandResult = await runCmd(connectionId, command, language);
+      const commandResult = await runCommand(command);
       const result = definition.evaluate(commandResult);
       upsertResult(result);
       setScannedAt(new Date().toLocaleString(getShellDeskLocale()));
@@ -904,6 +896,7 @@ function RemoteSecurityAudit({ connectionId, settings, systemType, hostLabel }: 
         </div>,
         document.body,
       ) : null}
+      {sudoPrompt}
     </section>
   );
 }

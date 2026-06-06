@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import DismissibleAlert from './DismissibleAlert';
+import { useSudoCommand } from './sudoPrompt';
 
 import { getErrorMessage } from './desktopUtils';
 import {
@@ -50,16 +51,6 @@ const initialDraft: IptablesRuleDraft = {
   comment: '',
 };
 
-function runCmd(connectionId: string, command: string) {
-  const api = window.guiSSH?.connections;
-
-  if (!api) {
-    throw new Error(tCurrent('auto.remoteIptablesManager.g77vf3'));
-  }
-
-  return api.runCommand(connectionId, command);
-}
-
 function uniqSorted(values: string[]) {
   return Array.from(new Set(values.filter(Boolean))).sort((first, second) => first.localeCompare(second));
 }
@@ -99,6 +90,7 @@ function formatPolicy(policy: IptablesPolicy) {
 
 function RemoteIptablesManager({ connectionId, systemType }: RemoteIptablesManagerProps) {
   const isWindowsHost = isWindowsSystem(systemType);
+  const { runCommand, sudoPrompt } = useSudoCommand(connectionId, systemType);
   const [snapshot, setSnapshot] = useState<IptablesSnapshot | null>(null);
   const [selectedRuleId, setSelectedRuleId] = useState('');
   const [draft, setDraft] = useState<IptablesRuleDraft>(initialDraft);
@@ -146,7 +138,7 @@ function RemoteIptablesManager({ connectionId, systemType }: RemoteIptablesManag
     setLoading(true);
 
     try {
-      const result = await runCmd(connectionId, createIptablesStatusCommand());
+      const result = await runCommand(createIptablesStatusCommand());
       const nextSnapshot = parseIptablesSnapshot(result.stdout, result.stderr);
       setSnapshot(nextSnapshot);
       setSelectedRuleId((currentId) => (
@@ -165,7 +157,7 @@ function RemoteIptablesManager({ connectionId, systemType }: RemoteIptablesManag
     } finally {
       setLoading(false);
     }
-  }, [connectionId, isWindowsHost]);
+  }, [isWindowsHost, runCommand]);
 
   useEffect(() => {
     void refreshIptables();
@@ -218,7 +210,7 @@ function RemoteIptablesManager({ connectionId, systemType }: RemoteIptablesManag
     setNotice('');
 
     try {
-      const result = await runCmd(connectionId, pendingAction.command);
+      const result = await runCommand(pendingAction.command);
 
       if (result.code !== 0) {
         throw new Error(result.stderr || result.stdout || tCurrent('auto.remoteIptablesManager.1bjgsa7'));
@@ -475,6 +467,7 @@ function RemoteIptablesManager({ connectionId, systemType }: RemoteIptablesManag
         </div>,
         document.body,
       ) : null}
+      {sudoPrompt}
     </section>
   );
 }

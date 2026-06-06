@@ -530,8 +530,8 @@ interface ShellDeskConnectionControls {
   deletePath: (connectionId: string, remotePath: string, entryType: 'directory' | 'file' | 'symlink') => Promise<boolean>;
   renamePath: (connectionId: string, oldPath: string, newPath: string) => Promise<boolean>;
   createFile: (connectionId: string, remotePath: string) => Promise<boolean>;
-  readFile: (connectionId: string, remotePath: string) => Promise<string>;
-  writeFile: (connectionId: string, remotePath: string, content: string) => Promise<boolean>;
+  readFile: (connectionId: string, remotePath: string, options?: { sudoPassword?: string }) => Promise<string>;
+  writeFile: (connectionId: string, remotePath: string, content: string, options?: { sudoPassword?: string }) => Promise<boolean>;
   downloadFile: (connectionId: string, remotePath: string) => Promise<{ canceled: boolean; filePath?: string; size?: number }>;
   downloadPaths: (connectionId: string, remotePaths: string[]) => Promise<{ canceled: boolean; directoryPath?: string; size?: number; fileCount?: number; itemCount?: number }>;
   uploadFile: (connectionId: string, remotePath: string) => Promise<{ canceled: boolean; remotePath?: string; remotePaths?: string[]; size?: number; fileCount?: number; itemCount?: number }>;
@@ -550,12 +550,13 @@ interface ShellDeskConnectionControls {
   getStatus: (connectionId: string) => Promise<ShellDeskRemoteStatusReport>;
   getSystemInfo: (connectionId: string) => Promise<ShellDeskRemoteSystemInfoReport>;
   getMetrics: (connectionId: string) => Promise<ShellDeskRemoteMetricsReport>;
-  runCommand: (connectionId: string, command: string, stdin?: string) => Promise<{ stdout: string; stderr: string; code: number }>;
+  runCommand: (connectionId: string, command: string, stdin?: string, options?: { sudoPassword?: string }) => Promise<{ stdout: string; stderr: string; code: number }>;
   runCommandStream: (
     connectionId: string,
     command: string,
     stdin?: string,
     callbacks?: ShellDeskRunCommandStreamCallbacks,
+    options?: { sudoPassword?: string },
   ) => Promise<{ stdout: string; stderr: string; code: number }>;
   mysqlConnect: (connectionId: string, config: ShellDeskMysqlConnectConfig) => Promise<ShellDeskMysqlConnectResult>;
   mysqlDisconnect: (connectionId: string, mysqlId: string) => Promise<boolean>;

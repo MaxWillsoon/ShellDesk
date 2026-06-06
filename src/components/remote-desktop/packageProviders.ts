@@ -26,6 +26,10 @@ function shellSingleQuote(value: string) {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+function privilegedPackageCommand(command: string) {
+  return `if [ "$(id -u 2>/dev/null)" = "0" ]; then ${command}; else sudo -n ${command}; fi`;
+}
+
 function createRpmPackageNameSearchCommand(kind: 'dnf' | 'yum', query: string) {
   const quotedQuery = shellSingleQuote(query);
   const queryFormat = shellSingleQuote('%{name}\\t%{evr}\\t%{summary}');
@@ -203,36 +207,36 @@ export function createPackageActionCommand(kind: PackageManagerKind, action: Pac
 
   switch (kind) {
     case 'apt':
-      if (action === 'install') return `sudo apt-get install -y ${shellSingleQuote(name)}`;
-      if (action === 'remove') return `sudo apt-get remove -y ${shellSingleQuote(name)}`;
-      if (action === 'upgrade') return `sudo apt-get install --only-upgrade -y ${shellSingleQuote(name)}`;
-      if (action === 'upgrade-all') return 'sudo apt-get upgrade -y';
-      return 'sudo apt-get update';
+      if (action === 'install') return privilegedPackageCommand(`apt-get install -y ${shellSingleQuote(name)}`);
+      if (action === 'remove') return privilegedPackageCommand(`apt-get remove -y ${shellSingleQuote(name)}`);
+      if (action === 'upgrade') return privilegedPackageCommand(`apt-get install --only-upgrade -y ${shellSingleQuote(name)}`);
+      if (action === 'upgrade-all') return privilegedPackageCommand('apt-get upgrade -y');
+      return privilegedPackageCommand('apt-get update');
     case 'dnf':
     case 'yum':
-      if (action === 'install') return `sudo ${kind} install -y ${shellSingleQuote(name)}`;
-      if (action === 'remove') return `sudo ${kind} remove -y ${shellSingleQuote(name)}`;
-      if (action === 'upgrade') return `sudo ${kind} upgrade -y ${shellSingleQuote(name)}`;
-      if (action === 'upgrade-all') return `sudo ${kind} upgrade -y`;
-      return `sudo ${kind} makecache`;
+      if (action === 'install') return privilegedPackageCommand(`${kind} install -y ${shellSingleQuote(name)}`);
+      if (action === 'remove') return privilegedPackageCommand(`${kind} remove -y ${shellSingleQuote(name)}`);
+      if (action === 'upgrade') return privilegedPackageCommand(`${kind} upgrade -y ${shellSingleQuote(name)}`);
+      if (action === 'upgrade-all') return privilegedPackageCommand(`${kind} upgrade -y`);
+      return privilegedPackageCommand(`${kind} makecache`);
     case 'pacman':
-      if (action === 'install') return `sudo pacman -S --noconfirm ${shellSingleQuote(name)}`;
-      if (action === 'remove') return `sudo pacman -R --noconfirm ${shellSingleQuote(name)}`;
-      if (action === 'upgrade') return `sudo pacman -S --noconfirm ${shellSingleQuote(name)}`;
-      if (action === 'upgrade-all') return 'sudo pacman -Syu --noconfirm';
-      return 'sudo pacman -Sy';
+      if (action === 'install') return privilegedPackageCommand(`pacman -S --noconfirm ${shellSingleQuote(name)}`);
+      if (action === 'remove') return privilegedPackageCommand(`pacman -R --noconfirm ${shellSingleQuote(name)}`);
+      if (action === 'upgrade') return privilegedPackageCommand(`pacman -S --noconfirm ${shellSingleQuote(name)}`);
+      if (action === 'upgrade-all') return privilegedPackageCommand('pacman -Syu --noconfirm');
+      return privilegedPackageCommand('pacman -Sy');
     case 'zypper':
-      if (action === 'install') return `sudo zypper --non-interactive install ${shellSingleQuote(name)}`;
-      if (action === 'remove') return `sudo zypper --non-interactive remove ${shellSingleQuote(name)}`;
-      if (action === 'upgrade') return `sudo zypper --non-interactive update ${shellSingleQuote(name)}`;
-      if (action === 'upgrade-all') return 'sudo zypper --non-interactive update';
-      return 'sudo zypper --non-interactive refresh';
+      if (action === 'install') return privilegedPackageCommand(`zypper --non-interactive install ${shellSingleQuote(name)}`);
+      if (action === 'remove') return privilegedPackageCommand(`zypper --non-interactive remove ${shellSingleQuote(name)}`);
+      if (action === 'upgrade') return privilegedPackageCommand(`zypper --non-interactive update ${shellSingleQuote(name)}`);
+      if (action === 'upgrade-all') return privilegedPackageCommand('zypper --non-interactive update');
+      return privilegedPackageCommand('zypper --non-interactive refresh');
     case 'apk':
-      if (action === 'install') return `sudo apk add ${shellSingleQuote(name)}`;
-      if (action === 'remove') return `sudo apk del ${shellSingleQuote(name)}`;
-      if (action === 'upgrade') return `sudo apk upgrade ${shellSingleQuote(name)}`;
-      if (action === 'upgrade-all') return 'sudo apk upgrade';
-      return 'sudo apk update';
+      if (action === 'install') return privilegedPackageCommand(`apk add ${shellSingleQuote(name)}`);
+      if (action === 'remove') return privilegedPackageCommand(`apk del ${shellSingleQuote(name)}`);
+      if (action === 'upgrade') return privilegedPackageCommand(`apk upgrade ${shellSingleQuote(name)}`);
+      if (action === 'upgrade-all') return privilegedPackageCommand('apk upgrade');
+      return privilegedPackageCommand('apk update');
     case 'winget':
       if (action === 'install') return `winget install --id ${name} --accept-source-agreements --accept-package-agreements`;
       if (action === 'remove') return `winget uninstall --id ${name}`;

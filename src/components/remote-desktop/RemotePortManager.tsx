@@ -4,6 +4,7 @@ import DismissibleAlert from './DismissibleAlert';
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import { isWindowsSystem, powershellCommand, powershellStdinCommand, type RemoteCommandInput } from './remoteSystem';
 import type { RemoteProcessManagerLaunchOptions } from './RemoteProcessManager';
+import { useSudoCommand } from './sudoPrompt';
 import type { RemoteSystemType } from './types';
 import { tCurrent } from '../../i18n';
 
@@ -37,20 +38,6 @@ interface EndpointParts {
 }
 
 const portToolMarker = '__SHELLDESK_PORT_TOOL__';
-
-function runCmd(connectionId: string, command: string | RemoteCommandInput) {
-  const api = window.guiSSH?.connections;
-
-  if (!api) {
-    throw new Error(tCurrent('auto.remotePortManager.g77vf3'));
-  }
-
-  if (typeof command === 'string') {
-    return api.runCommand(connectionId, command);
-  }
-
-  return api.runCommand(connectionId, command.command, command.stdin);
-}
 
 function shellSingleQuote(value: string) {
   return `'${value.replace(/'/g, "'\\''")}'`;
@@ -705,6 +692,7 @@ if ($process) {
 
 function RemotePortManager({ connectionId, systemType, onOpenProcessManager }: RemotePortManagerProps) {
   const isWindowsHost = isWindowsSystem(systemType);
+  const { runCommand, sudoPrompt } = useSudoCommand(connectionId, systemType);
   const [entries, setEntries] = useState<PortListenerEntry[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const [search, setSearch] = useState('');
@@ -766,7 +754,7 @@ function RemotePortManager({ connectionId, systemType, onOpenProcessManager }: R
     setNotice('');
 
     try {
-      const result = await runCmd(connectionId, isWindowsHost ? createWindowsPortCommand() : createUnixPortCommand());
+      const result = await runCommand(isWindowsHost ? createWindowsPortCommand() : createUnixPortCommand());
 
       if (result.code !== 0 && !result.stdout.trim()) {
         throw new Error(result.stderr || tCurrent('auto.remotePortManager.5j197b'));
@@ -794,7 +782,7 @@ function RemotePortManager({ connectionId, systemType, onOpenProcessManager }: R
     } finally {
       setLoading(false);
     }
-  }, [connectionId, isWindowsHost]);
+  }, [isWindowsHost, runCommand]);
 
   useEffect(() => {
     void refreshPorts();
@@ -813,10 +801,7 @@ function RemotePortManager({ connectionId, systemType, onOpenProcessManager }: R
     const loadDetail = async () => {
       setDetailLoading(true);
       try {
-        const result = await runCmd(
-          connectionId,
-          isWindowsHost ? createWindowsProcessDetailCommand(selectedEntry.pid!) : createUnixProcessDetailCommand(selectedEntry.pid!),
-        );
+        const result = await runCommand(isWindowsHost ? createWindowsProcessDetailCommand(selectedEntry.pid!) : createUnixProcessDetailCommand(selectedEntry.pid!));
 
         if (!disposed) {
           setProcessDetail(result.stdout || result.stderr || tCurrent('auto.remotePortManager.eb9lu3'));
@@ -837,7 +822,7 @@ function RemotePortManager({ connectionId, systemType, onOpenProcessManager }: R
     return () => {
       disposed = true;
     };
-  }, [connectionId, isWindowsHost, selectedEntry?.pid]);
+  }, [isWindowsHost, runCommand, selectedEntry?.pid]);
 
   const copySelectedEntry = async () => {
     if (!selectedEntry) {
@@ -990,6 +975,7 @@ function RemotePortManager({ connectionId, systemType, onOpenProcessManager }: R
           )}
         </aside>
       </div>
+      {sudoPrompt}
     </section>
   );
 }

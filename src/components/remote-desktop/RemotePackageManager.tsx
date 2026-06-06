@@ -18,6 +18,7 @@ import {
 } from './packageProviders';
 import { isWindowsSystem } from './remoteSystem';
 import type { RemoteTerminalLaunchOptions } from './RemoteTerminal';
+import { useSudoCommand } from './sudoPrompt';
 import type { RemoteSystemType } from './types';
 import { tCurrent } from '../../i18n';
 
@@ -44,30 +45,6 @@ const packageViews: Array<{ key: Exclude<PackageView, 'search'>; label: string }
 
 const maxPackageActionOutputLength = 30000;
 
-function runCmd(connectionId: string, command: string) {
-  const api = window.guiSSH?.connections;
-
-  if (!api) {
-    throw new Error(tCurrent('auto.remotePackageManager.g77vf3'));
-  }
-
-  return api.runCommand(connectionId, command);
-}
-
-function runCmdStream(
-  connectionId: string,
-  command: string,
-  callbacks: { onChunk?: (chunk: string, stream: 'stdout' | 'stderr') => void } = {},
-) {
-  const api = window.guiSSH?.connections;
-
-  if (!api?.runCommandStream) {
-    throw new Error(tCurrent('auto.remotePackageManager.1307y3o'));
-  }
-
-  return api.runCommandStream(connectionId, command, undefined, callbacks);
-}
-
 function appendBoundedOutput(current: string, chunk: string) {
   if (!chunk) {
     return current;
@@ -92,6 +69,7 @@ function getPackageVersion(pkg: RemotePackageInfo) {
 
 function RemotePackageManager({ connectionId, systemType, onOpenTerminal }: RemotePackageManagerProps) {
   const isWindowsHost = isWindowsSystem(systemType);
+  const { runCommand, runCommandStream, sudoPrompt } = useSudoCommand(connectionId, systemType);
   const [managerKind, setManagerKind] = useState<PackageManagerKind>('unknown');
   const [activeView, setActiveView] = useState<PackageView>('upgradable');
   const [packages, setPackages] = useState<RemotePackageInfo[]>([]);
@@ -134,7 +112,7 @@ function RemotePackageManager({ connectionId, systemType, onOpenTerminal }: Remo
     setError('');
 
     try {
-      const result = await runCmd(connectionId, createDetectPackageManagerCommand(isWindowsHost));
+      const result = await runCommand(createDetectPackageManagerCommand(isWindowsHost));
       const kind = normalizePackageManager(result.stdout.split(/\r?\n/).find(Boolean) ?? 'unknown');
       setManagerKind(kind);
       return kind;
@@ -144,7 +122,7 @@ function RemotePackageManager({ connectionId, systemType, onOpenTerminal }: Remo
     } finally {
       setLoading(false);
     }
-  }, [connectionId, isWindowsHost]);
+  }, [isWindowsHost, runCommand]);
 
   const loadPackages = useCallback(async (view: PackageView, kind = managerKind, query = '') => {
     const requestId = loadRequestIdRef.current + 1;
@@ -170,7 +148,7 @@ function RemotePackageManager({ connectionId, systemType, onOpenTerminal }: Remo
       const command = view === 'search'
         ? createPackageSearchCommand(kind, query)
         : createPackageListCommand(kind, view);
-      const result = await runCmd(connectionId, command);
+      const result = await runCommand(command);
 
       if (requestId !== loadRequestIdRef.current) {
         return;
@@ -194,7 +172,7 @@ function RemotePackageManager({ connectionId, systemType, onOpenTerminal }: Remo
         setLoading(false);
       }
     }
-  }, [connectionId, managerKind]);
+  }, [managerKind, runCommand]);
 
   useEffect(() => {
     const bootKey = `${connectionId}:${isWindowsHost ? 'windows' : 'unix'}`;
@@ -281,11 +259,13 @@ function RemotePackageManager({ connectionId, systemType, onOpenTerminal }: Remo
 
     try {
       let receivedChunk = false;
-      const result = await runCmdStream(connectionId, pendingAction.command, {
+      const result = await runCommandStream(pendingAction.command, undefined, {
         onChunk: (chunk) => {
           receivedChunk = true;
           setActionOutput((current) => appendBoundedOutput(current, chunk));
         },
+      }, {
+        onSudoAttempt: () => setActionOutput(`$ ${pendingAction.command}\n`),
       });
 
       if (!receivedChunk) {
@@ -474,6 +454,7 @@ function RemotePackageManager({ connectionId, systemType, onOpenTerminal }: Remo
         </div>,
         document.body,
       ) : null}
+      {sudoPrompt}
     </section>
   );
 }

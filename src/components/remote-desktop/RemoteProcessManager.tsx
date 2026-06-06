@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import { createPortal } from 'react-dom';
 import DismissibleAlert from './DismissibleAlert';
 
-import { getCurrentAppLanguage, t, translateStructuredText, type AppLanguage, type MessageId } from '../../i18n';
+import { t, translateStructuredText, type AppLanguage, type MessageId } from '../../i18n';
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import MarkdownReport from './MarkdownReport';
 import { isWindowsSystem, powershellCommand, powershellStdinCommand, type RemoteCommandInput } from './remoteSystem';
+import { useSudoCommand } from './sudoPrompt';
 import type { RemoteSystemType } from './types';
 
 export type RemoteProcessManagerSortKey =
@@ -958,20 +959,6 @@ if (-not $foundPort) {
 `);
 }
 
-async function runCmd(connectionId: string, command: string | RemoteCommandInput) {
-  const api = window.guiSSH?.connections;
-
-  if (!api) {
-    throw new Error(t('process.error.ipcNotReady', getCurrentAppLanguage()));
-  }
-
-  if (typeof command === 'string') {
-    return api.runCommand(connectionId, command);
-  }
-
-  return api.runCommand(connectionId, command.command, command.stdin);
-}
-
 function getStateTone(state?: string) {
   if (!state) {
     return 'idle';
@@ -1099,6 +1086,7 @@ function flattenProcessTree(
 function ProcessManager({ connectionId, settings, systemType, launchOptions }: RemoteProcessManagerProps) {
   const language = settings.language;
   const isWindowsHost = isWindowsSystem(systemType);
+  const { runCommand, sudoPrompt } = useSudoCommand(connectionId, systemType);
   const isMountedRef = useRef(true);
   const isRefreshingRef = useRef(false);
   const missingPidNoticeRef = useRef<number | null>(null);
@@ -1148,10 +1136,7 @@ function ProcessManager({ connectionId, settings, systemType, launchOptions }: R
     setError('');
 
     try {
-      const result = await runCmd(
-        connectionId,
-        isWindowsHost ? getWindowsProcessListCommand(language) : getLinuxProcessListCommand(language),
-      );
+      const result = await runCommand(isWindowsHost ? getWindowsProcessListCommand(language) : getLinuxProcessListCommand(language));
       const stdout = result.stdout || '';
       const nextProcesses = isWindowsHost
         ? parseWindowsProcessOutput(stdout, language)
@@ -1181,7 +1166,7 @@ function ProcessManager({ connectionId, settings, systemType, launchOptions }: R
         setLoading(false);
       }
     }
-  }, [connectionId, isWindowsHost, language]);
+  }, [isWindowsHost, language, runCommand]);
 
   const loadProcessDetails = useCallback(async (pid: number) => {
     if (!Number.isInteger(pid) || pid <= 0) {
@@ -1191,10 +1176,7 @@ function ProcessManager({ connectionId, settings, systemType, launchOptions }: R
     setDetailLoading(true);
 
     try {
-      const result = await runCmd(
-        connectionId,
-        isWindowsHost ? getWindowsProcessDetailCommand(pid) : getLinuxProcessDetailCommand(pid),
-      );
+      const result = await runCommand(isWindowsHost ? getWindowsProcessDetailCommand(pid) : getLinuxProcessDetailCommand(pid));
       const nextDetail = parseProcessDetailOutput(result.stdout || '', pid);
 
       if (result.code !== 0) {
@@ -1218,7 +1200,7 @@ function ProcessManager({ connectionId, settings, systemType, launchOptions }: R
         setDetailLoading(false);
       }
     }
-  }, [connectionId, isWindowsHost, language]);
+  }, [isWindowsHost, language, runCommand]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -1495,7 +1477,7 @@ function ProcessManager({ connectionId, settings, systemType, launchOptions }: R
       const command = isWindowsHost
         ? powershellCommand(`Stop-Process -Id ${pending.pid} -Force -ErrorAction Stop`)
         : getLinuxSignalCommand(pending.signal.value, pending.pid);
-      const result = await runCmd(connectionId, command);
+      const result = await runCommand(command);
 
       if (result.code !== 0) {
         throw new Error(result.stderr || result.stdout || t('process.error.operationFailed', language));
@@ -2213,6 +2195,7 @@ function ProcessManager({ connectionId, settings, systemType, launchOptions }: R
         </div>,
         document.body,
       ) : null}
+      {sudoPrompt}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import DismissibleAlert from './DismissibleAlert';
+import { useSudoCommand } from './sudoPrompt';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import {
@@ -55,16 +56,6 @@ interface PendingDiskAction {
 
 const linuxFormatOptions: LinuxFormatFileSystem[] = ['ext4', 'xfs', 'btrfs', 'vfat', 'swap'];
 const windowsFormatOptions: WindowsFormatFileSystem[] = ['NTFS', 'ReFS', 'exFAT', 'FAT32'];
-
-function runCmd(connectionId: string, input: RemoteCommandInput) {
-  const api = window.guiSSH?.connections;
-
-  if (!api) {
-    throw new Error('当前环境不支持远程命令执行');
-  }
-
-  return api.runCommand(connectionId, input.command, input.stdin);
-}
 
 function getPartitionKey(partition: ManagedPartition) {
   return partition.path || partition.device || partition.id;
@@ -137,6 +128,7 @@ function MountInfoList({ mount }: { mount: ManagedMount }) {
 
 function RemoteDiskManager({ connectionId, systemType, onOpenFileManager }: RemoteDiskManagerProps) {
   const isWindowsHost = isWindowsSystem(systemType);
+  const { runCommand, sudoPrompt } = useSudoCommand(connectionId, systemType);
   const [snapshot, setSnapshot] = useState<DiskManagerSnapshot | null>(null);
   const [selection, setSelection] = useState<DiskManagerSelection | null>(null);
   const [activeTab, setActiveTab] = useState<DiskManagerTab>('topology');
@@ -218,7 +210,7 @@ function RemoteDiskManager({ connectionId, systemType, onOpenFileManager }: Remo
 
     try {
       const command = createDiskManagerSnapshotCommand(isWindowsHost);
-      const result = await runCmd(connectionId, command);
+      const result = await runCommand(command);
 
       if (result.code !== 0 && !result.stdout.trim()) {
         throw new Error(result.stderr || '磁盘信息读取失败');
@@ -249,7 +241,7 @@ function RemoteDiskManager({ connectionId, systemType, onOpenFileManager }: Remo
     } finally {
       setLoading(false);
     }
-  }, [connectionId, isWindowsHost]);
+  }, [isWindowsHost, runCommand]);
 
   useEffect(() => {
     void refreshSnapshot();
@@ -490,7 +482,7 @@ function RemoteDiskManager({ connectionId, systemType, onOpenFileManager }: Remo
     setNotice('');
 
     try {
-      const result = await runCmd(connectionId, pendingAction.command);
+      const result = await runCommand(pendingAction.command);
       if (result.code !== 0) {
         throw new Error(result.stderr || result.stdout || '命令执行失败');
       }
@@ -922,6 +914,7 @@ function RemoteDiskManager({ connectionId, systemType, onOpenFileManager }: Remo
         </div>,
         document.body,
       ) : null}
+      {sudoPrompt}
     </section>
   );
 }

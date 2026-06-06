@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { getErrorMessage } from './desktopUtils';
 import DismissibleAlert from './DismissibleAlert';
 import { isWindowsSystem, powershellCommand } from './remoteSystem';
+import { useSudoCommand } from './sudoPrompt';
 import type { RemoteSystemType } from './types';
 import { getCurrentAppLanguage, t, translateStructuredText, useCurrentAppLanguage, type AppLanguage, type MessageId } from '../../i18n';
 
@@ -140,11 +141,18 @@ interface CommandResult {
   code: number;
 }
 
-async function runCmd(connectionId: string, command: string): Promise<CommandResult> {
-  if (!window.guiSSH?.connections) {
+type SettingsRunCommand = (command: string) => Promise<CommandResult>;
+
+const RemoteSettingsCommandContext = createContext<SettingsRunCommand | null>(null);
+
+function useRemoteSettingsCommand() {
+  const runCommand = useContext(RemoteSettingsCommandContext);
+
+  if (!runCommand) {
     throw new Error(t('remoteSettings.command.unsupported', getCurrentAppLanguage()));
   }
-  return window.guiSSH.connections.runCommand(connectionId, command);
+
+  return runCommand;
 }
 
 async function getSystemInfoItems(connectionId: string): Promise<SysInfoItem[]> {
@@ -432,6 +440,7 @@ function createDnsConfigPreview(current: DnsConfig, draft: DnsConfig, language: 
 
 function NetworkPanel({ connectionId }: { connectionId: string }) {
   const language = useCurrentAppLanguage();
+  const runCommand = useRemoteSettingsCommand();
   const [ifaces, setIfaces] = useState<NetIface[]>([]);
   const [dnsState, setDnsState] = useState<RemoteSettingsSectionState<DnsConfig>>({
     loaded: false,
@@ -457,9 +466,9 @@ function NetworkPanel({ connectionId }: { connectionId: string }) {
     setError('');
     try {
       const [ifResult, dnsResult, hostResult] = await Promise.all([
-        runCmd(connectionId, 'ip addr show 2>/dev/null || ifconfig -a 2>/dev/null'),
-        runCmd(connectionId, 'cat /etc/resolv.conf 2>/dev/null'),
-        runCmd(connectionId, 'hostname -f 2>/dev/null || hostname'),
+        runCommand('ip addr show 2>/dev/null || ifconfig -a 2>/dev/null'),
+        runCommand('cat /etc/resolv.conf 2>/dev/null'),
+        runCommand('hostname -f 2>/dev/null || hostname'),
       ]);
 
       setIfaces(parseIpAddr(ifResult.stdout || ''));
@@ -479,7 +488,7 @@ function NetworkPanel({ connectionId }: { connectionId: string }) {
       setLoading(false);
       setDnsState((currentState) => ({ ...currentState, loading: false }));
     }
-  }, [connectionId]);
+  }, [runCommand]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -488,7 +497,7 @@ function NetworkPanel({ connectionId }: { connectionId: string }) {
     setError('');
     setSuccess('');
     try {
-      const result = await runCmd(connectionId, withLinuxPrivilege(`ip link set ${shellQuote(ifaceName)} ${bringUp ? 'up' : 'down'} 2>&1`));
+      const result = await runCommand(withLinuxPrivilege(`ip link set ${shellQuote(ifaceName)} ${bringUp ? 'up' : 'down'} 2>&1`));
       if (result.code !== 0) throw new Error(result.stderr || t('remoteSettings.common.operationFailedRoot', language));
       setSuccess(t('remoteSettings.network.ifacePowerSuccess', language, {
         name: ifaceName,
@@ -581,7 +590,7 @@ function NetworkPanel({ connectionId }: { connectionId: string }) {
     setError('');
     setSuccess('');
     try {
-      const result = await runCmd(connectionId, withLinuxPrivilege(command));
+      const result = await runCommand(withLinuxPrivilege(command));
       if (result.code !== 0 && !result.stdout.includes('dhclient')) {
         throw new Error(result.stderr || result.stdout || t('remoteSettings.common.configFailedRoot', language));
       }
@@ -637,7 +646,7 @@ function NetworkPanel({ connectionId }: { connectionId: string }) {
     setSuccess('');
     try {
       const quotedName = shellQuote(name);
-      const result = await runCmd(connectionId, withLinuxPrivilege(`hostnamectl set-hostname ${quotedName} 2>&1 || hostname ${quotedName} 2>&1`));
+      const result = await runCommand(withLinuxPrivilege(`hostnamectl set-hostname ${quotedName} 2>&1 || hostname ${quotedName} 2>&1`));
       if (result.code !== 0) throw new Error(result.stderr || t('remoteSettings.network.hostnameFailed', language));
       setSuccess(t('remoteSettings.network.hostnameSuccess', language, { name }));
       setHostname(name);
@@ -695,7 +704,7 @@ function NetworkPanel({ connectionId }: { connectionId: string }) {
     setError('');
     setSuccess('');
     try {
-      const result = await runCmd(connectionId, withLinuxPrivilege(`cp /etc/resolv.conf /etc/resolv.conf.bak.$(date +%s) 2>/dev/null; printf '%s' ${shellQuote(nextContent)} > /etc/resolv.conf`));
+      const result = await runCommand(withLinuxPrivilege(`cp /etc/resolv.conf /etc/resolv.conf.bak.$(date +%s) 2>/dev/null; printf '%s' ${shellQuote(nextContent)} > /etc/resolv.conf`));
       if (result.code !== 0) {
         throw new Error(result.stderr || result.stdout || t('remoteSettings.network.dnsWriteFailed', language));
       }
@@ -1234,6 +1243,7 @@ function buildAptSourcesContent(mirrorUrl: string, target: AptSourceTarget, code
 
 function MirrorsPanel({ connectionId }: { connectionId: string }) {
   const language = useCurrentAppLanguage();
+  const runCommand = useRemoteSettingsCommand();
   const [distroType, setDistroType] = useState<MirrorDistroType>('unknown');
   const [distroName, setDistroName] = useState('');
   const [aptSourceTarget, setAptSourceTarget] = useState<AptSourceTarget | null>(null);
@@ -1249,7 +1259,7 @@ function MirrorsPanel({ connectionId }: { connectionId: string }) {
     setLoading(true);
     setError('');
     try {
-      const detectResult = await runCmd(connectionId, `
+      const detectResult = await runCommand(`
         if [ -f /etc/os-release ]; then
           . /etc/os-release
           echo "ID=$ID"
@@ -1277,7 +1287,7 @@ function MirrorsPanel({ connectionId }: { connectionId: string }) {
       ) {
         setDistroType('debian');
         const flavor = getAptFlavorFromDistroOutput(output);
-        const mirrorResult = await runCmd(connectionId, createAptSourceInspectionCommand());
+        const mirrorResult = await runCommand(createAptSourceInspectionCommand());
         const sourceInspection = parseAptSourceInspection(mirrorResult.stdout, flavor, language);
         setAptSourceTarget(sourceInspection.target);
         setCurrentMirror(sourceInspection.display);
@@ -1287,7 +1297,7 @@ function MirrorsPanel({ connectionId }: { connectionId: string }) {
       ) {
         setDistroType(isOfficialRhelDistro(distroValues) ? 'rhel' : 'redhat');
         setAptSourceTarget(null);
-        const mirrorResult = await runCmd(connectionId, createYumRepoInspectionCommand());
+        const mirrorResult = await runCommand(createYumRepoInspectionCommand());
         setCurrentMirror(parseYumRepoInspection(mirrorResult.stdout || mirrorResult.stderr || '', language));
       } else {
         setDistroType('unknown');
@@ -1300,7 +1310,7 @@ function MirrorsPanel({ connectionId }: { connectionId: string }) {
     } finally {
       setLoading(false);
     }
-  }, [connectionId, language]);
+  }, [language, runCommand]);
 
   useEffect(() => { void detectDistro(); }, [detectDistro]);
 
@@ -1351,8 +1361,8 @@ MIRROR_EOF`;
     setSuccess('');
     try {
       const plan = getMirrorPlan(mirrorUrl);
-      const backupResult = await runCmd(connectionId, withLinuxPrivilege(plan.backupCommand));
-      const writeResult = await runCmd(connectionId, withLinuxPrivilege(plan.writeCommand));
+      const backupResult = await runCommand(withLinuxPrivilege(plan.backupCommand));
+      const writeResult = await runCommand(withLinuxPrivilege(plan.writeCommand));
 
       if (writeResult.code !== 0) {
         throw new Error(writeResult.stderr || writeResult.stdout || t('remoteSettings.mirrors.writeFailed', language));
@@ -1482,6 +1492,7 @@ MIRROR_EOF`;
 
 function UpdatePanel({ connectionId }: { connectionId: string }) {
   const language = useCurrentAppLanguage();
+  const runCommand = useRemoteSettingsCommand();
   const [distroType, setDistroType] = useState<'debian' | 'redhat' | 'unknown'>('unknown');
   const [updateOutput, setUpdateOutput] = useState('');
   const [upgradable, setUpgradable] = useState('');
@@ -1493,12 +1504,12 @@ function UpdatePanel({ connectionId }: { connectionId: string }) {
 
   const detectPkgManager = useCallback(async () => {
     try {
-      const result = await runCmd(connectionId, 'command -v apt-get >/dev/null 2>&1 && echo "debian" || (command -v yum >/dev/null 2>&1 && echo "redhat" || echo "unknown")');
+      const result = await runCommand('command -v apt-get >/dev/null 2>&1 && echo "debian" || (command -v yum >/dev/null 2>&1 && echo "redhat" || echo "unknown")');
       setDistroType(result.stdout.trim() as 'debian' | 'redhat' | 'unknown');
     } catch {
       setDistroType('unknown');
     }
-  }, [connectionId]);
+  }, [runCommand]);
 
   useEffect(() => { void detectPkgManager(); }, [detectPkgManager]);
 
@@ -1511,14 +1522,14 @@ function UpdatePanel({ connectionId }: { connectionId: string }) {
     try {
       if (distroType === 'debian') {
         setUpdateOutput(t('remoteSettings.update.updatingApt', language));
-        const updateResult = await runCmd(connectionId, withLinuxPrivilege('apt-get update 2>&1'));
+        const updateResult = await runCommand(withLinuxPrivilege('apt-get update 2>&1'));
         setUpdateOutput((prev) => prev + updateResult.stdout + (updateResult.stderr ? '\n' + updateResult.stderr : ''));
-        const listResult = await runCmd(connectionId, 'apt list --upgradable 2>/dev/null | head -50');
+        const listResult = await runCommand('apt list --upgradable 2>/dev/null | head -50');
         setUpgradable(listResult.stdout || t('remoteSettings.update.noUpdates', language));
         setSuccess(t('remoteSettings.update.indexDone', language));
       } else if (distroType === 'redhat') {
         setUpdateOutput(t('remoteSettings.update.checkingYum', language));
-        const checkResult = await runCmd(connectionId, withLinuxPrivilege('yum check-update 2>&1 || true'));
+        const checkResult = await runCommand(withLinuxPrivilege('yum check-update 2>&1 || true'));
         setUpdateOutput((prev) => prev + checkResult.stdout + (checkResult.stderr ? '\n' + checkResult.stderr : ''));
         setUpgradable(checkResult.stdout || t('remoteSettings.update.noUpdates', language));
         setSuccess(t('remoteSettings.update.checkDone', language));
@@ -1540,12 +1551,12 @@ function UpdatePanel({ connectionId }: { connectionId: string }) {
     try {
       if (distroType === 'debian') {
         setUpdateOutput(t('remoteSettings.update.upgradingApt', language));
-        const result = await runCmd(connectionId, withLinuxPrivilege('DEBIAN_FRONTEND=noninteractive apt-get upgrade -y 2>&1'));
+        const result = await runCommand(withLinuxPrivilege('DEBIAN_FRONTEND=noninteractive apt-get upgrade -y 2>&1'));
         setUpdateOutput((prev) => prev + result.stdout + (result.stderr ? '\n' + result.stderr : ''));
         setSuccess(result.code === 0 ? t('remoteSettings.update.upgradeDone', language) : t('remoteSettings.update.upgradeWarning', language));
       } else if (distroType === 'redhat') {
         setUpdateOutput(t('remoteSettings.update.upgradingYum', language));
-        const result = await runCmd(connectionId, withLinuxPrivilege('yum update -y 2>&1'));
+        const result = await runCommand(withLinuxPrivilege('yum update -y 2>&1'));
         setUpdateOutput((prev) => prev + result.stdout + (result.stderr ? '\n' + result.stderr : ''));
         setSuccess(result.code === 0 ? t('remoteSettings.update.upgradeDone', language) : t('remoteSettings.update.upgradeWarning', language));
       }
@@ -1637,6 +1648,7 @@ function UpdatePanel({ connectionId }: { connectionId: string }) {
 
 function HostsPanel({ connectionId }: { connectionId: string }) {
   const language = useCurrentAppLanguage();
+  const runCommand = useRemoteSettingsCommand();
   const [hostsContent, setHostsContent] = useState('');
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -1652,14 +1664,14 @@ function HostsPanel({ connectionId }: { connectionId: string }) {
     setLoading(true);
     setError('');
     try {
-      const result = await runCmd(connectionId, 'cat /etc/hosts 2>/dev/null');
+      const result = await runCommand('cat /etc/hosts 2>/dev/null');
       setHostsContent(result.stdout || '# /etc/hosts');
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
-  }, [connectionId]);
+  }, [runCommand]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -1668,7 +1680,7 @@ function HostsPanel({ connectionId }: { connectionId: string }) {
     setError('');
     setSuccess('');
     try {
-      const result = await runCmd(connectionId, withLinuxPrivilege(`printf '%s' ${shellQuote(draft)} > /etc/hosts`));
+      const result = await runCommand(withLinuxPrivilege(`printf '%s' ${shellQuote(draft)} > /etc/hosts`));
       if (result.code !== 0) {
         throw new Error(result.stderr || t('remoteSettings.hosts.writeFailed', language));
       }
@@ -1712,7 +1724,7 @@ function HostsPanel({ connectionId }: { connectionId: string }) {
     setSuccess('');
     try {
       const line = `${addIp.trim()} ${addHostname.trim()}`;
-      const result = await runCmd(connectionId, withLinuxPrivilege(`printf '%s\n' ${shellQuote(line)} >> /etc/hosts`));
+      const result = await runCommand(withLinuxPrivilege(`printf '%s\n' ${shellQuote(line)} >> /etc/hosts`));
       if (result.code !== 0) {
         throw new Error(result.stderr || t('remoteSettings.hosts.appendFailed', language));
       }
@@ -1805,6 +1817,7 @@ function HostsPanel({ connectionId }: { connectionId: string }) {
 
 function RoutePanel({ connectionId }: { connectionId: string }) {
   const language = useCurrentAppLanguage();
+  const runCommand = useRemoteSettingsCommand();
   const [routes, setRoutes] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -1819,14 +1832,14 @@ function RoutePanel({ connectionId }: { connectionId: string }) {
     setLoading(true);
     setError('');
     try {
-      const result = await runCmd(connectionId, `ip route show 2>/dev/null || route -n 2>/dev/null || echo ${shellQuote(t('remoteSettings.route.unsupported', language))}`);
+      const result = await runCommand(`ip route show 2>/dev/null || route -n 2>/dev/null || echo ${shellQuote(t('remoteSettings.route.unsupported', language))}`);
       setRoutes(result.stdout || result.stderr || t('remoteSettings.route.unavailable', language));
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
-  }, [connectionId, language]);
+  }, [language, runCommand]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -1834,7 +1847,7 @@ function RoutePanel({ connectionId }: { connectionId: string }) {
     try {
       setError('');
       setSuccess('');
-      const result = await runCmd(connectionId, withLinuxPrivilege(command));
+      const result = await runCommand(withLinuxPrivilege(command));
       if (result.code !== 0) {
         throw new Error(result.stderr || t('remoteSettings.route.addFailed', language));
       }
@@ -1874,7 +1887,7 @@ function RoutePanel({ connectionId }: { connectionId: string }) {
     try {
       setError('');
       setSuccess('');
-      const result = await runCmd(connectionId, withLinuxPrivilege(command));
+      const result = await runCommand(withLinuxPrivilege(command));
       if (result.code !== 0) {
         throw new Error(result.stderr || t('remoteSettings.route.deleteFailed', language));
       }
@@ -1955,6 +1968,7 @@ function RoutePanel({ connectionId }: { connectionId: string }) {
 
 function DiskPanel({ connectionId }: { connectionId: string }) {
   const language = useCurrentAppLanguage();
+  const runCommand = useRemoteSettingsCommand();
   const [diskInfo, setDiskInfo] = useState('');
   const [mountInfo, setMountInfo] = useState('');
   const [blkInfo, setBlkInfo] = useState('');
@@ -1966,9 +1980,9 @@ function DiskPanel({ connectionId }: { connectionId: string }) {
     setError('');
     try {
       const [diskResult, mountResult, blkResult] = await Promise.all([
-        runCmd(connectionId, 'df -hT 2>/dev/null || df -h'),
-        runCmd(connectionId, 'mount | column -t 2>/dev/null || mount'),
-        runCmd(connectionId, `lsblk -f 2>/dev/null || lsblk 2>/dev/null || echo ${shellQuote(t('remoteSettings.disk.unsupported', language))}`),
+        runCommand('df -hT 2>/dev/null || df -h'),
+        runCommand('mount | column -t 2>/dev/null || mount'),
+        runCommand(`lsblk -f 2>/dev/null || lsblk 2>/dev/null || echo ${shellQuote(t('remoteSettings.disk.unsupported', language))}`),
       ]);
       setDiskInfo(diskResult.stdout || diskResult.stderr);
       setMountInfo(mountResult.stdout || mountResult.stderr);
@@ -1978,7 +1992,7 @@ function DiskPanel({ connectionId }: { connectionId: string }) {
     } finally {
       setLoading(false);
     }
-  }, [connectionId, language]);
+  }, [language, runCommand]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -2368,6 +2382,7 @@ function WindowsSystemInfoPanel({ connectionId }: { connectionId: string }) {
 
 function WindowsNetworkPanel({ connectionId }: { connectionId: string }) {
   const language = useCurrentAppLanguage();
+  const runCommand = useRemoteSettingsCommand();
   const [hostname, setHostname] = useState('');
   const [networkInfo, setNetworkInfo] = useState('');
   const [dnsInfo, setDnsInfo] = useState('');
@@ -2379,9 +2394,9 @@ function WindowsNetworkPanel({ connectionId }: { connectionId: string }) {
     setError('');
     try {
       const [hostResult, ipResult, dnsResult] = await Promise.all([
-        runCmd(connectionId, powershellCommand('[System.Net.Dns]::GetHostName()')),
-        runCmd(connectionId, powershellCommand('Get-NetIPConfiguration | Format-List | Out-String -Width 220')),
-        runCmd(connectionId, powershellCommand('Get-DnsClientServerAddress -AddressFamily IPv4,IPv6 | Format-Table -AutoSize | Out-String -Width 200')),
+        runCommand(powershellCommand('[System.Net.Dns]::GetHostName()')),
+        runCommand(powershellCommand('Get-NetIPConfiguration | Format-List | Out-String -Width 220')),
+        runCommand(powershellCommand('Get-DnsClientServerAddress -AddressFamily IPv4,IPv6 | Format-Table -AutoSize | Out-String -Width 200')),
       ]);
       setHostname(hostResult.stdout || hostResult.stderr);
       setNetworkInfo(ipResult.stdout || ipResult.stderr);
@@ -2391,7 +2406,7 @@ function WindowsNetworkPanel({ connectionId }: { connectionId: string }) {
     } finally {
       setLoading(false);
     }
-  }, [connectionId]);
+  }, [runCommand]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -2558,6 +2573,7 @@ function WindowsHostsPanel({ connectionId }: { connectionId: string }) {
 
 function WindowsRoutePanel({ connectionId }: { connectionId: string }) {
   const language = useCurrentAppLanguage();
+  const runCommand = useRemoteSettingsCommand();
   const [routes, setRoutes] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -2566,14 +2582,14 @@ function WindowsRoutePanel({ connectionId }: { connectionId: string }) {
     setLoading(true);
     setError('');
     try {
-      const result = await runCmd(connectionId, powershellCommand('Get-NetRoute | Sort-Object -Property DestinationPrefix, RouteMetric | Format-Table -AutoSize | Out-String -Width 260'));
+      const result = await runCommand(powershellCommand('Get-NetRoute | Sort-Object -Property DestinationPrefix, RouteMetric | Format-Table -AutoSize | Out-String -Width 260'));
       setRoutes(result.stdout || result.stderr || t('remoteSettings.route.unavailable', language));
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
-  }, [connectionId, language]);
+  }, [language, runCommand]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -2603,6 +2619,7 @@ function WindowsRoutePanel({ connectionId }: { connectionId: string }) {
 
 function WindowsDiskPanel({ connectionId }: { connectionId: string }) {
   const language = useCurrentAppLanguage();
+  const runCommand = useRemoteSettingsCommand();
   const [diskInfo, setDiskInfo] = useState('');
   const [volumeInfo, setVolumeInfo] = useState('');
   const [driveInfo, setDriveInfo] = useState('');
@@ -2614,9 +2631,9 @@ function WindowsDiskPanel({ connectionId }: { connectionId: string }) {
     setError('');
     try {
       const [diskResult, volumeResult, driveResult] = await Promise.all([
-        runCmd(connectionId, powershellCommand("Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | Select-Object DeviceID, VolumeName, FileSystem, @{Name='SizeGB'; Expression={[math]::Round($_.Size / 1GB, 2)}}, @{Name='FreeGB'; Expression={[math]::Round($_.FreeSpace / 1GB, 2)}} | Format-Table -AutoSize | Out-String -Width 200")),
-        runCmd(connectionId, powershellCommand('Get-Volume | Select-Object DriveLetter, FileSystemLabel, FileSystem, HealthStatus, SizeRemaining, Size | Format-Table -AutoSize | Out-String -Width 220')),
-        runCmd(connectionId, powershellCommand('Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize | Out-String -Width 200')),
+        runCommand(powershellCommand("Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | Select-Object DeviceID, VolumeName, FileSystem, @{Name='SizeGB'; Expression={[math]::Round($_.Size / 1GB, 2)}}, @{Name='FreeGB'; Expression={[math]::Round($_.FreeSpace / 1GB, 2)}} | Format-Table -AutoSize | Out-String -Width 200")),
+        runCommand(powershellCommand('Get-Volume | Select-Object DriveLetter, FileSystemLabel, FileSystem, HealthStatus, SizeRemaining, Size | Format-Table -AutoSize | Out-String -Width 220')),
+        runCommand(powershellCommand('Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize | Out-String -Width 200')),
       ]);
       setDiskInfo(diskResult.stdout || diskResult.stderr);
       setVolumeInfo(volumeResult.stdout || volumeResult.stderr);
@@ -2626,7 +2643,7 @@ function WindowsDiskPanel({ connectionId }: { connectionId: string }) {
     } finally {
       setLoading(false);
     }
-  }, [connectionId]);
+  }, [runCommand]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -2753,6 +2770,7 @@ function SettingsStatusStrip({
 function RemoteSettings({ connectionId, systemType }: RemoteSettingsProps) {
   const language = useCurrentAppLanguage();
   const isWindowsHost = isWindowsSystem(systemType);
+  const { runCommand, sudoPrompt } = useSudoCommand(connectionId, systemType);
   const settingsGroups = isWindowsHost ? WINDOWS_SETTINGS_GROUPS : SETTINGS_GROUPS;
   const [activeTab, setActiveTab] = useState<SettingsTab>('systeminfo');
   const [hostStatus, setHostStatus] = useState<SettingsHostStatus>(() => createInitialHostStatus(systemType, language));
@@ -2777,7 +2795,7 @@ Write-Output ("USER=" + $identity.Name)
 Write-Output ("PRIV=" + $privilege)
 `)
         : `user="$(id -un 2>/dev/null || whoami 2>/dev/null || printf unknown)"; uid="$(id -u 2>/dev/null || printf '')"; if [ "$uid" = "0" ]; then priv=root; elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then priv=sudo; else priv=user; fi; printf 'USER=%s\\nUID=%s\\nPRIV=%s\\n' "$user" "$uid" "$priv"`;
-      const result = await runCmd(connectionId, command);
+      const result = await runCommand(command);
       setHostStatus(mapPrivilegeStatus(systemType, parseKeyValueOutput(result.stdout || result.stderr || ''), language));
     } catch (err) {
       setHostStatus({
@@ -2790,7 +2808,7 @@ Write-Output ("PRIV=" + $privilege)
     } finally {
       setHostStatusLoading(false);
     }
-  }, [connectionId, isWindowsHost, language, systemType]);
+  }, [isWindowsHost, language, runCommand, systemType]);
 
   useEffect(() => {
     if (!settingsGroups.some((group) => group.tabs.some((tab) => tab.key === activeTab))) {
@@ -2825,35 +2843,38 @@ Write-Output ("PRIV=" + $privilege)
   };
 
   return (
-    <div className="settings-pane">
-      <nav className="settings-sidebar" aria-label={t('remoteSettings.nav.aria', language)}>
-        {settingsGroups.map((group) => (
-          <div key={group.labelId}>
-            <div className="settings-sidebar-group-label">{t(group.labelId, language)}</div>
-            {group.tabs.map((tab) => (
-              <button
-                key={tab.key}
-                type="button"
-                className={`settings-nav-item ${activeTab === tab.key ? 'active' : ''}`}
-                onClick={() => setActiveTab(tab.key)}
-              >
-                <span className="settings-nav-icon">{tab.icon}</span>
-                <div className="settings-nav-text">
-                  <strong>{t(tab.labelId, language)}</strong>
-                  <small>{t(tab.descriptionId, language)}</small>
-                </div>
-              </button>
-            ))}
+    <RemoteSettingsCommandContext.Provider value={runCommand}>
+      <div className="settings-pane">
+        <nav className="settings-sidebar" aria-label={t('remoteSettings.nav.aria', language)}>
+          {settingsGroups.map((group) => (
+            <div key={group.labelId}>
+              <div className="settings-sidebar-group-label">{t(group.labelId, language)}</div>
+              {group.tabs.map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  className={`settings-nav-item ${activeTab === tab.key ? 'active' : ''}`}
+                  onClick={() => setActiveTab(tab.key)}
+                >
+                  <span className="settings-nav-icon">{tab.icon}</span>
+                  <div className="settings-nav-text">
+                    <strong>{t(tab.labelId, language)}</strong>
+                    <small>{t(tab.descriptionId, language)}</small>
+                  </div>
+                </button>
+              ))}
+            </div>
+          ))}
+        </nav>
+        <div className="settings-main">
+          <SettingsStatusStrip status={hostStatus} loading={hostStatusLoading} language={language} onRefresh={() => void refreshHostStatus()} />
+          <div className="settings-panel-shell">
+            {renderPanel()}
           </div>
-        ))}
-      </nav>
-      <div className="settings-main">
-        <SettingsStatusStrip status={hostStatus} loading={hostStatusLoading} language={language} onRefresh={() => void refreshHostStatus()} />
-        <div className="settings-panel-shell">
-          {renderPanel()}
         </div>
       </div>
-    </div>
+      {sudoPrompt}
+    </RemoteSettingsCommandContext.Provider>
   );
 }
 

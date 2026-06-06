@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import DismissibleAlert from './DismissibleAlert';
+import { useSudoCommand } from './sudoPrompt';
 
 import {
   createEmptyCronTask,
@@ -40,16 +41,6 @@ interface WindowsTaskSummary {
 
 type ScheduledTab = 'cron' | 'systemd' | 'windows';
 type PendingAction = { title: string; command: string; afterRun?: () => Promise<void> };
-
-function runCmd(connectionId: string, command: string) {
-  const api = window.guiSSH?.connections;
-
-  if (!api) {
-    throw new Error(tCurrent('auto.remoteScheduledTasks.g77vf3'));
-  }
-
-  return api.runCommand(connectionId, command);
-}
 
 function shellSingleQuote(value: string) {
   return `'${value.replace(/'/g, "'\\''")}'`;
@@ -187,6 +178,7 @@ function createSystemdTimerActionCommand(action: 'start' | 'stop' | 'enable' | '
 
 function RemoteScheduledTasks({ connectionId, systemType }: RemoteScheduledTasksProps) {
   const isWindowsHost = isWindowsSystem(systemType);
+  const { runCommand, sudoPrompt } = useSudoCommand(connectionId, systemType);
   const [activeTab, setActiveTab] = useState<ScheduledTab>(isWindowsHost ? 'windows' : 'cron');
   const [cronLines, setCronLines] = useState<CronLine[]>([]);
   const [selectedCronId, setSelectedCronId] = useState('');
@@ -212,7 +204,7 @@ function RemoteScheduledTasks({ connectionId, systemType }: RemoteScheduledTasks
     setNotice('');
 
     try {
-      const result = await runCmd(connectionId, 'crontab -l 2>/dev/null || true');
+      const result = await runCommand('crontab -l 2>/dev/null || true');
       const lines = parseCronText(result.stdout);
       setCronLines(lines);
       setSelectedCronId(lines.find((line) => line.kind === 'task')?.id ?? '');
@@ -221,7 +213,7 @@ function RemoteScheduledTasks({ connectionId, systemType }: RemoteScheduledTasks
     } finally {
       setLoading(false);
     }
-  }, [connectionId]);
+  }, [runCommand]);
 
   const loadTimers = useCallback(async () => {
     setLoading(true);
@@ -229,7 +221,7 @@ function RemoteScheduledTasks({ connectionId, systemType }: RemoteScheduledTasks
     setNotice('');
 
     try {
-      const result = await runCmd(connectionId, 'systemctl list-timers --all --no-pager --plain 2>/dev/null || true');
+      const result = await runCommand('systemctl list-timers --all --no-pager --plain 2>/dev/null || true');
       const nextTimers = parseSystemdTimers(result.stdout);
       setTimers(nextTimers);
       setSelectedTimerName(nextTimers[0]?.name ?? '');
@@ -239,7 +231,7 @@ function RemoteScheduledTasks({ connectionId, systemType }: RemoteScheduledTasks
     } finally {
       setLoading(false);
     }
-  }, [connectionId]);
+  }, [runCommand]);
 
   const loadWindowsTasks = useCallback(async () => {
     setLoading(true);
@@ -247,7 +239,7 @@ function RemoteScheduledTasks({ connectionId, systemType }: RemoteScheduledTasks
     setNotice('');
 
     try {
-      const result = await runCmd(connectionId, createWindowsTasksCommand());
+      const result = await runCommand(createWindowsTasksCommand());
       const nextTasks = parseWindowsTasks(result.stdout);
       setWindowsTasks(nextTasks);
       setSelectedWindowsTaskName(nextTasks[0]?.name ?? '');
@@ -256,7 +248,7 @@ function RemoteScheduledTasks({ connectionId, systemType }: RemoteScheduledTasks
     } finally {
       setLoading(false);
     }
-  }, [connectionId]);
+  }, [runCommand]);
 
   useEffect(() => {
     if (activeTab === 'cron') void loadCron();
@@ -304,7 +296,7 @@ function RemoteScheduledTasks({ connectionId, systemType }: RemoteScheduledTasks
     setNotice('');
 
     try {
-      const result = await runCmd(connectionId, pendingAction.command);
+      const result = await runCommand(pendingAction.command);
       setNotice(result.stdout || result.stderr || tCurrent('auto.remoteScheduledTasks.1m6h6ak'));
       const afterRun = pendingAction.afterRun;
       setPendingAction(null);
@@ -460,6 +452,7 @@ function RemoteScheduledTasks({ connectionId, systemType }: RemoteScheduledTasks
         </div>,
         document.body,
       ) : null}
+      {sudoPrompt}
     </section>
   );
 }

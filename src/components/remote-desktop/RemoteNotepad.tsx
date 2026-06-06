@@ -86,7 +86,13 @@ interface RemoteNotepadProps {
   initialFilePath?: string;
   initialContent?: string;
   initialTitle?: string;
+  openFileRequest?: NotepadOpenFileRequest;
   systemType?: RemoteSystemType;
+}
+
+interface NotepadOpenFileRequest {
+  id: string;
+  filePath: string;
 }
 
 interface SaveOptions {
@@ -111,6 +117,15 @@ interface NotepadDiffDialog {
   beforeContent: string;
   afterLabel: string;
   afterContent: string;
+}
+
+type NotepadSudoOperation = 'read' | 'save';
+
+interface NotepadSudoPrompt {
+  operation: NotepadSudoOperation;
+  filePath: string;
+  error: string;
+  password: string;
 }
 
 interface DiffPreviewLine {
@@ -269,6 +284,8 @@ const MAX_AI_SELECTION_CHARACTERS = 6000;
 const MAX_AI_ENVIRONMENT_CHARACTERS = 12000;
 const MAX_AI_COMMAND_OUTPUT_CHARACTERS = 12000;
 const MAX_AI_HISTORY_MESSAGES = 14;
+const elevationRequiredPrefix = 'SHELLDESK_ELEVATION_REQUIRED:';
+const elevationAuthFailedPrefix = 'SHELLDESK_ELEVATION_AUTH_FAILED:';
 
 function getFileExtension(name: string): string {
   const dotIndex = name.lastIndexOf('.');
@@ -387,6 +404,25 @@ function isTextFile(fileName: string): boolean {
 function getFileNameFromPath(filePath: string): string {
   const parts = filePath.replace(/\\/g, '/').split('/');
   return parts[parts.length - 1] || filePath;
+}
+
+function getPrivilegeErrorMessage(error: unknown) {
+  const message = getErrorMessage(error);
+
+  if (message.startsWith(elevationRequiredPrefix)) {
+    return message.slice(elevationRequiredPrefix.length).trim();
+  }
+
+  if (message.startsWith(elevationAuthFailedPrefix)) {
+    return message.slice(elevationAuthFailedPrefix.length).trim();
+  }
+
+  return message;
+}
+
+function shouldPromptForSudoPassword(error: unknown) {
+  const message = getErrorMessage(error);
+  return message.startsWith(elevationRequiredPrefix) || message.startsWith(elevationAuthFailedPrefix);
 }
 
 function escapeHtml(content: string): string {
@@ -746,7 +782,7 @@ function NotepadDiffPreview({ preview, language }: { preview: DiffPreview; langu
   );
 }
 
-function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent, initialTitle, systemType }: RemoteNotepadProps) {
+function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent, initialTitle, openFileRequest, systemType }: RemoteNotepadProps) {
   const language = settings.language;
   const [tabs, setTabs] = useState<NotepadTab[]>(() => [createNewTab(language, initialTitle, initialContent)]);
   const [activeTabId, setActiveTabId] = useState(tabs[0].id);
@@ -772,6 +808,7 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
   const [includeAiFileContext, setIncludeAiFileContext] = useState(true);
   const [lastAiSelection, setLastAiSelection] = useState<EditorSelectionSnapshot | null>(null);
   const [lineNumberHeights, setLineNumberHeights] = useState<number[]>([EDITOR_LINE_HEIGHT]);
+  const [sudoPrompt, setSudoPrompt] = useState<NotepadSudoPrompt | null>(null);
 
   const [filePickerVisible, setFilePickerVisible] = useState(false);
   const [filePickerMode, setFilePickerMode] = useState<'open' | 'save'>('open');
@@ -786,12 +823,20 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
   const findInputRef = useRef<HTMLInputElement>(null);
   const aiInputRef = useRef<HTMLTextAreaElement>(null);
   const aiMessagesEndRef = useRef<HTMLDivElement>(null);
+  const sudoPasswordInputRef = useRef<HTMLInputElement>(null);
+  const sudoPromptResolverRef = useRef<((password: string | null) => void) | null>(null);
   const initialFileHandledRef = useRef(false);
+  const lastOpenFileRequestIdRef = useRef('');
   const tabsRef = useRef(tabs);
 
   useEffect(() => {
     tabsRef.current = tabs;
   }, [tabs]);
+
+  useEffect(() => () => {
+    sudoPromptResolverRef.current?.(null);
+    sudoPromptResolverRef.current = null;
+  }, []);
 
   const activeTab = useMemo(() => tabs.find((tab) => tab.id === activeTabId) ?? tabs[0], [tabs, activeTabId]);
   const isAiConfigured = Boolean(
@@ -804,6 +849,98 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
   const updateTab = useCallback((tabId: string, update: (tab: NotepadTab) => NotepadTab) => {
     setTabs((currentTabs) => currentTabs.map((tab) => tab.id === tabId ? update(tab) : tab));
   }, []);
+
+  useEffect(() => {
+    if (sudoPrompt) {
+      sudoPasswordInputRef.current?.focus();
+    }
+  }, [sudoPrompt?.filePath, sudoPrompt?.operation]);
+
+  const requestSudoPassword = useCallback((
+    operation: NotepadSudoOperation,
+    filePath: string,
+    error: string,
+  ) => new Promise<string | null>((resolve) => {
+    sudoPromptResolverRef.current?.(null);
+    sudoPromptResolverRef.current = resolve;
+    setSudoPrompt({
+      operation,
+      filePath,
+      error,
+      password: '',
+    });
+  }), []);
+
+  const resolveSudoPrompt = useCallback((password: string | null) => {
+    sudoPromptResolverRef.current?.(password);
+    sudoPromptResolverRef.current = null;
+    setSudoPrompt(null);
+  }, []);
+
+  const readRemoteTextFile = useCallback(async (filePath: string, operation: NotepadSudoOperation = 'read') => {
+    try {
+      return await window.guiSSH!.connections.readFile(connectionId, filePath);
+    } catch (error) {
+      if (systemType === 'windows' || !shouldPromptForSudoPassword(error)) {
+        throw error;
+      }
+
+      let lastError = getPrivilegeErrorMessage(error);
+
+      for (;;) {
+        const sudoPassword = await requestSudoPassword(operation, filePath, lastError);
+
+        if (sudoPassword === null) {
+          throw new Error(lastError);
+        }
+
+        try {
+          return await window.guiSSH!.connections.readFile(connectionId, filePath, { sudoPassword });
+        } catch (retryError) {
+          if (!shouldPromptForSudoPassword(retryError)) {
+            throw retryError;
+          }
+
+          lastError = getPrivilegeErrorMessage(retryError);
+        }
+      }
+    }
+  }, [connectionId, requestSudoPassword, systemType]);
+
+  const writeRemoteTextFile = useCallback(async (
+    filePath: string,
+    content: string,
+  ) => {
+    try {
+      await window.guiSSH!.connections.writeFile(connectionId, filePath, content);
+      return;
+    } catch (error) {
+      if (systemType === 'windows' || !shouldPromptForSudoPassword(error)) {
+        throw error;
+      }
+
+      let lastError = getPrivilegeErrorMessage(error);
+
+      for (;;) {
+        const sudoPassword = await requestSudoPassword('save', filePath, lastError);
+
+        if (sudoPassword === null) {
+          throw new Error(lastError);
+        }
+
+        try {
+          await window.guiSSH!.connections.writeFile(connectionId, filePath, content, { sudoPassword });
+          return;
+        } catch (retryError) {
+          if (!shouldPromptForSudoPassword(retryError)) {
+            throw retryError;
+          }
+
+          lastError = getPrivilegeErrorMessage(retryError);
+        }
+      }
+    }
+  }, [connectionId, requestSudoPassword, systemType]);
 
   useEffect(() => {
     if (isAiSidebarOpen) {
@@ -871,7 +1008,7 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
     setActiveTabId(newTab.id);
 
     try {
-      const content = await window.guiSSH!.connections.readFile(connectionId, nextFilePath);
+      const content = await readRemoteTextFile(nextFilePath, 'read');
       if (isLikelyBinaryContent(content)) {
         updateTab(newTab.id, (tab) => ({
           ...tab,
@@ -901,7 +1038,7 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
         error: getErrorMessage(error),
       }));
     }
-  }, [activeTabId, connectionId, language, updateTab]);
+  }, [activeTabId, language, readRemoteTextFile, updateTab]);
 
   useEffect(() => {
     if (initialFilePath && !initialFileHandledRef.current) {
@@ -909,6 +1046,15 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
       void openFile(initialFilePath);
     }
   }, [initialFilePath, openFile]);
+
+  useEffect(() => {
+    if (!openFileRequest || openFileRequest.id === lastOpenFileRequestIdRef.current) {
+      return;
+    }
+
+    lastOpenFileRequestIdRef.current = openFileRequest.id;
+    void openFile(openFileRequest.filePath);
+  }, [openFile, openFileRequest]);
 
   const activeContent = activeTab.content;
   const lineCount = useMemo(() => countLogicalLines(activeContent), [activeContent]);
@@ -1051,7 +1197,7 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
       && tabToSave.revisionHint
     ) {
       try {
-        const remoteContent = await window.guiSSH!.connections.readFile(connectionId, nextFilePath);
+        const remoteContent = await readRemoteTextFile(nextFilePath, 'save');
         const remoteRevisionHint = getRevisionHint(remoteContent);
         if (remoteRevisionHint !== tabToSave.revisionHint) {
           updateTab(tabId, (tab) => ({ ...tab, isSaving: false }));
@@ -1079,7 +1225,7 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
     }
 
     try {
-      await window.guiSSH!.connections.writeFile(connectionId, nextFilePath, contentToSave);
+      await writeRemoteTextFile(nextFilePath, contentToSave);
       const nextTitle = getFileNameFromPath(nextFilePath);
       const latestTab = tabsRef.current.find((tab) => tab.id === tabId);
       const receivedMoreEdits = latestTab?.content !== contentToSave;
@@ -1109,7 +1255,7 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
       }));
       return false;
     }
-  }, [closeTabNow, connectionId, language, updateTab]);
+  }, [closeTabNow, language, readRemoteTextFile, updateTab, writeRemoteTextFile]);
 
   const openSavePicker = useCallback((tabId: string, title: string, closeAfterSave = false) => {
     setFilePickerMode('save');
@@ -2262,6 +2408,49 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
               }}>{t('notepad.modal.overwriteRemote', language)}</button>
             </div>
           </div>
+        </div>,
+        document.body,
+      ) : null}
+
+      {sudoPrompt ? createPortal(
+        <div className="notepad-modal-overlay" role="presentation" onClick={() => resolveSudoPrompt(null)}>
+          <form
+            className="notepad-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="notepad-sudo-title"
+            onClick={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              resolveSudoPrompt(sudoPrompt.password);
+            }}
+          >
+            <div id="notepad-sudo-title" className="notepad-modal-title">
+              {t(sudoPrompt.operation === 'read' ? 'notepad.sudo.title.read' : 'notepad.sudo.title.save', language)}
+            </div>
+            <div className="notepad-modal-message">
+              {t('notepad.sudo.message', language, {
+                operation: t(sudoPrompt.operation === 'read' ? 'notepad.sudo.operation.read' : 'notepad.sudo.operation.save', language),
+                path: sudoPrompt.filePath,
+              })}
+            </div>
+            {sudoPrompt.error ? <div className="notepad-modal-message">{t('notepad.sudo.lastError', language, { error: sudoPrompt.error })}</div> : null}
+            <label className="notepad-modal-field">
+              <span>{t('notepad.sudo.password', language)}</span>
+              <input
+                ref={sudoPasswordInputRef}
+                className="notepad-modal-input"
+                type="password"
+                value={sudoPrompt.password}
+                placeholder={t('notepad.sudo.passwordPlaceholder', language)}
+                onChange={(event) => setSudoPrompt({ ...sudoPrompt, password: event.target.value })}
+              />
+            </label>
+            <div className="notepad-modal-actions">
+              <button type="button" className="notepad-modal-btn" onClick={() => resolveSudoPrompt(null)}>{t('common.cancel', language)}</button>
+              <button type="submit" className="notepad-modal-btn primary" disabled={!sudoPrompt.password}>{t('notepad.sudo.submit', language)}</button>
+            </div>
+          </form>
         </div>,
         document.body,
       ) : null}

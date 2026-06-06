@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import DismissibleAlert from './DismissibleAlert';
+import { useSudoCommand } from './sudoPrompt';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import { isWindowsSystem, powershellCommand, powershellSingleQuote } from './remoteSystem';
@@ -85,16 +86,6 @@ const activeStateOrder: Record<RemoteServiceActiveState, number> = {
   inactive: 4,
   unknown: 5,
 };
-
-function runCmd(connectionId: string, command: string) {
-  const api = window.guiSSH?.connections;
-
-  if (!api) {
-    throw new Error(tCurrent('auto.remoteServiceManager.g77vf3'));
-  }
-
-  return api.runCommand(connectionId, command);
-}
 
 function shellSingleQuote(value: string) {
   return `'${value.replace(/'/g, "'\\''")}'`;
@@ -601,6 +592,7 @@ function buildDiagnostics(detail: RemoteServiceDetail) {
 
 function ServiceManager({ connectionId, systemType }: RemoteServiceManagerProps) {
   const isWindowsHost = isWindowsSystem(systemType);
+  const { runCommand, sudoPrompt } = useSudoCommand(connectionId, systemType);
   const isMountedRef = useRef(true);
   const isRefreshingRef = useRef(false);
   const selectedServiceNameRef = useRef('');
@@ -638,10 +630,7 @@ function ServiceManager({ connectionId, systemType }: RemoteServiceManagerProps)
     setNotice('');
 
     try {
-      const result = await runCmd(
-        connectionId,
-        isWindowsHost ? getWindowsServiceListCommand() : getLinuxServiceListCommand(),
-      );
+      const result = await runCommand(isWindowsHost ? getWindowsServiceListCommand() : getLinuxServiceListCommand());
       const parseResult = isWindowsHost
         ? { services: parseWindowsServiceListOutput(result.stdout || '') }
         : parseLinuxServiceListOutput(result.stdout || '');
@@ -681,7 +670,7 @@ function ServiceManager({ connectionId, systemType }: RemoteServiceManagerProps)
         setLoading(false);
       }
     }
-  }, [connectionId, isWindowsHost]);
+  }, [isWindowsHost, runCommand]);
 
   const loadServiceDetail = useCallback(async (serviceName: string) => {
     if (!serviceName) {
@@ -696,10 +685,7 @@ function ServiceManager({ connectionId, systemType }: RemoteServiceManagerProps)
     setError('');
 
     try {
-      const result = await runCmd(
-        connectionId,
-        isWindowsHost ? getWindowsServiceDetailCommand(serviceName) : getLinuxServiceDetailCommand(serviceName),
-      );
+      const result = await runCommand(isWindowsHost ? getWindowsServiceDetailCommand(serviceName) : getLinuxServiceDetailCommand(serviceName));
       const fallback = services.find((service) => service.name === serviceName);
       const nextDetail = isWindowsHost
         ? parseWindowsServiceDetailOutput(result.stdout || '', serviceName, fallback)
@@ -721,7 +707,7 @@ function ServiceManager({ connectionId, systemType }: RemoteServiceManagerProps)
         setDetailLoading(false);
       }
     }
-  }, [connectionId, isWindowsHost, services]);
+  }, [isWindowsHost, runCommand, services]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -784,7 +770,7 @@ function ServiceManager({ connectionId, systemType }: RemoteServiceManagerProps)
       const command = isWindowsHost
         ? getWindowsServiceActionCommand(action, service.name)
         : getLinuxServiceActionCommand(action, service.name);
-      const result = await runCmd(connectionId, command);
+      const result = await runCommand(command);
 
       if (result.code !== 0) {
         throw new Error(result.stderr || result.stdout || tCurrent('auto.remoteServiceManager.pbnt82'));
@@ -1064,6 +1050,7 @@ function ServiceManager({ connectionId, systemType }: RemoteServiceManagerProps)
         </div>,
         document.body,
       ) : null}
+      {sudoPrompt}
     </div>
   );
 }

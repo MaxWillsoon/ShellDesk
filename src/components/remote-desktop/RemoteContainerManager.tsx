@@ -5,6 +5,7 @@ import DismissibleAlert from './DismissibleAlert';
 import { t, useCurrentAppLanguage, type AppLanguage, type MessageId } from '../../i18n';
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import { isWindowsSystem, powershellCommand, powershellSingleQuote } from './remoteSystem';
+import { useSudoCommand } from './sudoPrompt';
 import type { RemoteSystemType } from './types';
 
 export type ContainerRuntime = 'docker' | 'podman';
@@ -103,16 +104,6 @@ const containerActionLabels: Record<ContainerAction, { labelId: MessageId; succe
   restart: { labelId: 'container.action.restart', successId: 'container.action.success.restart' },
   remove: { labelId: 'container.action.remove', successId: 'container.action.success.remove', danger: true },
 };
-
-function runCmd(connectionId: string, command: string, language: AppLanguage) {
-  const api = window.guiSSH?.connections;
-
-  if (!api) {
-    throw new Error(t('container.error.ipcNotReady', language));
-  }
-
-  return api.runCommand(connectionId, command);
-}
 
 function shellSingleQuote(value: string) {
   return `'${value.replace(/'/g, "'\\''")}'`;
@@ -712,6 +703,7 @@ function createContainerTroubleshooting(
 function RemoteContainerManager({ connectionId, systemType }: RemoteContainerManagerProps) {
   const language = useCurrentAppLanguage();
   const isWindowsHost = isWindowsSystem(systemType);
+  const { runCommand, sudoPrompt } = useSudoCommand(connectionId, systemType);
   const runtimeRef = useRef<ContainerRuntime | null>(null);
   const isMountedRef = useRef(true);
   const selectedContainerIdRef = useRef('');
@@ -762,7 +754,7 @@ function RemoteContainerManager({ connectionId, systemType }: RemoteContainerMan
     setTroubleshooting(null);
 
     try {
-      const result = await runCmd(connectionId, getDetectRuntimeCommand(isWindowsHost, language), language);
+      const result = await runCommand(getDetectRuntimeCommand(isWindowsHost, language));
       const detectedRuntime = (result.stdout || '').split(/\r?\n/).map((line) => line.trim()).find((line) => line === 'docker' || line === 'podman') as ContainerRuntime | undefined;
 
       if (!detectedRuntime) {
@@ -786,7 +778,7 @@ function RemoteContainerManager({ connectionId, systemType }: RemoteContainerMan
         setRuntimeLoading(false);
       }
     }
-  }, [connectionId, isWindowsHost, language, setRuntimeValue]);
+  }, [isWindowsHost, language, runCommand, setRuntimeValue]);
 
   const refreshContainers = useCallback(async (options?: { runtimeOverride?: ContainerRuntime; silent?: boolean; preferredContainerId?: string }) => {
     if (!options?.silent) {
@@ -799,7 +791,7 @@ function RemoteContainerManager({ connectionId, systemType }: RemoteContainerMan
 
     try {
       const activeRuntime = options?.runtimeOverride ?? await detectRuntime();
-      const result = await runCmd(connectionId, getContainerListCommand(activeRuntime, isWindowsHost), language);
+      const result = await runCommand(getContainerListCommand(activeRuntime, isWindowsHost));
       const nextContainers = parseJsonLines(result.stdout || '')
         .map(parseContainerSummary)
         .filter((container): container is ContainerSummary => Boolean(container))
@@ -846,7 +838,7 @@ function RemoteContainerManager({ connectionId, systemType }: RemoteContainerMan
         setContainersLoading(false);
       }
     }
-  }, [connectionId, detectRuntime, isWindowsHost, language]);
+  }, [detectRuntime, isWindowsHost, language, runCommand]);
 
   const refreshImages = useCallback(async (options?: { runtimeOverride?: ContainerRuntime; silent?: boolean }) => {
     if (!options?.silent) {
@@ -859,7 +851,7 @@ function RemoteContainerManager({ connectionId, systemType }: RemoteContainerMan
 
     try {
       const activeRuntime = options?.runtimeOverride ?? await detectRuntime();
-      const result = await runCmd(connectionId, getImageListCommand(activeRuntime, isWindowsHost), language);
+      const result = await runCommand(getImageListCommand(activeRuntime, isWindowsHost));
       const nextImages = parseJsonLines(result.stdout || '')
         .map(parseImageSummary)
         .filter((image): image is ImageSummary => Boolean(image))
@@ -887,7 +879,7 @@ function RemoteContainerManager({ connectionId, systemType }: RemoteContainerMan
         setImagesLoading(false);
       }
     }
-  }, [connectionId, detectRuntime, isWindowsHost, language]);
+  }, [detectRuntime, isWindowsHost, language, runCommand]);
 
   const loadContainerDetail = useCallback(async (containerId: string) => {
     const fallback = containers.find((container) => container.id === containerId);
@@ -905,7 +897,7 @@ function RemoteContainerManager({ connectionId, systemType }: RemoteContainerMan
 
     try {
       const activeRuntime = await detectRuntime();
-      const result = await runCmd(connectionId, getContainerDetailCommand(activeRuntime, containerId, isWindowsHost), language);
+      const result = await runCommand(getContainerDetailCommand(activeRuntime, containerId, isWindowsHost));
       const nextDetail = parseContainerDetailOutput(result.stdout || '', fallback, language);
 
       if (result.code !== 0 && !nextDetail.inspectText) {
@@ -924,7 +916,7 @@ function RemoteContainerManager({ connectionId, systemType }: RemoteContainerMan
         setDetailLoading(false);
       }
     }
-  }, [connectionId, containers, detectRuntime, isWindowsHost, language]);
+  }, [containers, detectRuntime, isWindowsHost, language, runCommand]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -1005,7 +997,7 @@ function RemoteContainerManager({ connectionId, systemType }: RemoteContainerMan
 
     try {
       const activeRuntime = await detectRuntime();
-      const result = await runCmd(connectionId, getContainerActionCommand(activeRuntime, action, container.id, isWindowsHost), language);
+      const result = await runCommand(getContainerActionCommand(activeRuntime, action, container.id, isWindowsHost));
 
       if (result.code !== 0) {
         const output = [result.stderr, result.stdout].filter(Boolean).join('\n').trim();
@@ -1055,7 +1047,7 @@ function RemoteContainerManager({ connectionId, systemType }: RemoteContainerMan
 
     try {
       const activeRuntime = await detectRuntime();
-      const result = await runCmd(connectionId, getImagePullCommand(activeRuntime, imageName, isWindowsHost), language);
+      const result = await runCommand(getImagePullCommand(activeRuntime, imageName, isWindowsHost));
 
       if (result.code !== 0) {
         throw new Error(result.stderr || result.stdout || t('container.error.pullFailed', language));
@@ -1083,7 +1075,7 @@ function RemoteContainerManager({ connectionId, systemType }: RemoteContainerMan
 
     try {
       const activeRuntime = await detectRuntime();
-      const result = await runCmd(connectionId, getImageRemoveCommand(activeRuntime, imageRef, isWindowsHost), language);
+      const result = await runCommand(getImageRemoveCommand(activeRuntime, imageRef, isWindowsHost));
 
       if (result.code !== 0) {
         throw new Error(result.stderr || result.stdout || t('container.error.removeImageFailed', language));
@@ -1118,7 +1110,7 @@ function RemoteContainerManager({ connectionId, systemType }: RemoteContainerMan
 
     try {
       const activeRuntime = await detectRuntime();
-      const result = await runCmd(connectionId, getContainerExecCommand(activeRuntime, selectedContainer.id, command, isWindowsHost), language);
+      const result = await runCommand(getContainerExecCommand(activeRuntime, selectedContainer.id, command, isWindowsHost));
       const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
 
       setExecOutput(output || t('container.exec.exit', language, { code: result.code }));
@@ -1605,6 +1597,7 @@ function RemoteContainerManager({ connectionId, systemType }: RemoteContainerMan
         </div>,
         document.body,
       ) : null}
+      {sudoPrompt}
     </div>
   );
 }

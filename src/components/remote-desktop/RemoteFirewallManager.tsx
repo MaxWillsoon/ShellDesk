@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import DismissibleAlert from './DismissibleAlert';
+import { useSudoCommand } from './sudoPrompt';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import {
@@ -45,16 +46,6 @@ const initialDraft: FirewallRuleDraft = {
   source: '',
 };
 
-function runCmd(connectionId: string, command: string) {
-  const api = window.guiSSH?.connections;
-
-  if (!api) {
-    throw new Error(tCurrent('auto.remoteFirewallManager.g77vf3'));
-  }
-
-  return api.runCommand(connectionId, command);
-}
-
 function getActionLabel(action: FirewallRule['action']) {
   if (action === 'allow') return tCurrent('auto.remoteFirewallManager.11bz44c');
   if (action === 'deny') return tCurrent('auto.remoteFirewallManager.1qrntx4');
@@ -89,6 +80,7 @@ function isInactiveUfwSnapshot(snapshot: FirewallSnapshot) {
 
 function RemoteFirewallManager({ connectionId, sshPort, systemType }: RemoteFirewallManagerProps) {
   const isWindowsHost = isWindowsSystem(systemType);
+  const { runCommand, sudoPrompt } = useSudoCommand(connectionId, systemType);
   const [snapshot, setSnapshot] = useState<FirewallSnapshot | null>(null);
   const [selectedRuleId, setSelectedRuleId] = useState('');
   const [draft, setDraft] = useState<FirewallRuleDraft>(initialDraft);
@@ -114,7 +106,7 @@ function RemoteFirewallManager({ connectionId, sshPort, systemType }: RemoteFire
     setNotice('');
 
     try {
-      const result = await runCmd(connectionId, createFirewallStatusCommand(isWindowsHost));
+      const result = await runCommand(createFirewallStatusCommand(isWindowsHost));
       const nextSnapshot = parseFirewallSnapshot(result.stdout, result.stderr, isWindowsHost);
       setSnapshot(nextSnapshot);
       setSelectedRuleId((currentId) => (nextSnapshot.rules.some((rule) => rule.id === currentId) ? currentId : nextSnapshot.rules[0]?.id ?? ''));
@@ -134,7 +126,7 @@ function RemoteFirewallManager({ connectionId, sshPort, systemType }: RemoteFire
     } finally {
       setLoading(false);
     }
-  }, [connectionId, isWindowsHost]);
+  }, [isWindowsHost, runCommand]);
 
   useEffect(() => {
     void refreshFirewall();
@@ -231,7 +223,7 @@ function RemoteFirewallManager({ connectionId, sshPort, systemType }: RemoteFire
     setNotice('');
 
     try {
-      const result = await runCmd(connectionId, pendingAction.command);
+      const result = await runCommand(pendingAction.command);
 
       if (result.code !== 0) {
         throw new Error(result.stderr || result.stdout || tCurrent('auto.remoteFirewallManager.kzqb0h'));
@@ -417,6 +409,7 @@ function RemoteFirewallManager({ connectionId, sshPort, systemType }: RemoteFire
         </div>,
         document.body,
       ) : null}
+      {sudoPrompt}
     </section>
   );
 }
