@@ -7,15 +7,345 @@ const {
   connectSshClientWithJump,
   createSocksProxy,
   ensureActiveConnectionClient,
+  findReusableActiveConnection,
+  focusConnectionWindow,
   getActiveConnection,
   toConnectionInfo,
 } = require('./connectionManager.cjs');
 const { detectRemoteSystem } = require('./remoteConnectionHandlers.cjs');
+const {
+  classifyHostKey,
+  describeHostKey,
+  matchesHostAndPort,
+  normalizeFingerprint,
+  normalizeHostname,
+} = require('./sshSecurity.cjs');
 const { toConnectionErrorMessage, toErrorMessage } = require('./validation.cjs');
-const { validateHostRequest } = require('./vaultStore.cjs');
+const { getVault, notifyVaultChanged, setVault, validateHostRequest } = require('./vaultStore.cjs');
 const { createConnectionWindow } = require('./windows.cjs');
 
 let isBrowserCertificateHandlerRegistered = false;
+const sshPromptRequestTtlMs = 2 * 60 * 1000;
+const keyboardInteractiveRequests = new Map();
+const hostKeyVerificationRequests = new Map();
+
+function createRequestId(prefix) {
+  return `${prefix}-${crypto.randomUUID()}`;
+}
+
+function isWebContentsUsable(sender) {
+  return Boolean(sender && typeof sender.isDestroyed === 'function' && !sender.isDestroyed());
+}
+
+function requestRendererDecision(sender, pendingRequests, channel, prefix, payload) {
+  return new Promise((resolve) => {
+    if (!isWebContentsUsable(sender)) {
+      resolve({ cancel: true });
+      return;
+    }
+
+    const requestId = createRequestId(prefix);
+    const timeoutId = setTimeout(() => {
+      settlePendingRequest(pendingRequests, { requestId }, { cancel: true, timeout: true });
+    }, sshPromptRequestTtlMs);
+
+    pendingRequests.set(requestId, {
+      resolve,
+      timeoutId,
+      webContentsId: sender.id,
+      createdAt: Date.now(),
+    });
+
+    try {
+      sender.send(channel, {
+        requestId,
+        ...payload,
+      });
+    } catch {
+      settlePendingRequest(pendingRequests, { requestId }, { cancel: true });
+    }
+  });
+}
+
+function settlePendingRequest(pendingRequests, rawPayload, response, event = null) {
+  const requestId = String(rawPayload?.requestId || '');
+  const pending = pendingRequests.get(requestId);
+
+  if (!pending) {
+    return { success: false, error: '请求已过期，请重试。' };
+  }
+
+  if (event?.sender?.id && pending.webContentsId && event.sender.id !== pending.webContentsId) {
+    return { success: false, error: '请求来源不匹配。' };
+  }
+
+  clearTimeout(pending.timeoutId);
+  pendingRequests.delete(requestId);
+  pending.resolve(response);
+  return { success: true };
+}
+
+function readPromptText(value) {
+  return String(value || '').slice(0, 500);
+}
+
+function normalizeKeyboardPrompts(prompts) {
+  return (Array.isArray(prompts) ? prompts : []).slice(0, 8).map((prompt) => ({
+    prompt: readPromptText(prompt?.prompt),
+    echo: Boolean(prompt?.echo),
+  }));
+}
+
+function isPasswordKeyboardPrompt(prompt) {
+  if (!prompt || prompt.echo) {
+    return false;
+  }
+
+  const text = String(prompt.prompt || '').toLowerCase();
+
+  if (!/(password|passcode|\u5bc6\u7801|\u53e3\u4ee4)/iu.test(text)) {
+    return false;
+  }
+
+  return !/(one[- ]?time|otp|totp|token|verification|verify|code|\u9a8c\u8bc1\u7801|\u52a8\u6001|\u4ee4\u724c|\u4e00\u6b21)/iu.test(text);
+}
+
+function createKeyboardInteractiveHandler(sender, endpoint, sshConfig) {
+  return async ({ name, instructions, prompts }) => {
+    const normalizedPrompts = normalizeKeyboardPrompts(prompts);
+
+    if (!normalizedPrompts.length) {
+      return [];
+    }
+
+    const savedPassword = typeof sshConfig?.password === 'string' ? sshConfig.password : '';
+
+    if (savedPassword && normalizedPrompts.every(isPasswordKeyboardPrompt)) {
+      return normalizedPrompts.map(() => savedPassword);
+    }
+
+    const response = await requestRendererDecision(
+      sender,
+      keyboardInteractiveRequests,
+      'connection:keyboard-interactive',
+      'keyboard',
+      {
+        hostname: endpoint.hostname,
+        port: endpoint.port,
+        username: endpoint.username,
+        name: readPromptText(name),
+        instructions: readPromptText(instructions),
+        prompts: normalizedPrompts,
+      },
+    );
+
+    if (response?.cancel) {
+      return [];
+    }
+
+    const responses = Array.isArray(response?.responses) ? response.responses : [];
+    return normalizedPrompts.map((_prompt, index) => String(responses[index] ?? ''));
+  };
+}
+
+function upsertKnownHostFromVerification(hostKeyInfo) {
+  const hostname = String(hostKeyInfo.hostname || '').trim();
+  const port = Number(hostKeyInfo.port) || 22;
+  const keyType = String(hostKeyInfo.keyType || '').trim();
+  const fingerprint = normalizeFingerprint(hostKeyInfo.fingerprint);
+
+  if (!hostname || !fingerprint) {
+    return null;
+  }
+
+  const vault = getVault();
+  const currentKnownHosts = Array.isArray(vault.knownHosts) ? vault.knownHosts : [];
+  const now = new Date().toISOString();
+  const existingIndex = currentKnownHosts.findIndex((knownHost) => {
+    if (hostKeyInfo.knownHostId && knownHost.id === hostKeyInfo.knownHostId) {
+      return true;
+    }
+
+    if (!matchesHostAndPort(knownHost, hostname, port)) {
+      return false;
+    }
+
+    const existingFingerprint = normalizeFingerprint(knownHost.fingerprint);
+    return existingFingerprint === fingerprint || (keyType && knownHost.keyType === keyType);
+  });
+  const existing = existingIndex >= 0 ? currentKnownHosts[existingIndex] : null;
+  const nextPublicKey = normalizeKnownHostPublicKey(hostKeyInfo.publicKey) ||
+    normalizeKnownHostPublicKey(existing?.publicKey);
+  const nextKnownHost = {
+    id: existing?.id || crypto.randomUUID(),
+    hostname,
+    port,
+    keyType,
+    publicKey: nextPublicKey,
+    fingerprint,
+    discoveredAt: existing?.discoveredAt || now,
+    lastSeen: now,
+    convertedToHostId: existing?.convertedToHostId || '',
+  };
+  const nextKnownHosts = existingIndex >= 0
+    ? currentKnownHosts.map((knownHost, index) => (index === existingIndex ? nextKnownHost : knownHost))
+    : [nextKnownHost, ...currentKnownHosts];
+
+  setVault({
+    ...vault,
+    knownHosts: nextKnownHosts,
+  });
+  notifyVaultChanged({ kind: 'vault' });
+  return nextKnownHost;
+}
+
+function normalizeKnownHostPublicKey(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const normalizedValue = value.replace(/\0/gu, ' ').trim();
+
+  if (!normalizedValue || normalizedValue.length > 128 * 1024) {
+    return '';
+  }
+
+  const match = normalizedValue.match(/(?:^|\s)([A-Za-z0-9@._+-]+)\s+([A-Za-z0-9+/]+={0,2})(?:\s|$)/u);
+
+  if (!match) {
+    return '';
+  }
+
+  return `${match[1]} ${match[2]}`;
+}
+
+function createHostVerifier(sender, endpoint) {
+  return (rawKey, callback) => {
+    const keyInfo = describeHostKey(rawKey);
+    const knownHosts = getVault().knownHosts;
+    const decision = classifyHostKey({
+      knownHosts,
+      hostname: endpoint.hostname,
+      port: endpoint.port,
+      keyType: keyInfo.keyType,
+      fingerprint: keyInfo.fingerprint,
+    });
+
+    if (decision.status === 'trusted') {
+      callback(true);
+      return;
+    }
+
+    void requestRendererDecision(
+      sender,
+      hostKeyVerificationRequests,
+      'connection:host-key-verification',
+      'hostkey',
+      {
+        hostname: endpoint.hostname,
+        port: endpoint.port,
+        username: endpoint.username,
+        status: decision.status,
+        keyType: keyInfo.keyType,
+        fingerprint: keyInfo.fingerprint,
+        publicKey: keyInfo.publicKey,
+        knownHostId: decision.knownHost?.id || '',
+        knownFingerprint: decision.expectedFingerprint || '',
+      },
+    ).then((response) => {
+      const accept = Boolean(response?.accept);
+
+      if (accept && response?.addToKnownHosts) {
+        try {
+          upsertKnownHostFromVerification({
+            ...endpoint,
+            ...keyInfo,
+            knownHostId: decision.knownHost?.id || '',
+          });
+        } catch (error) {
+          console.warn(
+            `[shelldesk] failed to save SSH known host ${endpoint.hostname}:${endpoint.port}:`,
+            toErrorMessage(error),
+          );
+        }
+      }
+
+      callback(accept);
+    }).catch((error) => {
+      console.warn(
+        `[shelldesk] host key verification request failed ${endpoint.hostname}:${endpoint.port}:`,
+        toErrorMessage(error),
+      );
+      callback(false);
+    });
+  };
+}
+
+function createConnectionEndpoint(displayHost, sshConfig) {
+  return {
+    hostname: String(sshConfig?.host || displayHost?.address || '').trim(),
+    port: Number(sshConfig?.port || displayHost?.port) || 22,
+    username: String(sshConfig?.username || displayHost?.username || '').trim(),
+  };
+}
+
+function applySshSecurityHandlers(sshConfig, endpoint, sender) {
+  if (!sshConfig || !endpoint.hostname) {
+    return;
+  }
+
+  sshConfig.tryKeyboard = true;
+  sshConfig.hostVerifier = createHostVerifier(sender, endpoint);
+  sshConfig.shellDeskKeyboardInteractiveHandler = createKeyboardInteractiveHandler(sender, endpoint, sshConfig);
+}
+
+function createProxyReuseDescriptor(proxyConfig) {
+  if (!proxyConfig) {
+    return null;
+  }
+
+  return {
+    type: String(proxyConfig.type || ''),
+    host: normalizeHostname(proxyConfig.host),
+    port: Number(proxyConfig.port) || 0,
+    command: proxyConfig.type === 'command' ? String(proxyConfig.command || '') : '',
+    username: String(proxyConfig.username || ''),
+  };
+}
+
+function createSshReuseDescriptor(sshConfig, displayHost, rawHost = {}) {
+  const authMethod = String(displayHost?.authMethod || rawHost.authMethod || (
+    sshConfig?.privateKey ? 'key' : sshConfig?.password ? 'password' : 'agent'
+  ));
+
+  return {
+    host: normalizeHostname(sshConfig?.host || displayHost?.address),
+    port: Number(sshConfig?.port || displayHost?.port) || 22,
+    username: String(sshConfig?.username || displayHost?.username || ''),
+    authMethod,
+    hostId: String(rawHost.id || ''),
+    keyId: authMethod === 'key' ? String(rawHost.keyId || '') : '',
+    usesKeyPath: authMethod === 'key' && Boolean(rawHost.keyPath),
+    usesPassword: authMethod === 'password' && Boolean(sshConfig?.password),
+    usesAgent: authMethod === 'agent' || Boolean(sshConfig?.authHandler),
+  };
+}
+
+function createConnectionReuseKey(rawHost, validated) {
+  const target = createSshReuseDescriptor(validated.sshConfig, validated.displayHost, rawHost);
+  const jump = validated.jumpSshConfig
+    ? {
+        target: createSshReuseDescriptor(validated.jumpSshConfig, validated.jumpHost, {}),
+        proxy: createProxyReuseDescriptor(validated.jumpProxyConfig),
+      }
+    : null;
+
+  return JSON.stringify({
+    target,
+    proxy: createProxyReuseDescriptor(validated.proxyConfig),
+    jump,
+  });
+}
 
 function getCertificateTrustOrigin(rawUrl) {
   try {
@@ -71,13 +401,58 @@ function registerConnectionHandlers(registerIpcHandler) {
     isBrowserCertificateHandlerRegistered = true;
   }
 
-  ipcMain.handle('connection:connect', async (_event, rawHost) => {
+  registerIpcHandler('connection:keyboard-interactive-response', async (event, payload) => {
+    const result = settlePendingRequest(keyboardInteractiveRequests, payload, {
+      responses: Array.isArray(payload?.responses) ? payload.responses.map((response) => String(response ?? '')) : [],
+      cancel: Boolean(payload?.cancel),
+    }, event);
+
+    if (!result.success) {
+      throw new Error(result.error);
+    }
+
+    return true;
+  });
+
+  registerIpcHandler('connection:host-key-response', async (event, payload) => {
+    const result = settlePendingRequest(hostKeyVerificationRequests, payload, {
+      accept: Boolean(payload?.accept),
+      addToKnownHosts: Boolean(payload?.addToKnownHosts),
+    }, event);
+
+    if (!result.success) {
+      throw new Error(result.error);
+    }
+
+    return true;
+  });
+
+  ipcMain.handle('connection:connect', async (event, rawHost) => {
     let client;
     let jumpClient;
     let activeConnection;
 
     try {
-      const { displayHost, sshConfig, privilegeConfig, proxyConfig, jumpSshConfig, jumpProxyConfig, jumpHost } = validateHostRequest(rawHost);
+      const validated = validateHostRequest(rawHost);
+      const { displayHost, sshConfig, privilegeConfig, proxyConfig, jumpSshConfig, jumpProxyConfig, jumpHost } = validated;
+      const reuseKey = createConnectionReuseKey(rawHost, validated);
+      const reusableConnection = findReusableActiveConnection(reuseKey);
+
+      if (reusableConnection) {
+        focusConnectionWindow(reusableConnection);
+        return {
+          ok: true,
+          reused: true,
+          connection: toConnectionInfo(reusableConnection),
+        };
+      }
+
+      applySshSecurityHandlers(sshConfig, createConnectionEndpoint(displayHost, sshConfig), event.sender);
+
+      if (jumpSshConfig) {
+        applySshSecurityHandlers(jumpSshConfig, createConnectionEndpoint(jumpHost, jumpSshConfig), event.sender);
+      }
+
       const connectedClients = await connectSshClientWithJump(sshConfig, jumpSshConfig, jumpHost, proxyConfig, jumpProxyConfig);
       client = connectedClients.client;
       jumpClient = connectedClients.jumpClient;
@@ -101,6 +476,7 @@ function registerConnectionHandlers(registerIpcHandler) {
         jumpHost,
         socksServer: null,
         proxyPort: 0,
+        reuseKey,
         partition,
         browserSession: remoteSession,
         browserCertificateTrust: new Set(),

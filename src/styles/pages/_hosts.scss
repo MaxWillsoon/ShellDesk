@@ -229,6 +229,156 @@
   font-weight: 750;
 }
 
+.ssh-security-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2300;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(3, 7, 12, 0.58);
+  backdrop-filter: blur(10px);
+}
+
+.ssh-security-dialog {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 12px;
+  width: min(560px, calc(100vw - 32px));
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 8px;
+  padding: 16px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 64%),
+    var(--surface-panel);
+  color: var(--text);
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.36);
+}
+
+.ssh-security-dialog.changed {
+  border-color: var(--danger-border);
+  background:
+    linear-gradient(180deg, rgba(255, 111, 143, 0.12), transparent 64%),
+    var(--surface-panel);
+}
+
+.ssh-security-mark {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.ssh-security-dialog.changed .ssh-security-mark {
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
+  color: var(--danger-text-soft);
+}
+
+.ssh-security-copy {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.ssh-security-copy strong {
+  color: var(--text-strong);
+  font-size: 15px;
+  font-weight: 850;
+}
+
+.ssh-security-copy > span,
+.ssh-security-copy p,
+.ssh-security-fields label span,
+.ssh-security-fingerprints > span {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.ssh-security-fields {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.ssh-security-fields label {
+  display: grid;
+  gap: 6px;
+}
+
+.ssh-security-fields input {
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: var(--input-bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.ssh-security-fields input:focus {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--border));
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.ssh-security-fingerprints {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.ssh-security-fingerprints code {
+  display: block;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: var(--surface-sunken);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.ssh-security-actions {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.ssh-security-actions button {
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 12px;
+  background: var(--surface-soft);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.ssh-security-actions button.primary {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.ssh-security-actions button:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
 .vault-section {
   margin-top: 12px;
 }
@@ -1831,5 +1981,14 @@
   .connection-error-dialog button {
     grid-column: 2;
     justify-self: start;
+  }
+
+  .ssh-security-dialog {
+    grid-template-columns: 28px minmax(0, 1fr);
+    padding: 14px;
+  }
+
+  .ssh-security-actions {
+    justify-content: flex-start;
   }
 }

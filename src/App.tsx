@@ -1588,6 +1588,11 @@ function App() {
   const [isQuickConnecting, setIsQuickConnecting] = useState(false);
   const [isCredentialConnecting, setIsCredentialConnecting] = useState(false);
   const [connectionErrorNotice, setConnectionErrorNotice] = useState<ConnectionErrorNotice | null>(null);
+  const [keyboardInteractiveRequest, setKeyboardInteractiveRequest] = useState<ShellDeskKeyboardInteractiveRequest | null>(null);
+  const [keyboardInteractiveResponses, setKeyboardInteractiveResponses] = useState<string[]>([]);
+  const [isKeyboardInteractivePending, setIsKeyboardInteractivePending] = useState(false);
+  const [hostKeyVerificationRequest, setHostKeyVerificationRequest] = useState<ShellDeskHostKeyVerificationRequest | null>(null);
+  const [isHostKeyVerificationPending, setIsHostKeyVerificationPending] = useState(false);
   const [syncConflictCount, setSyncConflictCount] = useState(0);
   const [syncConflictNotice, setSyncConflictNotice] = useState<SyncNotice | null>(null);
   const [syncResolutionPending, setSyncResolutionPending] = useState<ShellDeskSyncConflictResolution | ShellDeskSyncEmptyVaultResolution | 'allowShrink' | ''>('');
@@ -2381,6 +2386,27 @@ function App() {
   }, [windowControls]);
 
   useEffect(() => {
+    if (!window.guiSSH?.events) {
+      return undefined;
+    }
+
+    const removeKeyboardInteractive = window.guiSSH.events.onKeyboardInteractive((payload) => {
+      setKeyboardInteractiveRequest(payload);
+      setKeyboardInteractiveResponses(payload.prompts.map(() => ''));
+      setIsKeyboardInteractivePending(false);
+    });
+    const removeHostKeyVerification = window.guiSSH.events.onHostKeyVerification((payload) => {
+      setHostKeyVerificationRequest(payload);
+      setIsHostKeyVerificationPending(false);
+    });
+
+    return () => {
+      removeKeyboardInteractive();
+      removeHostKeyVerification();
+    };
+  }, []);
+
+  useEffect(() => {
     if (!connection || !window.guiSSH?.events) {
       return;
     }
@@ -2485,6 +2511,77 @@ function App() {
 
   const closeWindow = () => {
     void windowControls?.close();
+  };
+
+  const updateKeyboardInteractiveResponse = (index: number, value: string) => {
+    setKeyboardInteractiveResponses((currentResponses) => {
+      const nextResponses = [...currentResponses];
+      nextResponses[index] = value;
+      return nextResponses;
+    });
+  };
+
+  const submitKeyboardInteractive = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    const request = keyboardInteractiveRequest;
+    const respond = window.guiSSH?.connections?.respondKeyboardInteractive;
+
+    if (!request || !respond || isKeyboardInteractivePending) {
+      return;
+    }
+
+    setIsKeyboardInteractivePending(true);
+    void respond({
+      requestId: request.requestId,
+      responses: request.prompts.map((_prompt, index) => keyboardInteractiveResponses[index] ?? ''),
+    }).catch((error) => {
+      setStatusMessage(getErrorMessage(error, appLanguage));
+    }).finally(() => {
+      setIsKeyboardInteractivePending(false);
+      setKeyboardInteractiveRequest((currentRequest) => (
+        currentRequest?.requestId === request.requestId ? null : currentRequest
+      ));
+    });
+  };
+
+  const cancelKeyboardInteractive = () => {
+    const request = keyboardInteractiveRequest;
+
+    if (!request) {
+      return;
+    }
+
+    setKeyboardInteractiveRequest(null);
+    setKeyboardInteractiveResponses([]);
+    setIsKeyboardInteractivePending(false);
+    void window.guiSSH?.connections?.respondKeyboardInteractive({
+      requestId: request.requestId,
+      cancel: true,
+    }).catch(() => undefined);
+  };
+
+  const respondHostKeyVerification = (accept: boolean, addToKnownHosts = false) => {
+    const request = hostKeyVerificationRequest;
+    const respond = window.guiSSH?.connections?.respondHostKeyVerification;
+
+    if (!request || !respond || isHostKeyVerificationPending) {
+      return;
+    }
+
+    setIsHostKeyVerificationPending(true);
+    void respond({
+      requestId: request.requestId,
+      accept,
+      addToKnownHosts,
+    }).catch((error) => {
+      setStatusMessage(getErrorMessage(error, appLanguage));
+    }).finally(() => {
+      setIsHostKeyVerificationPending(false);
+      setHostKeyVerificationRequest((currentRequest) => (
+        currentRequest?.requestId === request.requestId ? null : currentRequest
+      ));
+    });
   };
 
   const resolveSyncConflict = async (resolution: ShellDeskSyncConflictResolution) => {
@@ -3397,6 +3494,13 @@ function App() {
     ? formattedUpdateReadyVersion
     : t('app.update.ready.versionUnknown', appLanguage);
   const shouldShowUpdateReadyNotice = Boolean(updateReadyNotice) && !shouldShowSyncConflictNotice && !connection && !isConnectionWindow && activePage !== 'settings';
+  const hostKeyFingerprintLabel = hostKeyVerificationRequest?.fingerprint
+    ? `SHA256:${hostKeyVerificationRequest.fingerprint.replace(/^SHA256:/i, '')}`
+    : '';
+  const knownHostFingerprintLabel = hostKeyVerificationRequest?.knownFingerprint
+    ? `SHA256:${hostKeyVerificationRequest.knownFingerprint.replace(/^SHA256:/i, '')}`
+    : '';
+  const hostKeyVerificationChanged = hostKeyVerificationRequest?.status === 'changed';
 
   return (
     <div className={isMacOS ? 'app-shell app-shell-macos' : 'app-shell'}>
@@ -3442,6 +3546,77 @@ function App() {
               <p>{connectionErrorNotice.message}</p>
             </div>
             <button type="button" onClick={() => setConnectionErrorNotice(null)}>{t('common.close', appLanguage)}</button>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+      {keyboardInteractiveRequest ? createPortal(
+        <div className="ssh-security-overlay no-drag" role="presentation">
+          <form className="ssh-security-dialog" role="dialog" aria-modal="true" aria-labelledby="keyboard-interactive-title" onSubmit={submitKeyboardInteractive}>
+            <div className="ssh-security-mark" aria-hidden="true">#</div>
+            <div className="ssh-security-copy">
+              <strong id="keyboard-interactive-title">{keyboardInteractiveRequest.name || t('app.mfa.title', appLanguage)}</strong>
+              <span>{keyboardInteractiveRequest.username}@{keyboardInteractiveRequest.hostname}:{keyboardInteractiveRequest.port}</span>
+              <p>{keyboardInteractiveRequest.instructions || t('app.mfa.summary', appLanguage)}</p>
+              <div className="ssh-security-fields">
+                {keyboardInteractiveRequest.prompts.map((prompt, index) => (
+                  <label key={`${keyboardInteractiveRequest.requestId}:${index}`}>
+                    <span>{prompt.prompt || t('app.mfa.prompt', appLanguage, { index: String(index + 1) })}</span>
+                    <input
+                      autoFocus={index === 0}
+                      type={prompt.echo ? 'text' : 'password'}
+                      value={keyboardInteractiveResponses[index] ?? ''}
+                      onChange={(event) => updateKeyboardInteractiveResponse(index, event.target.value)}
+                      disabled={isKeyboardInteractivePending}
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="ssh-security-actions">
+              <button type="button" onClick={cancelKeyboardInteractive} disabled={isKeyboardInteractivePending}>{t('common.cancel', appLanguage)}</button>
+              <button type="submit" className="primary" disabled={isKeyboardInteractivePending}>
+                {isKeyboardInteractivePending ? t('app.mfa.verifying', appLanguage) : t('app.mfa.submit', appLanguage)}
+              </button>
+            </div>
+          </form>
+        </div>,
+        document.body,
+      ) : null}
+      {hostKeyVerificationRequest ? createPortal(
+        <div className="ssh-security-overlay no-drag" role="presentation">
+          <div className={`ssh-security-dialog host-key-dialog ${hostKeyVerificationChanged ? 'changed' : ''}`} role="alertdialog" aria-modal="true" aria-labelledby="host-key-title">
+            <div className="ssh-security-mark" aria-hidden="true">{hostKeyVerificationChanged ? '!' : '◆'}</div>
+            <div className="ssh-security-copy">
+              <strong id="host-key-title">
+                {hostKeyVerificationChanged ? t('app.hostKey.changedTitle', appLanguage) : t('app.hostKey.unknownTitle', appLanguage)}
+              </strong>
+              <span>{hostKeyVerificationRequest.username}@{hostKeyVerificationRequest.hostname}:{hostKeyVerificationRequest.port}</span>
+              <p>
+                {hostKeyVerificationChanged
+                  ? t('app.hostKey.changedSummary', appLanguage)
+                  : t('app.hostKey.unknownSummary', appLanguage)}
+              </p>
+              <div className="ssh-security-fingerprints">
+                <span>{t('app.hostKey.fingerprint', appLanguage, { keyType: hostKeyVerificationRequest.keyType || 'SSH' })}</span>
+                <code>{hostKeyFingerprintLabel}</code>
+                {knownHostFingerprintLabel ? (
+                  <>
+                    <span>{t('app.hostKey.savedFingerprint', appLanguage)}</span>
+                    <code>{knownHostFingerprintLabel}</code>
+                  </>
+                ) : null}
+              </div>
+            </div>
+            <div className="ssh-security-actions">
+              <button type="button" onClick={() => respondHostKeyVerification(false)} disabled={isHostKeyVerificationPending}>{t('common.cancel', appLanguage)}</button>
+              <button type="button" onClick={() => respondHostKeyVerification(true, false)} disabled={isHostKeyVerificationPending}>
+                {t('app.hostKey.continueOnce', appLanguage)}
+              </button>
+              <button type="button" className="primary" onClick={() => respondHostKeyVerification(true, true)} disabled={isHostKeyVerificationPending}>
+                {hostKeyVerificationChanged ? t('app.hostKey.updateAndContinue', appLanguage) : t('app.hostKey.trustAndContinue', appLanguage)}
+              </button>
+            </div>
           </div>
         </div>,
         document.body,

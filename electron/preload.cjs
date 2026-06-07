@@ -127,6 +127,8 @@ contextBridge.exposeInMainWorld('guiSSH', {
   },
   connections: {
     connect: connectHost,
+    respondKeyboardInteractive: (payload) => ipcRenderer.invoke('connection:keyboard-interactive-response', payload),
+    respondHostKeyVerification: (payload) => ipcRenderer.invoke('connection:host-key-response', payload),
     getInfo: (connectionId) => ipcRenderer.invoke('connection:get-info', connectionId),
     disconnect: (connectionId) => ipcRenderer.invoke('connection:disconnect', connectionId),
     getIpcCapabilities: () => ipcRenderer.invoke('connection:get-ipc-capabilities').catch(() => ({ terminalSessions: false })),
@@ -240,6 +242,8 @@ contextBridge.exposeInMainWorld('guiSSH', {
     onConnectionClosed: (callback) => onIpc('connection:closed', callback),
     onConnectionReconnecting: (callback) => onIpc('connection:reconnecting', callback),
     onConnectionRestored: (callback) => onIpc('connection:restored', callback),
+    onKeyboardInteractive: (callback) => onIpc('connection:keyboard-interactive', callback),
+    onHostKeyVerification: (callback) => onIpc('connection:host-key-verification', callback),
     onWindowMaximizedChange: (callback) => onIpc('window:maximize-state-changed', callback),
     onVaultChanged: (callback) => onIpc('vault:changed', callback),
     onSyncChanged: (callback) => onIpc('sync:changed', callback),

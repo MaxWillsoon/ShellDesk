@@ -554,6 +554,46 @@ interface ShellDeskIpcCapabilities {
   terminalBinary?: boolean;
 }
 
+interface ShellDeskKeyboardInteractivePrompt {
+  prompt: string;
+  echo: boolean;
+}
+
+interface ShellDeskKeyboardInteractiveRequest {
+  requestId: string;
+  hostname: string;
+  port: number;
+  username: string;
+  name: string;
+  instructions: string;
+  prompts: ShellDeskKeyboardInteractivePrompt[];
+}
+
+interface ShellDeskHostKeyVerificationRequest {
+  requestId: string;
+  hostname: string;
+  port: number;
+  username: string;
+  status: 'unknown' | 'changed';
+  keyType: string;
+  fingerprint: string;
+  publicKey?: string;
+  knownHostId?: string;
+  knownFingerprint?: string;
+}
+
+interface ShellDeskKeyboardInteractiveResponse {
+  requestId: string;
+  responses?: string[];
+  cancel?: boolean;
+}
+
+interface ShellDeskHostKeyVerificationResponse {
+  requestId: string;
+  accept: boolean;
+  addToKnownHosts?: boolean;
+}
+
 interface ShellDeskTerminalIpcOptions {
   legacy?: boolean;
   title?: string;
@@ -588,6 +628,8 @@ interface ShellDeskLocalUploadItem {
 
 interface ShellDeskConnectionControls {
   connect: (host: ShellDeskHostConnectionRequest) => Promise<ShellDeskConnectionInfo>;
+  respondKeyboardInteractive: (payload: ShellDeskKeyboardInteractiveResponse) => Promise<boolean>;
+  respondHostKeyVerification: (payload: ShellDeskHostKeyVerificationResponse) => Promise<boolean>;
   getInfo: (connectionId: string) => Promise<ShellDeskConnectionInfo>;
   disconnect: (connectionId: string) => Promise<boolean>;
   getIpcCapabilities: () => Promise<ShellDeskIpcCapabilities>;
@@ -1107,6 +1149,8 @@ interface ShellDeskEventControls {
   onConnectionClosed: (callback: (payload: { connectionId: string; reason?: string }) => void) => () => void;
   onConnectionReconnecting: (callback: (payload: { connectionId: string; reason?: string; startedAt?: string }) => void) => () => void;
   onConnectionRestored: (callback: (payload: { connectionId: string; restoredAt?: string }) => void) => () => void;
+  onKeyboardInteractive: (callback: (payload: ShellDeskKeyboardInteractiveRequest) => void) => () => void;
+  onHostKeyVerification: (callback: (payload: ShellDeskHostKeyVerificationRequest) => void) => () => void;
   onWindowMaximizedChange: (callback: (payload: { maximized: boolean }) => void) => () => void;
   onVaultChanged: (callback: (payload: { kind: 'vault' | 'bookmarks' | 'preference'; scope?: string; key?: string }) => void) => () => void;
   onSyncChanged: (callback: (payload: ShellDeskSyncResult) => void) => () => void;

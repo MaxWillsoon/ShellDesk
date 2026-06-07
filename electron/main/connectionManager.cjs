@@ -58,6 +58,39 @@ function isConnectionWindowAlive(activeConnection) {
   return Boolean(activeConnection?.window && !activeConnection.window.isDestroyed());
 }
 
+function focusConnectionWindow(activeConnection) {
+  if (!isConnectionWindowAlive(activeConnection)) {
+    return false;
+  }
+
+  if (activeConnection.window.isMinimized()) {
+    activeConnection.window.restore();
+  }
+
+  activeConnection.window.show();
+  activeConnection.window.focus();
+  return true;
+}
+
+function findReusableActiveConnection(reuseKey) {
+  if (!reuseKey) {
+    return null;
+  }
+
+  for (const activeConnection of activeConnections.values()) {
+    if (
+      activeConnection.reuseKey === reuseKey &&
+      activeConnection.clientOnline &&
+      !activeConnection.isClosing &&
+      isConnectionWindowAlive(activeConnection)
+    ) {
+      return activeConnection;
+    }
+  }
+
+  return null;
+}
+
 function notifyConnectionEvent(channel, payload) {
   for (const window of BrowserWindow.getAllWindows()) {
     if (!window.webContents.isDestroyed()) {
@@ -66,11 +99,21 @@ function notifyConnectionEvent(channel, payload) {
   }
 }
 
+function getClientSshConfig(sshConfig) {
+  const {
+    shellDeskKeyboardInteractiveHandler: _keyboardInteractiveHandler,
+    ...clientConfig
+  } = sshConfig || {};
+
+  return clientConfig;
+}
+
 function connectSshClient(sshConfig) {
   return new Promise((resolve, reject) => {
     const client = new Client();
     let settled = false;
     const ignoreSettledError = () => undefined;
+    const keyboardInteractiveHandler = sshConfig?.shellDeskKeyboardInteractiveHandler;
 
     const rejectConnection = (error) => {
       if (settled) {
@@ -97,8 +140,23 @@ function connectSshClient(sshConfig) {
 
     client.on('error', rejectConnection);
 
+    if (typeof keyboardInteractiveHandler === 'function') {
+      client.on('keyboard-interactive', (name, instructions, instructionsLang, prompts, finish) => {
+        void Promise.resolve(keyboardInteractiveHandler({
+          name,
+          instructions,
+          instructionsLang,
+          prompts: Array.isArray(prompts) ? prompts : [],
+        })).then((responses) => {
+          finish(Array.isArray(responses) ? responses.map((response) => String(response ?? '')) : []);
+        }).catch(() => {
+          finish([]);
+        });
+      });
+    }
+
     try {
-      client.connect(sshConfig);
+      client.connect(getClientSshConfig(sshConfig));
     } catch (error) {
       rejectConnection(error);
     }
@@ -1363,6 +1421,8 @@ module.exports = {
   createBufferedReader,
   createSocksProxy,
   ensureActiveConnectionClient,
+  findReusableActiveConnection,
+  focusConnectionWindow,
   forwardOut,
   getActiveConnection,
   registerConnectionCleanup,
