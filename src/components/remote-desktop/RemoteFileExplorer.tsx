@@ -72,6 +72,32 @@ interface ExplorerSudoPrompt {
   password: string;
 }
 
+type ExplorerTransferTaskStatus = 'queued' | 'running' | 'success' | 'error' | 'canceled' | 'skipped';
+type ExplorerTransferTaskType = 'upload' | 'download';
+
+interface ExplorerTransferTask {
+  id: string;
+  type: ExplorerTransferTaskType;
+  label: string;
+  detail: string;
+  status: ExplorerTransferTaskStatus;
+  createdAt: number;
+  progress?: ShellDeskTransferProgress;
+  error?: string;
+  remotePaths?: string[];
+  downloadFilePath?: string;
+  uploadItems?: ShellDeskLocalUploadItem[];
+  uploadTarget?: string;
+}
+
+interface ExplorerUploadConflictDialog {
+  items: ShellDeskSelectedUploadItem[];
+  conflicts: Array<{
+    item: ShellDeskSelectedUploadItem;
+    remotePath: string;
+  }>;
+}
+
 type PermissionGroupKey = 'owner' | 'group' | 'others';
 type PermissionActionKey = 'read' | 'write' | 'execute';
 
@@ -528,6 +554,62 @@ function isValidFileName(name: string, isWindowsHost = false) {
   return name.length <= 255;
 }
 
+function isRemotePathMissingError(error: unknown) {
+  const message = getErrorMessage(error);
+  return /no such file|not found|cannot find|does not exist|不存在|找不到/i.test(message);
+}
+
+function splitFileNameForDuplicate(name: string) {
+  const dotIndex = name.lastIndexOf('.');
+
+  if (dotIndex <= 0) {
+    return { base: name, ext: '' };
+  }
+
+  return {
+    base: name.slice(0, dotIndex),
+    ext: name.slice(dotIndex),
+  };
+}
+
+function getUploadTaskLabel(items: ShellDeskSelectedUploadItem[], language: AppLanguage) {
+  if (items.length === 1) {
+    return items[0].name;
+  }
+
+  return language === 'zh-CN' ? `${items.length} 个上传项目` : `${items.length} upload items`;
+}
+
+function getDownloadTaskLabel(entries: RemoteFileEntry[], language: AppLanguage) {
+  if (entries.length === 1) {
+    return entries[0].name;
+  }
+
+  return language === 'zh-CN' ? `${entries.length} 个下载项目` : `${entries.length} download items`;
+}
+
+function getTransferTaskStatusLabel(status: ExplorerTransferTaskStatus, language: AppLanguage) {
+  if (language !== 'zh-CN') {
+    return {
+      queued: 'Queued',
+      running: 'Running',
+      success: 'Done',
+      error: 'Failed',
+      canceled: 'Canceled',
+      skipped: 'Skipped',
+    }[status];
+  }
+
+  return {
+    queued: '排队中',
+    running: '传输中',
+    success: '已完成',
+    error: '失败',
+    canceled: '已取消',
+    skipped: '已跳过',
+  }[status];
+}
+
 function getSortValue(entry: RemoteFileEntry, field: SortField): string | number {
   switch (field) {
     case 'name': return entry.name;
@@ -590,6 +672,8 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
   const [lastClickedName, setLastClickedName] = useState<string | null>(null);
   const [deleteConfirmationEntries, setDeleteConfirmationEntries] = useState<RemoteFileEntry[] | null>(null);
   const [transferProgress, setTransferProgress] = useState<ShellDeskTransferProgress | null>(null);
+  const [transferQueue, setTransferQueue] = useState<ExplorerTransferTask[]>([]);
+  const [uploadConflictDialog, setUploadConflictDialog] = useState<ExplorerUploadConflictDialog | null>(null);
   const [tableViewport, setTableViewport] = useState({ scrollTop: 0, height: 0 });
   const [sudoPrompt, setSudoPrompt] = useState<ExplorerSudoPrompt | null>(null);
 
@@ -602,6 +686,9 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
   const initialPathRef = useRef(initialRemotePath);
   const pendingDefaultPathRef = useRef(!getExplicitInitialPath(initialPath, isWindowsHost));
   const tableScrollFrameRef = useRef<number | null>(null);
+  const transferQueueRef = useRef<ExplorerTransferTask[]>([]);
+  const transferProcessingRef = useRef(false);
+  const activeTransferTaskIdRef = useRef<string | null>(null);
 
   const updateTableViewport = useCallback((table: HTMLDivElement) => {
     setTableViewport((currentViewport) => {
@@ -702,6 +789,10 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
   useEffect(() => {
     setPathDraft(remotePath);
   }, [remotePath]);
+
+  useEffect(() => {
+    transferQueueRef.current = transferQueue;
+  }, [transferQueue]);
 
   useEffect(() => {
     if (sudoPrompt) {
@@ -912,6 +1003,12 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
       }
 
       setTransferProgress(payload);
+      const activeTaskId = activeTransferTaskIdRef.current;
+      if (activeTaskId) {
+        setTransferQueue((tasks) => tasks.map((task) => task.id === activeTaskId
+          ? { ...task, progress: payload }
+          : task));
+      }
     });
     const unsubEnd = window.guiSSH?.events.onTransferEnd((payload) => {
       if (payload.connectionId && payload.connectionId !== connectionId) {
@@ -1197,6 +1294,299 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
   const refreshFiles = useCallback(() => {
     setFilesRefreshToken((currentToken) => currentToken + 1);
   }, []);
+
+  const updateTransferTask = useCallback((
+    taskId: string,
+    update: (task: ExplorerTransferTask) => ExplorerTransferTask,
+  ) => {
+    setTransferQueue((tasks) => {
+      const nextTasks = tasks.map((task) => task.id === taskId ? update(task) : task);
+      transferQueueRef.current = nextTasks;
+      return nextTasks;
+    });
+  }, []);
+
+  const processTransferQueue = useCallback(async () => {
+    if (transferProcessingRef.current) {
+      return;
+    }
+
+    transferProcessingRef.current = true;
+
+    try {
+      for (;;) {
+        const task = transferQueueRef.current.find((candidate) => candidate.status === 'queued');
+
+        if (!task) {
+          break;
+        }
+
+        activeTransferTaskIdRef.current = task.id;
+        updateTransferTask(task.id, (currentTask) => ({
+          ...currentTask,
+          status: 'running',
+          error: '',
+        }));
+
+        try {
+          if (task.type === 'upload') {
+            const uploadItems = task.uploadItems ?? [];
+
+            if (!uploadItems.length || !task.uploadTarget) {
+              throw new Error(language === 'zh-CN' ? '上传任务缺少本地项目。' : 'Upload task has no local items.');
+            }
+
+            const result = await runWithSudoRetry(
+              t('fileExplorer.sudo.operation.upload', language),
+              task.uploadTarget,
+              (options) => window.guiSSH!.connections.uploadLocalPaths(connectionId, task.uploadTarget!, uploadItems, options),
+            );
+
+            updateTransferTask(task.id, (currentTask) => ({
+              ...currentTask,
+              status: result?.canceled ? 'canceled' : 'success',
+              progress: currentTask.progress,
+            }));
+
+            if (!result?.canceled) {
+              refreshFiles();
+            }
+          } else {
+            const remotePaths = task.remotePaths ?? [];
+
+            if (task.downloadFilePath) {
+              const result = await runWithSudoRetry(
+                t('fileExplorer.sudo.operation.download', language),
+                task.downloadFilePath,
+                (options) => window.guiSSH!.connections.downloadFile(connectionId, task.downloadFilePath!, options),
+              );
+
+              updateTransferTask(task.id, (currentTask) => ({
+                ...currentTask,
+                status: result?.canceled ? 'canceled' : 'success',
+                progress: currentTask.progress,
+              }));
+            } else if (remotePaths.length) {
+              const result = await runWithSudoRetry(
+                t('fileExplorer.sudo.operation.download', language),
+                remotePath,
+                (options) => window.guiSSH!.connections.downloadPaths(connectionId, remotePaths, options),
+              );
+
+              updateTransferTask(task.id, (currentTask) => ({
+                ...currentTask,
+                status: result?.canceled ? 'canceled' : 'success',
+                progress: currentTask.progress,
+              }));
+            } else {
+              throw new Error(language === 'zh-CN' ? '下载任务缺少远程路径。' : 'Download task has no remote paths.');
+            }
+          }
+        } catch (error) {
+          updateTransferTask(task.id, (currentTask) => ({
+            ...currentTask,
+            status: 'error',
+            error: getErrorMessage(error),
+          }));
+        } finally {
+          activeTransferTaskIdRef.current = null;
+          setTransferProgress(null);
+        }
+      }
+    } finally {
+      transferProcessingRef.current = false;
+    }
+  }, [connectionId, language, refreshFiles, remotePath, runWithSudoRetry, updateTransferTask]);
+
+  const enqueueTransferTasks = useCallback((tasks: ExplorerTransferTask[]) => {
+    if (!tasks.length) {
+      return;
+    }
+
+    setTransferQueue((currentTasks) => {
+      const nextTasks = [...currentTasks, ...tasks];
+      transferQueueRef.current = nextTasks;
+      return nextTasks;
+    });
+
+    window.setTimeout(() => {
+      void processTransferQueue();
+    }, 0);
+  }, [processTransferQueue]);
+
+  const retryTransferTask = useCallback((taskId: string) => {
+    updateTransferTask(taskId, (task) => ({
+      ...task,
+      status: 'queued',
+      error: '',
+      progress: undefined,
+    }));
+    window.setTimeout(() => {
+      void processTransferQueue();
+    }, 0);
+  }, [processTransferQueue, updateTransferTask]);
+
+  const clearFinishedTransferTasks = useCallback(() => {
+    setTransferQueue((tasks) => {
+      const nextTasks = tasks.filter((task) => task.status === 'queued' || task.status === 'running');
+      transferQueueRef.current = nextTasks;
+      return nextTasks;
+    });
+  }, []);
+
+  useEffect(() => {
+    const handleRemoteFileSaved = (event: Event) => {
+      const detail = (event as CustomEvent<{ connectionId?: string; filePath?: string }>).detail;
+
+      if (detail?.connectionId === connectionId) {
+        refreshFiles();
+      }
+    };
+
+    window.addEventListener('shelldesk:remote-file-saved', handleRemoteFileSaved);
+    return () => window.removeEventListener('shelldesk:remote-file-saved', handleRemoteFileSaved);
+  }, [connectionId, refreshFiles]);
+
+  const enqueueUploadSelection = useCallback((
+    items: ShellDeskSelectedUploadItem[],
+    remoteNameByPath = new Map<string, string>(),
+  ) => {
+    if (!items.length) {
+      return;
+    }
+
+    const uploadItems = items.map((item) => ({
+      path: item.path,
+      remoteName: remoteNameByPath.get(item.path),
+    }));
+    const taskId = `upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    enqueueTransferTasks([{
+      id: taskId,
+      type: 'upload',
+      label: getUploadTaskLabel(items, language),
+      detail: remotePath,
+      status: 'queued',
+      createdAt: Date.now(),
+      uploadItems,
+      uploadTarget: remotePath,
+    }]);
+  }, [enqueueTransferTasks, language, remotePath]);
+
+  const findUploadConflicts = useCallback(async (items: ShellDeskSelectedUploadItem[]) => {
+    const conflicts: ExplorerUploadConflictDialog['conflicts'] = [];
+
+    for (const item of items) {
+      const targetPath = joinRemotePath(remotePath, item.name, isWindowsHost);
+
+      try {
+        await window.guiSSH!.connections.statPath(connectionId, targetPath);
+        conflicts.push({ item, remotePath: targetPath });
+      } catch (error) {
+        if (!isRemotePathMissingError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    return conflicts;
+  }, [connectionId, isWindowsHost, remotePath]);
+
+  const prepareUploadSelection = useCallback(async (items: ShellDeskSelectedUploadItem[]) => {
+    if (!items.length) {
+      return;
+    }
+
+    try {
+      setFilesError('');
+      const conflicts = await findUploadConflicts(items);
+
+      if (conflicts.length) {
+        setUploadConflictDialog({ items, conflicts });
+        return;
+      }
+
+      enqueueUploadSelection(items);
+    } catch (error) {
+      setFilesError(getErrorMessage(error));
+    }
+  }, [enqueueUploadSelection, findUploadConflicts]);
+
+  const resolveDuplicateRemoteName = useCallback(async (name: string) => {
+    const { base, ext } = splitFileNameForDuplicate(name);
+
+    for (let index = 1; index <= 100; index += 1) {
+      const candidateName = index === 1 ? `${base} copy${ext}` : `${base} copy ${index}${ext}`;
+      const candidatePath = joinRemotePath(remotePath, candidateName, isWindowsHost);
+
+      try {
+        await window.guiSSH!.connections.statPath(connectionId, candidatePath);
+      } catch (error) {
+        if (isRemotePathMissingError(error)) {
+          return candidateName;
+        }
+
+        throw error;
+      }
+    }
+
+    throw new Error(language === 'zh-CN' ? `无法为 ${name} 找到可用的新名称。` : `Could not find an available name for ${name}.`);
+  }, [connectionId, isWindowsHost, language, remotePath]);
+
+  const resolveUploadConflicts = useCallback(async (strategy: 'skip' | 'replace' | 'duplicate') => {
+    const dialog = uploadConflictDialog;
+
+    if (!dialog) {
+      return;
+    }
+
+    setUploadConflictDialog(null);
+
+    try {
+      if (strategy === 'replace') {
+        enqueueUploadSelection(dialog.items);
+        return;
+      }
+
+      const conflictPathSet = new Set(dialog.conflicts.map((conflict) => conflict.item.path));
+
+      if (strategy === 'skip') {
+        const safeItems = dialog.items.filter((item) => !conflictPathSet.has(item.path));
+
+        if (!safeItems.length) {
+          enqueueTransferTasks([{
+            id: `upload-skip-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            type: 'upload',
+            label: getUploadTaskLabel(dialog.items, language),
+            detail: remotePath,
+            status: 'skipped',
+            createdAt: Date.now(),
+          }]);
+          return;
+        }
+
+        enqueueUploadSelection(safeItems);
+        return;
+      }
+
+      const remoteNameByPath = new Map<string, string>();
+
+      for (const conflict of dialog.conflicts) {
+        remoteNameByPath.set(conflict.item.path, await resolveDuplicateRemoteName(conflict.item.name));
+      }
+
+      enqueueUploadSelection(dialog.items, remoteNameByPath);
+    } catch (error) {
+      setFilesError(getErrorMessage(error));
+    }
+  }, [
+    enqueueTransferTasks,
+    enqueueUploadSelection,
+    language,
+    remotePath,
+    resolveDuplicateRemoteName,
+    uploadConflictDialog,
+  ]);
 
   const handleTableScroll = useCallback((event: ReactUIEvent<HTMLDivElement>) => {
     scheduleTableViewportUpdate(event.currentTarget);
@@ -1551,21 +1941,19 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
 
   const downloadFile = useCallback(async (entry: RemoteFileEntry) => {
     closeContextMenu();
-    try {
-      setFilesError('');
-      const entryPath = joinRemotePath(remotePath, entry.name, isWindowsHost);
-      const result = await runWithSudoRetry(
-        t('fileExplorer.sudo.operation.download', language),
-        entryPath,
-        (options) => window.guiSSH!.connections.downloadFile(connectionId, entryPath, options),
-      );
-      if (!result?.canceled && result?.filePath) {
-        setFilesError('');
-      }
-    } catch (error) {
-      setFilesError(getErrorMessage(error));
-    }
-  }, [closeContextMenu, connectionId, isWindowsHost, language, remotePath, runWithSudoRetry]);
+    setFilesError('');
+    const entryPath = joinRemotePath(remotePath, entry.name, isWindowsHost);
+
+    enqueueTransferTasks([{
+      id: `download-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type: 'download',
+      label: getDownloadTaskLabel([entry], language),
+      detail: entryPath,
+      status: 'queued',
+      createdAt: Date.now(),
+      downloadFilePath: entryPath,
+    }]);
+  }, [closeContextMenu, enqueueTransferTasks, isWindowsHost, language, remotePath]);
 
   const downloadEntries = useCallback(async (entries: RemoteFileEntry[]) => {
     closeContextMenu();
@@ -1579,56 +1967,45 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
       return;
     }
 
-    try {
-      setFilesError('');
-      const remotePaths = entries.map((entry) => joinRemotePath(remotePath, entry.name, isWindowsHost));
-      const result = await runWithSudoRetry(
-        t('fileExplorer.sudo.operation.download', language),
-        remotePath,
-        (options) => window.guiSSH!.connections.downloadPaths(connectionId, remotePaths, options),
-      );
+    setFilesError('');
+    const remotePaths = entries.map((entry) => joinRemotePath(remotePath, entry.name, isWindowsHost));
 
-      if (!result?.canceled) {
-        setFilesError('');
-      }
-    } catch (error) {
-      setFilesError(getErrorMessage(error));
-    }
-  }, [closeContextMenu, connectionId, downloadFile, isWindowsHost, language, remotePath, runWithSudoRetry]);
+    enqueueTransferTasks([{
+      id: `download-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type: 'download',
+      label: getDownloadTaskLabel(entries, language),
+      detail: remotePath,
+      status: 'queued',
+      createdAt: Date.now(),
+      remotePaths,
+    }]);
+  }, [closeContextMenu, downloadFile, enqueueTransferTasks, isWindowsHost, language, remotePath]);
 
   const uploadFiles = useCallback(async () => {
     closeContextMenu();
     try {
       setFilesError('');
-      const result = await runWithSudoRetry(
-        t('fileExplorer.sudo.operation.upload', language),
-        remotePath,
-        (options) => window.guiSSH!.connections.uploadFiles(connectionId, remotePath, options),
-      );
-      if (!result?.canceled) {
-        refreshFiles();
+      const result = await window.guiSSH?.connections.selectUploadFiles();
+      if (result && !result.canceled) {
+        await prepareUploadSelection(result.items);
       }
     } catch (error) {
       setFilesError(getErrorMessage(error));
     }
-  }, [closeContextMenu, connectionId, language, remotePath, refreshFiles, runWithSudoRetry]);
+  }, [closeContextMenu, prepareUploadSelection]);
 
   const uploadFolders = useCallback(async () => {
     closeContextMenu();
     try {
       setFilesError('');
-      const result = await runWithSudoRetry(
-        t('fileExplorer.sudo.operation.upload', language),
-        remotePath,
-        (options) => window.guiSSH!.connections.uploadPaths(connectionId, remotePath, options),
-      );
-      if (!result?.canceled) {
-        refreshFiles();
+      const result = await window.guiSSH?.connections.selectUploadFolders();
+      if (result && !result.canceled) {
+        await prepareUploadSelection(result.items);
       }
     } catch (error) {
       setFilesError(getErrorMessage(error));
     }
-  }, [closeContextMenu, connectionId, language, remotePath, refreshFiles, runWithSudoRetry]);
+  }, [closeContextMenu, prepareUploadSelection]);
 
   const cancelTransfer = useCallback(async () => {
     try {
@@ -1892,7 +2269,14 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
           )) : (
             <div className="explorer-sidebar-note">{t('fileExplorer.sidebar.noFavorites', language)}</div>
           )}
-          <div className="sidebar-section-title">{t('fileExplorer.sidebar.transfer', language)}</div>
+          <div className="sidebar-section-title transfer-queue-title">
+            <span>{t('fileExplorer.sidebar.transfer', language)}</span>
+            {transferQueue.some((task) => task.status === 'success' || task.status === 'error' || task.status === 'canceled' || task.status === 'skipped') ? (
+              <button type="button" onClick={clearFinishedTransferTasks}>
+                {language === 'zh-CN' ? '清理' : 'Clear'}
+              </button>
+            ) : null}
+          </div>
           <div className={`explorer-transfer-card ${transferProgress ? 'running' : ''}`}>
             <strong>{transferProgress ? t('fileExplorer.transfer.running', language) : t('fileExplorer.transfer.idle', language)}</strong>
             <span>
@@ -1900,6 +2284,41 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
                 ? `${transferProgress.type === 'download' ? t('fileExplorer.transfer.download', language) : t('fileExplorer.transfer.upload', language)} ${transferItemLabel} · ${transferProgress.fileName}`
                 : t('fileExplorer.transfer.empty', language)}
             </span>
+          </div>
+          <div className="explorer-transfer-queue" aria-label={language === 'zh-CN' ? '传输队列' : 'Transfer queue'}>
+            {transferQueue.length ? transferQueue.slice(0, 8).map((task) => {
+              const progress = task.progress;
+              const percent = progress
+                ? progress.total > 0
+                  ? Math.max(1, Math.min(100, Math.round((progress.transferred / progress.total) * 100)))
+                  : (progress.totalItems ?? 0) > 0
+                    ? Math.max(1, Math.min(100, Math.round(((progress.completedItems ?? 0) / (progress.totalItems ?? 1)) * 100)))
+                    : 10
+                : task.status === 'success'
+                  ? 100
+                  : 0;
+
+              return (
+                <div key={task.id} className={`transfer-queue-item ${task.status}`}>
+                  <div className="transfer-queue-row">
+                    <strong>{task.type === 'download' ? t('fileExplorer.transfer.download', language) : t('fileExplorer.transfer.upload', language)}</strong>
+                    <span>{getTransferTaskStatusLabel(task.status, language)}</span>
+                  </div>
+                  <div className="transfer-queue-name" title={task.label}>{task.label}</div>
+                  <div className="transfer-queue-detail" title={task.error || task.detail}>{task.error || task.detail}</div>
+                  <div className="transfer-queue-bar">
+                    <span style={{ width: `${percent}%` }} />
+                  </div>
+                  {task.status === 'error' ? (
+                    <button type="button" className="transfer-queue-retry" onClick={() => retryTransferTask(task.id)}>
+                      {language === 'zh-CN' ? '重试' : 'Retry'}
+                    </button>
+                  ) : null}
+                </div>
+              );
+            }) : (
+              <div className="explorer-sidebar-note">{language === 'zh-CN' ? '上传或下载任务会显示在这里。' : 'Upload and download tasks appear here.'}</div>
+            )}
           </div>
         </aside>
 
@@ -2309,6 +2728,55 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
             )}
           </div>
         </>,
+        document.body,
+      ) : null}
+
+      {uploadConflictDialog ? createPortal(
+        <div className="notepad-modal-overlay" role="presentation" onClick={() => setUploadConflictDialog(null)}>
+          <div
+            className="notepad-modal explorer-conflict-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="explorer-upload-conflict-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div id="explorer-upload-conflict-title" className="notepad-modal-title">
+              {language === 'zh-CN' ? '上传冲突' : 'Upload conflicts'}
+            </div>
+            <div className="notepad-modal-message">
+              {language === 'zh-CN'
+                ? `有 ${uploadConflictDialog.conflicts.length} 个目标已存在，请选择处理方式。`
+                : `${uploadConflictDialog.conflicts.length} target item(s) already exist. Choose how to continue.`}
+            </div>
+            <div className="explorer-conflict-list">
+              {uploadConflictDialog.conflicts.slice(0, 8).map((conflict) => (
+                <div key={conflict.item.path} className="explorer-conflict-row">
+                  <strong>{conflict.item.name}</strong>
+                  <span title={conflict.remotePath}>{conflict.remotePath}</span>
+                </div>
+              ))}
+              {uploadConflictDialog.conflicts.length > 8 ? (
+                <div className="explorer-conflict-more">
+                  {language === 'zh-CN'
+                    ? `另有 ${uploadConflictDialog.conflicts.length - 8} 项未显示`
+                    : `${uploadConflictDialog.conflicts.length - 8} more item(s) hidden`}
+                </div>
+              ) : null}
+            </div>
+            <div className="notepad-modal-actions">
+              <button type="button" className="notepad-modal-btn" onClick={() => setUploadConflictDialog(null)}>{t('common.cancel', language)}</button>
+              <button type="button" className="notepad-modal-btn" onClick={() => void resolveUploadConflicts('skip')}>
+                {language === 'zh-CN' ? '跳过冲突' : 'Skip'}
+              </button>
+              <button type="button" className="notepad-modal-btn" onClick={() => void resolveUploadConflicts('duplicate')}>
+                {language === 'zh-CN' ? '重命名上传' : 'Rename'}
+              </button>
+              <button type="button" className="notepad-modal-btn primary" onClick={() => void resolveUploadConflicts('replace')}>
+                {language === 'zh-CN' ? '覆盖' : 'Replace'}
+              </button>
+            </div>
+          </div>
+        </div>,
         document.body,
       ) : null}
 

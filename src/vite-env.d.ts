@@ -573,6 +573,19 @@ interface ShellDeskZmodemUploadFile {
   lastModified: number;
 }
 
+interface ShellDeskSelectedUploadItem {
+  path: string;
+  name: string;
+  type: 'file' | 'directory';
+  size: number;
+  modifiedAt: string;
+}
+
+interface ShellDeskLocalUploadItem {
+  path: string;
+  remoteName?: string;
+}
+
 interface ShellDeskConnectionControls {
   connect: (host: ShellDeskHostConnectionRequest) => Promise<ShellDeskConnectionInfo>;
   getInfo: (connectionId: string) => Promise<ShellDeskConnectionInfo>;
@@ -614,9 +627,12 @@ interface ShellDeskConnectionControls {
   writeFile: (connectionId: string, remotePath: string, content: string, options?: ShellDeskSudoPasswordOptions) => Promise<boolean>;
   downloadFile: (connectionId: string, remotePath: string, options?: ShellDeskSudoPasswordOptions) => Promise<{ canceled: boolean; filePath?: string; size?: number }>;
   downloadPaths: (connectionId: string, remotePaths: string[], options?: ShellDeskSudoPasswordOptions) => Promise<{ canceled: boolean; directoryPath?: string; size?: number; fileCount?: number; itemCount?: number }>;
+  selectUploadFiles: () => Promise<{ canceled: boolean; items: ShellDeskSelectedUploadItem[] }>;
+  selectUploadFolders: () => Promise<{ canceled: boolean; items: ShellDeskSelectedUploadItem[] }>;
   uploadFile: (connectionId: string, remotePath: string, options?: ShellDeskSudoPasswordOptions) => Promise<{ canceled: boolean; remotePath?: string; remotePaths?: string[]; size?: number; fileCount?: number; itemCount?: number }>;
   uploadFiles: (connectionId: string, remotePath: string, options?: ShellDeskSudoPasswordOptions) => Promise<{ canceled: boolean; remotePath?: string; remotePaths?: string[]; size?: number; fileCount?: number; itemCount?: number }>;
   uploadPaths: (connectionId: string, remotePath: string, options?: ShellDeskSudoPasswordOptions) => Promise<{ canceled: boolean; remotePath?: string; remotePaths?: string[]; size?: number; fileCount?: number; itemCount?: number }>;
+  uploadLocalPaths: (connectionId: string, remotePath: string, items: ShellDeskLocalUploadItem[], options?: ShellDeskSudoPasswordOptions) => Promise<{ canceled: boolean; remotePath?: string; remotePaths?: string[]; size?: number; fileCount?: number; itemCount?: number }>;
   cancelTransfer: (connectionId: string) => Promise<boolean>;
   checkSftp: (connectionId: string) => Promise<{ available: boolean; error?: string }>;
   selectZmodemUploadFiles: () => Promise<{ canceled: boolean; files: ShellDeskZmodemUploadFile[] }>;

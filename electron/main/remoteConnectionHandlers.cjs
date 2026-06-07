@@ -2911,6 +2911,46 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     return rawPaths.map((rawPath) => validateRemotePath(rawPath));
   }
 
+  function readLocalUploadItems(rawItems) {
+    if (!Array.isArray(rawItems) || rawItems.length === 0) {
+      throw new Error('请选择要上传的本地项目。');
+    }
+
+    if (rawItems.length > 500) {
+      throw new Error('一次最多选择 500 个本地项目。');
+    }
+
+    return rawItems.map((rawItem) => {
+      const item = typeof rawItem === 'string' ? { path: rawItem } : rawItem;
+
+      if (!item || typeof item !== 'object') {
+        throw new Error('本地上传项目无效。');
+      }
+
+      const localPath = readBoundedString(item.path, '本地路径', 4096);
+      const remoteName = typeof item.remoteName === 'string' && item.remoteName.trim()
+        ? sanitizeLocalFileName(item.remoteName.trim(), 'upload')
+        : '';
+
+      if (!path.isAbsolute(localPath) || localPath.includes('\0') || !fs.existsSync(localPath)) {
+        throw new Error('本地上传路径无效或不存在。');
+      }
+
+      return remoteName ? { localPath, remoteName } : { localPath };
+    });
+  }
+
+  function toUploadSelectionItem(localPath) {
+    const stats = fs.lstatSync(localPath);
+    return {
+      path: localPath,
+      name: path.basename(localPath) || 'upload',
+      type: stats.isDirectory() ? 'directory' : 'file',
+      size: stats.isFile() ? stats.size : 0,
+      modifiedAt: new Date(stats.mtimeMs).toISOString(),
+    };
+  }
+
   function sendTransferPayload(sender, channel, payload) {
     if (sender && !sender.isDestroyed()) {
       sender.send(channel, payload);
@@ -3446,8 +3486,11 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       files.push({ localPath, remotePath, relativePath, size: stats.size });
     };
 
-    for (const localPath of localPaths) {
-      const name = path.basename(localPath) || 'upload';
+    for (const localRoot of localPaths) {
+      const localPath = typeof localRoot === 'string' ? localRoot : localRoot.localPath;
+      const name = (typeof localRoot === 'object' && localRoot.remoteName)
+        ? localRoot.remoteName
+        : path.basename(localPath) || 'upload';
       const remotePath = validateMutableRemotePath(joinRemoteChildPath(remoteDirectory, name));
       rootRemotePaths.push(remotePath);
       walk(localPath, remotePath, name);
@@ -4129,6 +4172,41 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     return { ...transferResult, directoryPath: localDirectory };
   });
 
+  registerIpcHandler('connection:select-upload-files', async (event) => {
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    const result = await dialog.showOpenDialog(senderWindow ?? BrowserWindow.getAllWindows()[0], {
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: '所有文件', extensions: ['*'] }],
+      title: '选择要上传的文件',
+    });
+
+    if (result.canceled || !result.filePaths.length) {
+      return { canceled: true, items: [] };
+    }
+
+    return {
+      canceled: false,
+      items: result.filePaths.map(toUploadSelectionItem),
+    };
+  });
+
+  registerIpcHandler('connection:select-upload-folders', async (event) => {
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    const result = await dialog.showOpenDialog(senderWindow ?? BrowserWindow.getAllWindows()[0], {
+      properties: ['openDirectory', 'multiSelections'],
+      title: '选择要上传的文件夹',
+    });
+
+    if (result.canceled || !result.filePaths.length) {
+      return { canceled: true, items: [] };
+    }
+
+    return {
+      canceled: false,
+      items: result.filePaths.map(toUploadSelectionItem),
+    };
+  });
+
   registerIpcHandler('connection:upload-file', async (event, connectionId, rawRemotePath, rawOptions) => {
     const currentPath = validateRemotePath(rawRemotePath);
     const options = readFilePrivilegeOptions(rawOptions);
@@ -4179,6 +4257,14 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     }
 
     return runUploadTransfer(connectionId, event.sender, result.filePaths, currentPath, options);
+  });
+
+  registerIpcHandler('connection:upload-local-paths', async (event, connectionId, rawRemotePath, rawItems, rawOptions) => {
+    const currentPath = validateRemotePath(rawRemotePath);
+    const localItems = readLocalUploadItems(rawItems);
+    const options = readFilePrivilegeOptions(rawOptions);
+
+    return runUploadTransfer(connectionId, event.sender, localItems, currentPath, options);
   });
 
   registerIpcHandler('connection:get-status', async (_event, connectionId) => {

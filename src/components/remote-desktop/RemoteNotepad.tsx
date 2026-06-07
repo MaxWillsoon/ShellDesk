@@ -442,6 +442,16 @@ function getRevisionHint(content: string): string {
   return `${content.length}:${(hash >>> 0).toString(16)}`;
 }
 
+function notifyRemoteFileSaved(connectionId: string, filePath: string) {
+  window.dispatchEvent(new CustomEvent('shelldesk:remote-file-saved', {
+    detail: {
+      connectionId,
+      filePath,
+      savedAt: new Date().toISOString(),
+    },
+  }));
+}
+
 function getLineEndingLabel(content: string, language: AppLanguage): string {
   if (content.includes('\r\n')) return 'CRLF';
   if (content.includes('\n')) return 'LF';
@@ -1261,6 +1271,7 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
 
     try {
       await writeRemoteTextFile(nextFilePath, contentToSave);
+      notifyRemoteFileSaved(connectionId, nextFilePath);
       const nextTitle = getFileNameFromPath(nextFilePath);
       const latestTab = tabsRef.current.find((tab) => tab.id === tabId);
       const receivedMoreEdits = latestTab?.content !== contentToSave;

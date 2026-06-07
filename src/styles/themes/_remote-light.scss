@@ -969,6 +969,25 @@
   background: rgba(249, 249, 249, 0.82);
 }
 
+[data-theme="light"] .explorer-transfer-card,
+[data-theme="light"] .transfer-queue-item,
+[data-theme="light"] .explorer-conflict-list,
+[data-theme="light"] .explorer-conflict-row {
+  border-color: var(--explorer-border);
+  background: var(--explorer-panel-soft);
+}
+
+[data-theme="light"] .transfer-queue-title button,
+[data-theme="light"] .transfer-queue-retry {
+  border-color: var(--explorer-border);
+  background: rgba(255, 255, 255, 0.66);
+  color: var(--explorer-muted);
+}
+
+[data-theme="light"] .transfer-queue-bar {
+  background: rgba(16, 32, 51, 0.1);
+}
+
 [data-theme="light"] .explorer-commandbar button,
 [data-theme="light"] .explorer-details-actions button {
   border-color: transparent;
