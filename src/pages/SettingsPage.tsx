@@ -344,7 +344,17 @@ interface SettingsPageProps {
   onExportConfig: () => void;
 }
 
-type SyncPendingAction = 'load' | 'save' | 'test' | 'run' | 'resolve-local' | 'resolve-remote' | '';
+type SyncPendingAction =
+  | 'load'
+  | 'save'
+  | 'test'
+  | 'run'
+  | 'resolve-local'
+  | 'resolve-remote'
+  | 'restore-remote'
+  | 'keep-empty'
+  | 'allow-shrink'
+  | '';
 
 function SettingsPage({
   hostCount,
@@ -379,6 +389,11 @@ function SettingsPage({
   const [syncError, setSyncError] = useState('');
   const [syncConflicts, setSyncConflicts] = useState<ShellDeskSyncConflict[]>([]);
   const [syncNeedsResolution, setSyncNeedsResolution] = useState(false);
+  const [syncEmptyVaultSummary, setSyncEmptyVaultSummary] = useState<ShellDeskSyncEmptyVaultSummary | null>(null);
+  const [syncNeedsEmptyVaultResolution, setSyncNeedsEmptyVaultResolution] = useState(false);
+  const [syncShrinkSummary, setSyncShrinkSummary] = useState<ShellDeskSyncShrinkSummary | null>(null);
+  const [syncNeedsShrinkConfirmation, setSyncNeedsShrinkConfirmation] = useState(false);
+  const [syncShrinkConflictResolution, setSyncShrinkConflictResolution] = useState<ShellDeskSyncConflictResolution | ''>('');
   const [syncPendingAction, setSyncPendingAction] = useState<SyncPendingAction>('');
 
   const updateSetting = <Field extends keyof ShellDeskAppSettings>(field: Field, value: ShellDeskAppSettings[Field]) => {
@@ -489,6 +504,7 @@ function SettingsPage({
   const syncLastSyncText = syncConfig?.lastSyncAt ? formatDateTime(syncConfig.lastSyncAt) : t('settings.sync.lastSync.notSynced', settings.language);
   const syncConflictCount = Math.max(syncConflicts.length, syncConfig?.lastConflictCount ?? 0);
   const syncHasPendingResolution = syncNeedsResolution || (syncConfig?.lastConflictCount ?? 0) > 0;
+  const syncHasSafetyGate = syncNeedsEmptyVaultResolution || syncNeedsShrinkConfirmation;
 
   const selectDesktopWallpaperPreset = (presetId: string) => {
     setWallpaperError('');
@@ -752,6 +768,11 @@ function SettingsPage({
   const applySyncConfig = useCallback((config: ShellDeskSyncPublicConfig) => {
     setSyncConfig(config);
     setSyncForm(createSyncFormFromConfig(config));
+    setSyncEmptyVaultSummary(null);
+    setSyncNeedsEmptyVaultResolution(false);
+    setSyncShrinkSummary(null);
+    setSyncNeedsShrinkConfirmation(false);
+    setSyncShrinkConflictResolution('');
     if ((config.lastConflictCount ?? 0) > 0) {
       setSyncNeedsResolution(true);
       return;
@@ -760,6 +781,14 @@ function SettingsPage({
     setSyncConflicts([]);
     setSyncNeedsResolution(false);
   }, []);
+
+  const clearSyncSafetyState = () => {
+    setSyncEmptyVaultSummary(null);
+    setSyncNeedsEmptyVaultResolution(false);
+    setSyncShrinkSummary(null);
+    setSyncNeedsShrinkConfirmation(false);
+    setSyncShrinkConflictResolution('');
+  };
 
   const updateSyncForm = <Field extends keyof ShellDeskSyncConfigInput>(field: Field, value: ShellDeskSyncConfigInput[Field]) => {
     setSyncForm((current) => ({
@@ -786,6 +815,7 @@ function SettingsPage({
       setSyncMessage(t('settings.sync.message.saved', settings.language));
       setSyncConflicts([]);
       setSyncNeedsResolution(false);
+      clearSyncSafetyState();
     } catch (error) {
       setSyncError(getSettingsErrorMessage(error, settings.language));
     } finally {
@@ -810,6 +840,7 @@ function SettingsPage({
       setSyncMessage(result.message);
       setSyncConflicts([]);
       setSyncNeedsResolution(false);
+      clearSyncSafetyState();
     } catch (error) {
       setSyncError(getSettingsErrorMessage(error, settings.language));
     } finally {
@@ -817,7 +848,11 @@ function SettingsPage({
     }
   };
 
-  const runAutoSyncNow = async (conflictResolution?: ShellDeskSyncConflictResolution) => {
+  const runAutoSyncNow = async (options: {
+    conflictResolution?: ShellDeskSyncConflictResolution;
+    emptyVaultResolution?: ShellDeskSyncEmptyVaultResolution;
+    shrinkResolution?: ShellDeskSyncShrinkResolution;
+  } = {}) => {
     const syncControls = window.guiSSH?.sync;
 
     if (!syncControls) {
@@ -825,26 +860,66 @@ function SettingsPage({
       return;
     }
 
+    const { conflictResolution, emptyVaultResolution, shrinkResolution } = options;
+
     setSyncPendingAction(conflictResolution === 'local'
       ? 'resolve-local'
       : conflictResolution === 'remote'
         ? 'resolve-remote'
-        : 'run');
+        : emptyVaultResolution === 'restoreRemote'
+          ? 'restore-remote'
+          : emptyVaultResolution === 'keepEmpty'
+            ? 'keep-empty'
+            : shrinkResolution === 'allow'
+              ? 'allow-shrink'
+              : 'run');
     setSyncError('');
     setSyncMessage('');
 
     try {
-      const result = await syncControls.runNow(conflictResolution ? { ...syncForm, conflictResolution } : syncForm);
+      const result = await syncControls.runNow({ ...syncForm, ...options });
       setSyncConflicts(result.conflicts);
+
+      if (result.needsEmptyVaultResolution) {
+        setSyncConfig(result.config);
+        setSyncEmptyVaultSummary(result.emptyVaultSummary);
+        setSyncNeedsEmptyVaultResolution(true);
+        setSyncShrinkSummary(null);
+        setSyncNeedsShrinkConfirmation(false);
+        setSyncShrinkConflictResolution('');
+        setSyncNeedsResolution(false);
+        setSyncMessage(t('settings.sync.message.emptyVaultNeedsResolution', settings.language, {
+          count: result.emptyVaultSummary?.remoteRecords ?? 0,
+        }));
+        return;
+      }
+
+      if (result.needsShrinkConfirmation) {
+        setSyncConfig(result.config);
+        setSyncShrinkSummary(result.shrinkSummary);
+        setSyncNeedsShrinkConfirmation(true);
+        setSyncShrinkConflictResolution(result.resolution);
+        setSyncEmptyVaultSummary(null);
+        setSyncNeedsEmptyVaultResolution(false);
+        setSyncNeedsResolution(false);
+        setSyncMessage(t('settings.sync.message.shrinkNeedsConfirmation', settings.language, {
+          lost: result.shrinkSummary?.lostRecords ?? 0,
+          baseline: result.shrinkSummary?.baselineRecords ?? 0,
+          next: result.shrinkSummary?.mergedRecords ?? 0,
+        }));
+        return;
+      }
 
       if (result.needsResolution) {
         setSyncConfig(result.config);
+        clearSyncSafetyState();
         setSyncNeedsResolution(true);
         setSyncMessage(t('settings.sync.message.needsResolution', settings.language, { count: result.conflictCount }));
         return;
       }
 
       applySyncConfig(result.config);
+      clearSyncSafetyState();
       setSyncNeedsResolution(false);
       setSyncMessage(result.conflictCount && result.resolution
         ? t(result.resolution === 'local' ? 'settings.sync.message.resolvedLocal' : 'settings.sync.message.resolvedRemote', settings.language, { count: result.conflictCount })
@@ -949,6 +1024,29 @@ function SettingsPage({
       setSyncConfig(result.config);
       setSyncConflicts(result.conflicts);
       setSyncNeedsResolution(result.needsResolution || (result.config.lastConflictCount ?? 0) > 0);
+      setSyncEmptyVaultSummary(result.emptyVaultSummary);
+      setSyncNeedsEmptyVaultResolution(result.needsEmptyVaultResolution);
+      setSyncShrinkSummary(result.shrinkSummary);
+      setSyncNeedsShrinkConfirmation(result.needsShrinkConfirmation);
+      setSyncShrinkConflictResolution(result.resolution);
+
+      if (result.needsEmptyVaultResolution) {
+        setSyncMessage(t('settings.sync.message.emptyVaultNeedsResolution', settings.language, {
+          count: result.emptyVaultSummary?.remoteRecords ?? 0,
+        }));
+        setSyncError('');
+        return;
+      }
+
+      if (result.needsShrinkConfirmation) {
+        setSyncMessage(t('settings.sync.message.shrinkNeedsConfirmation', settings.language, {
+          lost: result.shrinkSummary?.lostRecords ?? 0,
+          baseline: result.shrinkSummary?.baselineRecords ?? 0,
+          next: result.shrinkSummary?.mergedRecords ?? 0,
+        }));
+        setSyncError('');
+        return;
+      }
 
       if (result.needsResolution) {
         setSyncMessage(t('settings.sync.message.needsResolution', settings.language, { count: String(result.conflictCount) }));
@@ -2067,7 +2165,75 @@ function SettingsPage({
                 </div>
                 <p className="settings-caption">{t('settings.sync.caption', settings.language)}</p>
 
-                {(syncConflicts.length || syncHasPendingResolution) ? (
+                {syncNeedsEmptyVaultResolution && syncEmptyVaultSummary ? (
+                  <div className="settings-sync-conflicts needs-resolution">
+                    <strong>{t('settings.sync.safety.emptyVault.title', settings.language)}</strong>
+                    <p>{t('settings.sync.safety.emptyVault.summary', settings.language, { count: syncEmptyVaultSummary.remoteRecords })}</p>
+                    <div className="settings-sync-conflict-list">
+                      <div className="settings-sync-conflict-item">
+                        <span>{t('settings.sync.safety.emptyVault.remoteItems', settings.language, { count: syncEmptyVaultSummary.remoteRecords })}</span>
+                        <small>{t('settings.sync.safety.emptyVault.remoteSummary', settings.language)}</small>
+                      </div>
+                      <div className="settings-sync-conflict-item">
+                        <span>{t('settings.sync.safety.emptyVault.localItems', settings.language, { count: syncEmptyVaultSummary.localRecords })}</span>
+                        <small>{t('settings.sync.safety.emptyVault.localSummary', settings.language)}</small>
+                      </div>
+                    </div>
+                    <div className="settings-sync-resolution-actions">
+                      <button
+                        type="button"
+                        className="command-button"
+                        onClick={() => runAutoSyncNow({ emptyVaultResolution: 'keepEmpty' })}
+                        disabled={isSyncBusy}
+                      >
+                        {syncPendingAction === 'keep-empty' ? t('settings.sync.action.keepEmpty.loading', settings.language) : t('settings.sync.action.keepEmpty', settings.language)}
+                      </button>
+                      <button
+                        type="button"
+                        className="command-button primary"
+                        onClick={() => runAutoSyncNow({ emptyVaultResolution: 'restoreRemote' })}
+                        disabled={isSyncBusy}
+                      >
+                        {syncPendingAction === 'restore-remote' ? t('settings.sync.action.restoreRemote.loading', settings.language) : t('settings.sync.action.restoreRemote', settings.language)}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
+                {syncNeedsShrinkConfirmation && syncShrinkSummary ? (
+                  <div className="settings-sync-conflicts needs-resolution">
+                    <strong>{t('settings.sync.safety.shrink.title', settings.language)}</strong>
+                    <p>{t('settings.sync.safety.shrink.summary', settings.language, {
+                      lost: syncShrinkSummary.lostRecords,
+                      baseline: syncShrinkSummary.baselineRecords,
+                      next: syncShrinkSummary.mergedRecords,
+                    })}</p>
+                    <div className="settings-sync-conflict-list">
+                      <div className="settings-sync-conflict-item">
+                        <span>{t('settings.sync.safety.shrink.lostItems', settings.language, { count: syncShrinkSummary.lostRecords })}</span>
+                        <small>{t('settings.sync.safety.shrink.baselineItems', settings.language, {
+                          baseline: syncShrinkSummary.baselineRecords,
+                          next: syncShrinkSummary.mergedRecords,
+                        })}</small>
+                      </div>
+                    </div>
+                    <div className="settings-sync-resolution-actions">
+                      <button
+                        type="button"
+                        className="command-button primary"
+                        onClick={() => runAutoSyncNow({
+                          conflictResolution: syncShrinkConflictResolution || undefined,
+                          shrinkResolution: 'allow',
+                        })}
+                        disabled={isSyncBusy}
+                      >
+                        {syncPendingAction === 'allow-shrink' ? t('settings.sync.action.allowShrink.loading', settings.language) : t('settings.sync.action.allowShrink', settings.language)}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
+                {!syncHasSafetyGate && (syncConflicts.length || syncHasPendingResolution) ? (
                   <div className={syncHasPendingResolution ? 'settings-sync-conflicts needs-resolution' : 'settings-sync-conflicts'}>
                     <strong>{t(syncHasPendingResolution ? 'settings.sync.conflicts.resolveTitle' : 'settings.sync.conflicts.title', settings.language)}</strong>
                     {syncHasPendingResolution ? <p>{t('settings.sync.conflicts.resolveSummary', settings.language)}</p> : null}
@@ -2094,7 +2260,7 @@ function SettingsPage({
                         <button
                           type="button"
                           className="command-button"
-                          onClick={() => runAutoSyncNow('remote')}
+                          onClick={() => runAutoSyncNow({ conflictResolution: 'remote' })}
                           disabled={isSyncBusy}
                         >
                           {syncPendingAction === 'resolve-remote' ? t('settings.sync.action.keepRemote.loading', settings.language) : t('settings.sync.action.keepRemote', settings.language)}
@@ -2102,7 +2268,7 @@ function SettingsPage({
                         <button
                           type="button"
                           className="command-button primary"
-                          onClick={() => runAutoSyncNow('local')}
+                          onClick={() => runAutoSyncNow({ conflictResolution: 'local' })}
                           disabled={isSyncBusy}
                         >
                           {syncPendingAction === 'resolve-local' ? t('settings.sync.action.keepLocal.loading', settings.language) : t('settings.sync.action.keepLocal', settings.language)}

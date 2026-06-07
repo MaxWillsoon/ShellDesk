@@ -22,6 +22,10 @@ const syncKdfIterations = 210_000;
 const syncTombstoneRetentionMs = 30 * 24 * 60 * 60 * 1000;
 const autoSyncStartupDelayMs = 12_000;
 const syncPasswordPlaceholder = '••••••••';
+const syncedContentRecordTypes = new Set(['host', 'bookmark', 'proxyProfile', 'knownHost']);
+const suspiciousShrinkRatio = 0.5;
+const suspiciousShrinkMinimumLost = 3;
+const suspiciousShrinkAbsoluteLost = 10;
 
 let syncTimer = null;
 let startupSyncTimer = null;
@@ -62,6 +66,7 @@ function createDefaultSyncStore() {
     state: {
       deviceId: crypto.randomUUID(),
       lastRecords: {},
+      lastTombstones: {},
       lastSyncAt: '',
       lastRemoteEtag: '',
     },
@@ -171,6 +176,7 @@ function normalizeSyncSecrets(rawSecrets = {}) {
 function normalizeSyncState(rawState = {}) {
   const defaultState = createDefaultSyncStore().state;
   const lastRecords = {};
+  const lastTombstones = {};
 
   if (isPlainObject(rawState.lastRecords)) {
     for (const [id, record] of Object.entries(rawState.lastRecords)) {
@@ -190,9 +196,31 @@ function normalizeSyncState(rawState = {}) {
     }
   }
 
+  if (isPlainObject(rawState.lastTombstones)) {
+    for (const [id, tombstone] of Object.entries(rawState.lastTombstones)) {
+      if (!isPlainObject(tombstone)) {
+        continue;
+      }
+
+      try {
+        const tombstoneId = readBoundedString(id, '同步删除记录 ID', 260);
+        lastTombstones[tombstoneId] = {
+          id: tombstoneId,
+          type: readEntityType(tombstone.type),
+          deletedAt: readOptionalString(tombstone.deletedAt, '删除时间', 64),
+          deviceId: readOptionalString(tombstone.deviceId, '设备 ID', 128),
+          hash: readOptionalString(tombstone.hash, '同步记录摘要', 128),
+        };
+      } catch {
+        // Ignore one malformed local tombstone entry.
+      }
+    }
+  }
+
   return {
     deviceId: readOptionalString(rawState.deviceId, '设备 ID', 128) || defaultState.deviceId,
     lastRecords,
+    lastTombstones,
     lastSyncAt: readOptionalString(rawState.lastSyncAt, '上次同步时间', 64),
     lastRemoteEtag: readOptionalString(rawState.lastRemoteEtag, '远端 ETag', 256),
   };
@@ -293,6 +321,14 @@ function readConflictResolution(value) {
   return value === 'local' || value === 'remote' ? value : '';
 }
 
+function readEmptyVaultResolution(value) {
+  return value === 'restoreRemote' || value === 'keepEmpty' ? value : '';
+}
+
+function readShrinkResolution(value) {
+  return value === 'allow' ? value : '';
+}
+
 function saveSyncConfig(rawConfig) {
   if (!isPlainObject(rawConfig)) {
     throw new Error('同步设置无效。');
@@ -356,6 +392,155 @@ function getValidDateTime(value, fallback) {
 
 function compareTime(left, right) {
   return new Date(left || 0).getTime() - new Date(right || 0).getTime();
+}
+
+function isSyncedContentType(type) {
+  return syncedContentRecordTypes.has(type);
+}
+
+function countRecordsByType(records) {
+  const counts = {};
+
+  for (const record of Object.values(records ?? {})) {
+    if (!record || !isSyncedContentType(record.type)) {
+      continue;
+    }
+
+    counts[record.type] = (counts[record.type] ?? 0) + 1;
+  }
+
+  return counts;
+}
+
+function sumCounts(counts) {
+  return Object.values(counts).reduce((total, count) => total + count, 0);
+}
+
+function countContentRecords(records) {
+  return sumCounts(countRecordsByType(records));
+}
+
+function createConflictSummary(conflicts) {
+  const counts = {};
+
+  for (const conflict of conflicts) {
+    counts[conflict.type] = (counts[conflict.type] ?? 0) + 1;
+  }
+
+  return Object.entries(counts)
+    .map(([type, count]) => ({ type, count }))
+    .sort((left, right) => left.type.localeCompare(right.type));
+}
+
+function createSyncSummary({ localRecords, localTombstones, remoteDocument, mergedDocument, uploaded, downloaded, deleted, conflicts }) {
+  const localCounts = countRecordsByType(localRecords);
+  const remoteCounts = countRecordsByType(remoteDocument.records);
+  const mergedCounts = countRecordsByType(mergedDocument.records);
+  const tombstoneCounts = countRecordsByType({
+    ...remoteDocument.tombstones,
+    ...localTombstones,
+    ...mergedDocument.tombstones,
+  });
+
+  return {
+    localRecords: sumCounts(localCounts),
+    remoteRecords: sumCounts(remoteCounts),
+    mergedRecords: sumCounts(mergedCounts),
+    tombstones: sumCounts(tombstoneCounts),
+    uploaded,
+    downloaded,
+    deleted,
+    conflictCount: conflicts.length,
+    conflictsByType: createConflictSummary(conflicts),
+    recordsByType: mergedCounts,
+  };
+}
+
+function createEmptyVaultSummary(localRecords, remoteRecords) {
+  return {
+    localRecords: countContentRecords(localRecords),
+    remoteRecords: countContentRecords(remoteRecords),
+    remoteRecordsByType: countRecordsByType(remoteRecords),
+  };
+}
+
+function shouldRequestEmptyVaultResolution(localRecords, remoteDocument, emptyVaultResolution) {
+  return (
+    !emptyVaultResolution &&
+    countContentRecords(localRecords) === 0 &&
+    countContentRecords(remoteDocument.records) > 0
+  );
+}
+
+function createTombstonesForRecords(records, state, now) {
+  const tombstones = {};
+
+  for (const [id, record] of Object.entries(records)) {
+    if (!isSyncedContentType(record.type)) {
+      continue;
+    }
+
+    tombstones[id] = {
+      id,
+      type: record.type,
+      deletedAt: now,
+      deviceId: state.deviceId,
+      hash: record.hash,
+    };
+  }
+
+  return tombstones;
+}
+
+function detectSuspiciousShrink({ state, localRecords, remoteDocument, mergedDocument }) {
+  const previousCounts = countRecordsByType(state.lastRecords);
+  const localCounts = countRecordsByType(localRecords);
+  const remoteCounts = countRecordsByType(remoteDocument.records);
+  const mergedCounts = countRecordsByType(mergedDocument.records);
+  const previousCount = sumCounts(previousCounts);
+  const localCount = sumCounts(localCounts);
+  const remoteCount = sumCounts(remoteCounts);
+  const mergedCount = sumCounts(mergedCounts);
+  const baselineCount = Math.max(previousCount, localCount, remoteCount);
+  const lostCount = baselineCount - mergedCount;
+
+  if (baselineCount <= 0 || lostCount <= 0) {
+    return null;
+  }
+
+  const isSuspicious = lostCount >= suspiciousShrinkAbsoluteLost ||
+    (lostCount >= suspiciousShrinkMinimumLost && mergedCount <= Math.floor(baselineCount * suspiciousShrinkRatio));
+
+  if (!isSuspicious) {
+    return null;
+  }
+
+  const lostByType = {};
+  const allTypes = new Set([
+    ...Object.keys(previousCounts),
+    ...Object.keys(localCounts),
+    ...Object.keys(remoteCounts),
+    ...Object.keys(mergedCounts),
+  ]);
+
+  for (const type of allTypes) {
+    const baselineForType = Math.max(previousCounts[type] ?? 0, localCounts[type] ?? 0, remoteCounts[type] ?? 0);
+    const lostForType = baselineForType - (mergedCounts[type] ?? 0);
+
+    if (lostForType > 0) {
+      lostByType[type] = lostForType;
+    }
+  }
+
+  return {
+    baselineRecords: baselineCount,
+    mergedRecords: mergedCount,
+    lostRecords: lostCount,
+    previousRecords: previousCount,
+    localRecords: localCount,
+    remoteRecords: remoteCount,
+    lostByType,
+  };
 }
 
 function toPublicHostPayload(host) {
@@ -478,6 +663,19 @@ function createLocalRecords(vault, state, now) {
 
 function createLocalTombstones(localRecords, state, now) {
   const tombstones = {};
+  const cutoff = Date.now() - syncTombstoneRetentionMs;
+
+  for (const [id, previousTombstone] of Object.entries(state.lastTombstones ?? {})) {
+    if (localRecords[id]) {
+      continue;
+    }
+
+    if (new Date(previousTombstone.deletedAt || 0).getTime() < cutoff) {
+      continue;
+    }
+
+    tombstones[id] = previousTombstone;
+  }
 
   for (const [id, previousRecord] of Object.entries(state.lastRecords)) {
     if (id === 'settings:app' || localRecords[id]) {
@@ -1253,6 +1451,7 @@ function applyMergedDocumentToVault(document) {
 
 function createStateFromDocument(document, deviceId, etag, now) {
   const lastRecords = {};
+  const lastTombstones = {};
 
   for (const [id, record] of Object.entries(document.records)) {
     lastRecords[id] = {
@@ -1262,9 +1461,20 @@ function createStateFromDocument(document, deviceId, etag, now) {
     };
   }
 
+  for (const [id, tombstone] of Object.entries(document.tombstones)) {
+    lastTombstones[id] = {
+      id,
+      type: tombstone.type,
+      deletedAt: tombstone.deletedAt,
+      deviceId: tombstone.deviceId,
+      hash: tombstone.hash,
+    };
+  }
+
   return {
     deviceId,
     lastRecords,
+    lastTombstones,
     lastSyncAt: now,
     lastRemoteEtag: etag || '',
   };
@@ -1381,6 +1591,8 @@ function updateSyncStatus(status, message, extraConfig = {}) {
 async function runWebDavSyncInternal(rawConfig) {
   const store = createOperationalStore(rawConfig, { requireSyncPassphrase: true });
   const conflictResolution = readConflictResolution(rawConfig?.conflictResolution);
+  const emptyVaultResolution = readEmptyVaultResolution(rawConfig?.emptyVaultResolution);
+  const shrinkResolution = readShrinkResolution(rawConfig?.shrinkResolution);
   const maxPreconditionRetries = 1;
   const maxLocalRefreshes = 2;
   let preconditionRetries = 0;
@@ -1394,14 +1606,92 @@ async function runWebDavSyncInternal(rawConfig) {
     const local = createLocalSyncInputs(store.state, now);
     const remote = remoteOverride ?? await readRemoteDocument(store.config, store.secrets);
     remoteOverride = null;
+    let effectiveLocalRecords = local.localRecords;
+    let effectiveLocalTombstones = local.localTombstones;
+    const localContentRecordCount = countContentRecords(local.localRecords);
+    const remoteContentRecordCount = countContentRecords(remote.document.records);
+
+    if (shouldRequestEmptyVaultResolution(local.localRecords, remote.document, emptyVaultResolution)) {
+      const emptyVaultSummary = createEmptyVaultSummary(local.localRecords, remote.document.records);
+      const nextStore = writeSyncStore({
+        config: {
+          ...store.config,
+          lastSyncStatus: 'warning',
+          lastSyncMessage: `本机 vault 为空，但云端有 ${emptyVaultSummary.remoteRecords} 项数据。请选择恢复云端数据或保留本机空库。`,
+          lastConflictCount: 0,
+        },
+        secrets: store.secrets,
+        state: store.state,
+      });
+
+      reloadSyncSchedule();
+
+      const result = {
+        ok: false,
+        needsResolution: false,
+        needsEmptyVaultResolution: true,
+        needsShrinkConfirmation: false,
+        resolution: '',
+        emptyVaultResolution: '',
+        shrinkResolution: '',
+        syncedAt: '',
+        uploaded: 0,
+        downloaded: 0,
+        deleted: 0,
+        conflictCount: 0,
+        conflicts: [],
+        conflictSummary: [],
+        summary: createSyncSummary({
+          localRecords: local.localRecords,
+          localTombstones: local.localTombstones,
+          remoteDocument: remote.document,
+          mergedDocument: remote.document,
+          uploaded: 0,
+          downloaded: 0,
+          deleted: 0,
+          conflicts: [],
+        }),
+        emptyVaultSummary,
+        shrinkSummary: null,
+        snapshot: null,
+        config: toPublicSyncConfig(nextStore),
+      };
+
+      emitSyncChanged(result);
+      return result;
+    }
+
+    if (emptyVaultResolution === 'restoreRemote' && localContentRecordCount === 0 && remoteContentRecordCount > 0) {
+      effectiveLocalRecords = { ...local.localRecords };
+      if (remote.document.records['settings:app']) {
+        delete effectiveLocalRecords['settings:app'];
+      }
+      effectiveLocalTombstones = {};
+    } else if (emptyVaultResolution === 'keepEmpty' && localContentRecordCount === 0 && remoteContentRecordCount > 0) {
+      effectiveLocalTombstones = {
+        ...local.localTombstones,
+        ...createTombstonesForRecords(remote.document.records, store.state, now),
+      };
+    }
+
     const merged = mergeSyncDocuments(
       remote.document,
-      local.localRecords,
-      local.localTombstones,
+      effectiveLocalRecords,
+      effectiveLocalTombstones,
       store.state,
       now,
       conflictResolution,
     );
+    const mergedSummary = createSyncSummary({
+      localRecords: effectiveLocalRecords,
+      localTombstones: effectiveLocalTombstones,
+      remoteDocument: remote.document,
+      mergedDocument: merged.document,
+      uploaded: merged.uploaded,
+      downloaded: merged.downloaded,
+      deleted: merged.deleted,
+      conflicts: merged.conflicts,
+    });
 
     if (merged.conflicts.length && !conflictResolution) {
       const nextStore = writeSyncStore({
@@ -1427,6 +1717,61 @@ async function runWebDavSyncInternal(rawConfig) {
         deleted: 0,
         conflictCount: merged.conflicts.length,
         conflicts: merged.conflicts,
+        conflictSummary: createConflictSummary(merged.conflicts),
+        summary: mergedSummary,
+        needsEmptyVaultResolution: false,
+        needsShrinkConfirmation: false,
+        emptyVaultResolution: '',
+        shrinkResolution: '',
+        emptyVaultSummary: null,
+        shrinkSummary: null,
+        snapshot: null,
+        config: toPublicSyncConfig(nextStore),
+      };
+
+      emitSyncChanged(result);
+      return result;
+    }
+
+    const shrinkSummary = detectSuspiciousShrink({
+      state: store.state,
+      localRecords: effectiveLocalRecords,
+      remoteDocument: remote.document,
+      mergedDocument: merged.document,
+    });
+
+    if (shrinkSummary && shrinkResolution !== 'allow' && emptyVaultResolution !== 'keepEmpty') {
+      const nextStore = writeSyncStore({
+        config: {
+          ...store.config,
+          lastSyncStatus: 'warning',
+          lastSyncMessage: `同步结果会从 ${shrinkSummary.baselineRecords} 项减少到 ${shrinkSummary.mergedRecords} 项，已暂停以避免误删。`,
+          lastConflictCount: 0,
+        },
+        secrets: store.secrets,
+        state: store.state,
+      });
+
+      reloadSyncSchedule();
+
+      const result = {
+        ok: false,
+        needsResolution: false,
+        needsEmptyVaultResolution: false,
+        needsShrinkConfirmation: true,
+        resolution: conflictResolution,
+        emptyVaultResolution,
+        shrinkResolution: '',
+        syncedAt: '',
+        uploaded: 0,
+        downloaded: 0,
+        deleted: 0,
+        conflictCount: merged.conflicts.length,
+        conflicts: merged.conflicts,
+        conflictSummary: createConflictSummary(merged.conflicts),
+        summary: mergedSummary,
+        emptyVaultSummary: null,
+        shrinkSummary,
         snapshot: null,
         config: toPublicSyncConfig(nextStore),
       };
@@ -1489,13 +1834,21 @@ async function runWebDavSyncInternal(rawConfig) {
     const result = {
       ok: true,
       needsResolution: false,
+      needsEmptyVaultResolution: false,
+      needsShrinkConfirmation: false,
       resolution: conflictResolution,
+      emptyVaultResolution,
+      shrinkResolution,
       syncedAt: now,
       uploaded: merged.uploaded,
       downloaded: merged.downloaded,
       deleted: merged.deleted,
       conflictCount: merged.conflicts.length,
       conflicts: merged.conflicts,
+      conflictSummary: createConflictSummary(merged.conflicts),
+      summary: mergedSummary,
+      emptyVaultSummary: null,
+      shrinkSummary: null,
       snapshot,
       config: toPublicSyncConfig(nextStore),
     };

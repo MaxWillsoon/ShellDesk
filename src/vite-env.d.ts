@@ -952,6 +952,9 @@ interface ShellDeskAiControls {
 
 type ShellDeskSyncStatus = 'idle' | 'success' | 'warning' | 'error';
 type ShellDeskSyncConflictResolution = 'local' | 'remote';
+type ShellDeskSyncEmptyVaultResolution = 'restoreRemote' | 'keepEmpty';
+type ShellDeskSyncShrinkResolution = 'allow';
+type ShellDeskSyncEntityType = 'host' | 'bookmark' | 'settings' | 'proxyProfile' | 'knownHost';
 
 interface ShellDeskSyncPublicConfig {
   enabled: boolean;
@@ -985,25 +988,69 @@ interface ShellDeskSyncConfigInput {
 
 interface ShellDeskSyncRunInput extends Partial<ShellDeskSyncConfigInput> {
   conflictResolution?: ShellDeskSyncConflictResolution;
+  emptyVaultResolution?: ShellDeskSyncEmptyVaultResolution;
+  shrinkResolution?: ShellDeskSyncShrinkResolution;
 }
 
 interface ShellDeskSyncConflict {
-  type: 'host' | 'bookmark' | 'settings' | 'proxyProfile' | 'knownHost';
+  type: ShellDeskSyncEntityType;
   id: string;
   name: string;
   reason: string;
 }
 
+interface ShellDeskSyncConflictSummary {
+  type: ShellDeskSyncEntityType;
+  count: number;
+}
+
+interface ShellDeskSyncSummary {
+  localRecords: number;
+  remoteRecords: number;
+  mergedRecords: number;
+  tombstones: number;
+  uploaded: number;
+  downloaded: number;
+  deleted: number;
+  conflictCount: number;
+  conflictsByType: ShellDeskSyncConflictSummary[];
+  recordsByType: Partial<Record<ShellDeskSyncEntityType, number>>;
+}
+
+interface ShellDeskSyncEmptyVaultSummary {
+  localRecords: number;
+  remoteRecords: number;
+  remoteRecordsByType: Partial<Record<ShellDeskSyncEntityType, number>>;
+}
+
+interface ShellDeskSyncShrinkSummary {
+  baselineRecords: number;
+  mergedRecords: number;
+  lostRecords: number;
+  previousRecords: number;
+  localRecords: number;
+  remoteRecords: number;
+  lostByType: Partial<Record<ShellDeskSyncEntityType, number>>;
+}
+
 interface ShellDeskSyncResult {
   ok: boolean;
   needsResolution: boolean;
+  needsEmptyVaultResolution: boolean;
+  needsShrinkConfirmation: boolean;
   resolution: ShellDeskSyncConflictResolution | '';
+  emptyVaultResolution: ShellDeskSyncEmptyVaultResolution | '';
+  shrinkResolution: ShellDeskSyncShrinkResolution | '';
   syncedAt: string;
   uploaded: number;
   downloaded: number;
   deleted: number;
   conflictCount: number;
   conflicts: ShellDeskSyncConflict[];
+  conflictSummary: ShellDeskSyncConflictSummary[];
+  summary: ShellDeskSyncSummary;
+  emptyVaultSummary: ShellDeskSyncEmptyVaultSummary | null;
+  shrinkSummary: ShellDeskSyncShrinkSummary | null;
   snapshot: ShellDeskVaultSnapshot | null;
   config: ShellDeskSyncPublicConfig;
 }

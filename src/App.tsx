@@ -129,7 +129,17 @@ const defaultAppSettings: ShellDeskAppSettings = {
 
 type AppPage = 'hosts' | 'keys' | 'snippets' | 'proxies' | 'known-hosts' | 'logs' | 'settings';
 type HostListSortMode = 'createdDesc' | 'createdAsc' | 'updatedDesc' | 'updatedAsc' | 'nameAsc' | 'nameDesc' | 'addressAsc';
-type SyncConflictNotice = Pick<ShellDeskSyncResult, 'conflictCount' | 'conflicts' | 'config'>;
+type SyncNotice = Pick<
+  ShellDeskSyncResult,
+  | 'conflictCount'
+  | 'conflicts'
+  | 'config'
+  | 'emptyVaultSummary'
+  | 'shrinkSummary'
+  | 'resolution'
+> & {
+  kind: 'conflict' | 'empty-vault' | 'shrink';
+};
 type UpdateReadyNotice = Pick<ShellDeskUpdateStatus, 'version' | 'releaseDate' | 'releaseNotes'>;
 type HostSystemType =
   | 'unknown'
@@ -1579,8 +1589,8 @@ function App() {
   const [isCredentialConnecting, setIsCredentialConnecting] = useState(false);
   const [connectionErrorNotice, setConnectionErrorNotice] = useState<ConnectionErrorNotice | null>(null);
   const [syncConflictCount, setSyncConflictCount] = useState(0);
-  const [syncConflictNotice, setSyncConflictNotice] = useState<SyncConflictNotice | null>(null);
-  const [syncResolutionPending, setSyncResolutionPending] = useState<ShellDeskSyncConflictResolution | ''>('');
+  const [syncConflictNotice, setSyncConflictNotice] = useState<SyncNotice | null>(null);
+  const [syncResolutionPending, setSyncResolutionPending] = useState<ShellDeskSyncConflictResolution | ShellDeskSyncEmptyVaultResolution | 'allowShrink' | ''>('');
   const [syncResolutionError, setSyncResolutionError] = useState('');
   const [updateReadyNotice, setUpdateReadyNotice] = useState<UpdateReadyNotice | null>(null);
   const [updateInstallPending, setUpdateInstallPending] = useState(false);
@@ -1934,9 +1944,13 @@ function App() {
 
     if (pendingCount) {
       setSyncConflictNotice({
+        kind: 'conflict',
         conflictCount: pendingCount,
         conflicts,
         config,
+        emptyVaultSummary: null,
+        shrinkSummary: null,
+        resolution: '',
       });
     } else {
       setSyncConflictNotice(null);
@@ -2089,12 +2103,46 @@ function App() {
         return;
       }
 
+      if (result.needsEmptyVaultResolution) {
+        setSyncConflictCount(result.emptyVaultSummary?.remoteRecords ?? 0);
+        setSyncConflictNotice({
+          kind: 'empty-vault',
+          conflictCount: result.emptyVaultSummary?.remoteRecords ?? 0,
+          conflicts: [],
+          config: result.config,
+          emptyVaultSummary: result.emptyVaultSummary,
+          shrinkSummary: null,
+          resolution: '',
+        });
+        setSyncResolutionError('');
+        return;
+      }
+
+      if (result.needsShrinkConfirmation) {
+        setSyncConflictCount(result.shrinkSummary?.lostRecords ?? 0);
+        setSyncConflictNotice({
+          kind: 'shrink',
+          conflictCount: result.shrinkSummary?.lostRecords ?? 0,
+          conflicts: result.conflicts,
+          config: result.config,
+          emptyVaultSummary: null,
+          shrinkSummary: result.shrinkSummary,
+          resolution: result.resolution,
+        });
+        setSyncResolutionError('');
+        return;
+      }
+
       if (result.needsResolution) {
         setSyncConflictCount(result.conflictCount);
         setSyncConflictNotice({
+          kind: 'conflict',
           conflictCount: result.conflictCount,
           conflicts: result.conflicts,
           config: result.config,
+          emptyVaultSummary: null,
+          shrinkSummary: null,
+          resolution: '',
         });
         setSyncResolutionError('');
         return;
@@ -2460,11 +2508,32 @@ function App() {
       if (result.needsResolution) {
         setSyncConflictCount(result.conflictCount);
         setSyncConflictNotice({
+          kind: 'conflict',
           conflictCount: result.conflictCount,
           conflicts: result.conflicts,
           config: result.config,
+          emptyVaultSummary: null,
+          shrinkSummary: null,
+          resolution: '',
         });
         setSyncResolutionError(t('app.sync.conflict.stillPending', appLanguage, { count: String(result.conflictCount) }));
+        return;
+      }
+
+      if (result.needsShrinkConfirmation) {
+        setSyncConflictCount(result.shrinkSummary?.lostRecords ?? 0);
+        setSyncConflictNotice({
+          kind: 'shrink',
+          conflictCount: result.shrinkSummary?.lostRecords ?? 0,
+          conflicts: result.conflicts,
+          config: result.config,
+          emptyVaultSummary: null,
+          shrinkSummary: result.shrinkSummary,
+          resolution: result.resolution,
+        });
+        setSyncResolutionError(t('app.sync.shrink.needsConfirmation', appLanguage, {
+          lost: String(result.shrinkSummary?.lostRecords ?? 0),
+        }));
         return;
       }
 
@@ -2475,6 +2544,95 @@ function App() {
         appLanguage,
         { count: String(result.conflictCount) },
       ));
+    } catch (error) {
+      setSyncResolutionError(t('app.sync.conflict.resolveFailed', appLanguage, { error: getErrorMessage(error, appLanguage) }));
+    } finally {
+      setSyncResolutionPending('');
+    }
+  };
+
+  const resolveSyncEmptyVault = async (emptyVaultResolution: ShellDeskSyncEmptyVaultResolution) => {
+    const syncControls = window.guiSSH?.sync;
+
+    if (!syncControls) {
+      setSyncResolutionError(t('app.sync.conflict.noApi', appLanguage));
+      return;
+    }
+
+    setSyncResolutionPending(emptyVaultResolution);
+    setSyncResolutionError('');
+
+    try {
+      const result = await syncControls.runNow({ emptyVaultResolution });
+
+      if (result.snapshot) {
+        applyVaultSnapshot(result.snapshot);
+      }
+
+      if (result.needsEmptyVaultResolution) {
+        setSyncResolutionError(t('app.sync.emptyVault.stillPending', appLanguage));
+        return;
+      }
+
+      if (result.needsShrinkConfirmation) {
+        setSyncConflictCount(result.shrinkSummary?.lostRecords ?? 0);
+        setSyncConflictNotice({
+          kind: 'shrink',
+          conflictCount: result.shrinkSummary?.lostRecords ?? 0,
+          conflicts: result.conflicts,
+          config: result.config,
+          emptyVaultSummary: null,
+          shrinkSummary: result.shrinkSummary,
+          resolution: result.resolution,
+        });
+        return;
+      }
+
+      setSyncConflictCount(0);
+      setSyncConflictNotice(null);
+      setStatusMessage(t(
+        emptyVaultResolution === 'restoreRemote' ? 'app.sync.emptyVault.restoredRemote' : 'app.sync.emptyVault.keptEmpty',
+        appLanguage,
+      ));
+    } catch (error) {
+      setSyncResolutionError(t('app.sync.conflict.resolveFailed', appLanguage, { error: getErrorMessage(error, appLanguage) }));
+    } finally {
+      setSyncResolutionPending('');
+    }
+  };
+
+  const confirmSyncShrink = async () => {
+    const syncControls = window.guiSSH?.sync;
+    const pendingNotice = syncConflictNotice;
+
+    if (!syncControls || pendingNotice?.kind !== 'shrink') {
+      setSyncResolutionError(t('app.sync.conflict.noApi', appLanguage));
+      return;
+    }
+
+    setSyncResolutionPending('allowShrink');
+    setSyncResolutionError('');
+
+    try {
+      const result = await syncControls.runNow({
+        conflictResolution: pendingNotice.resolution || undefined,
+        shrinkResolution: 'allow',
+      });
+
+      if (result.snapshot) {
+        applyVaultSnapshot(result.snapshot);
+      }
+
+      if (result.needsResolution || result.needsEmptyVaultResolution || result.needsShrinkConfirmation) {
+        setSyncResolutionError(t('app.sync.shrink.stillPending', appLanguage));
+        return;
+      }
+
+      setSyncConflictCount(0);
+      setSyncConflictNotice(null);
+      setStatusMessage(t('app.sync.shrink.confirmed', appLanguage, {
+        count: String(result.deleted),
+      }));
     } catch (error) {
       setSyncResolutionError(t('app.sync.conflict.resolveFailed', appLanguage, { error: getErrorMessage(error, appLanguage) }));
     } finally {
@@ -3211,9 +3369,28 @@ function App() {
   const syncConflictHiddenCount = syncConflictPreview.length
     ? Math.max(0, (syncConflictNotice?.conflictCount ?? 0) - syncConflictPreview.length)
     : 0;
+  const syncNoticeKind = syncConflictNotice?.kind ?? 'conflict';
   const syncConflictBadgeLabel = syncConflictCount
-    ? t('app.sync.conflict.badge', appLanguage, { count: String(syncConflictCount) })
+    ? syncNoticeKind === 'empty-vault'
+      ? t('app.sync.emptyVault.badge', appLanguage, { count: String(syncConflictCount) })
+      : syncNoticeKind === 'shrink'
+        ? t('app.sync.shrink.badge', appLanguage, { count: String(syncConflictCount) })
+        : t('app.sync.conflict.badge', appLanguage, { count: String(syncConflictCount) })
     : '';
+  const syncNoticeTitle = syncNoticeKind === 'empty-vault'
+    ? t('app.sync.emptyVault.title', appLanguage)
+    : syncNoticeKind === 'shrink'
+      ? t('app.sync.shrink.title', appLanguage)
+      : t('app.sync.conflict.title', appLanguage);
+  const syncNoticeSummary = syncNoticeKind === 'empty-vault'
+    ? t('app.sync.emptyVault.summary', appLanguage, { count: String(syncConflictNotice?.emptyVaultSummary?.remoteRecords ?? 0) })
+    : syncNoticeKind === 'shrink'
+      ? t('app.sync.shrink.summary', appLanguage, {
+          lost: String(syncConflictNotice?.shrinkSummary?.lostRecords ?? 0),
+          baseline: String(syncConflictNotice?.shrinkSummary?.baselineRecords ?? 0),
+          next: String(syncConflictNotice?.shrinkSummary?.mergedRecords ?? 0),
+        })
+      : t('app.sync.conflict.summary', appLanguage, { count: String(syncConflictNotice?.conflictCount ?? 0) });
   const shouldShowSyncConflictNotice = Boolean(syncConflictNotice) && !connection && !isConnectionWindow && activePage !== 'settings';
   const formattedUpdateReadyVersion = formatUpdateReadyVersion(updateReadyNotice?.version);
   const updateReadyVersionLabel = formattedUpdateReadyVersion
@@ -3271,19 +3448,38 @@ function App() {
       ) : null}
       {shouldShowSyncConflictNotice && syncConflictNotice ? createPortal(
         <div className="sync-conflict-popover no-drag" role="alertdialog" aria-modal="false" aria-labelledby="sync-conflict-title">
-          <button
-            type="button"
-            className="sync-conflict-close"
-            aria-label={t('app.sync.conflict.dismiss', appLanguage)}
-            onClick={() => setSyncConflictNotice(null)}
-          >
-            ×
-          </button>
+          {syncConflictNotice.kind === 'conflict' ? (
+            <button
+              type="button"
+              className="sync-conflict-close"
+              aria-label={t('app.sync.conflict.dismiss', appLanguage)}
+              onClick={() => setSyncConflictNotice(null)}
+            >
+              ×
+            </button>
+          ) : null}
           <span className="sync-conflict-mark" aria-hidden="true">!</span>
           <div className="sync-conflict-copy">
-            <strong id="sync-conflict-title">{t('app.sync.conflict.title', appLanguage)}</strong>
-            <p>{t('app.sync.conflict.summary', appLanguage, { count: String(syncConflictNotice.conflictCount) })}</p>
-            {syncConflictPreview.length ? (
+            <strong id="sync-conflict-title">{syncNoticeTitle}</strong>
+            <p>{syncNoticeSummary}</p>
+            {syncConflictNotice.kind === 'empty-vault' ? (
+              <div className="sync-conflict-preview">
+                <span>
+                  <b>{t('app.sync.emptyVault.remoteItems', appLanguage, { count: String(syncConflictNotice.emptyVaultSummary?.remoteRecords ?? 0) })}</b>
+                  <small>{t('app.sync.emptyVault.localItems', appLanguage, { count: String(syncConflictNotice.emptyVaultSummary?.localRecords ?? 0) })}</small>
+                </span>
+              </div>
+            ) : syncConflictNotice.kind === 'shrink' ? (
+              <div className="sync-conflict-preview">
+                <span>
+                  <b>{t('app.sync.shrink.lostItems', appLanguage, { count: String(syncConflictNotice.shrinkSummary?.lostRecords ?? 0) })}</b>
+                  <small>{t('app.sync.shrink.counts', appLanguage, {
+                    baseline: String(syncConflictNotice.shrinkSummary?.baselineRecords ?? 0),
+                    next: String(syncConflictNotice.shrinkSummary?.mergedRecords ?? 0),
+                  })}</small>
+                </span>
+              </div>
+            ) : syncConflictPreview.length ? (
               <div className="sync-conflict-preview">
                 {syncConflictPreview.map((conflict) => (
                   <span key={`${conflict.type}:${conflict.id}`}>
@@ -3303,21 +3499,52 @@ function App() {
               <button type="button" onClick={() => { setActivePage('settings'); preloadFullMessageCatalog(); }}>
                 {t('app.sync.conflict.openSettings', appLanguage)}
               </button>
-              <button
-                type="button"
-                onClick={() => void resolveSyncConflict('remote')}
-                disabled={Boolean(syncResolutionPending)}
-              >
-                {syncResolutionPending === 'remote' ? t('app.sync.conflict.keepRemoteLoading', appLanguage) : t('app.sync.conflict.keepRemote', appLanguage)}
-              </button>
-              <button
-                type="button"
-                className="primary"
-                onClick={() => void resolveSyncConflict('local')}
-                disabled={Boolean(syncResolutionPending)}
-              >
-                {syncResolutionPending === 'local' ? t('app.sync.conflict.keepLocalLoading', appLanguage) : t('app.sync.conflict.keepLocal', appLanguage)}
-              </button>
+              {syncConflictNotice.kind === 'empty-vault' ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void resolveSyncEmptyVault('keepEmpty')}
+                    disabled={Boolean(syncResolutionPending)}
+                  >
+                    {syncResolutionPending === 'keepEmpty' ? t('app.sync.emptyVault.keepEmptyLoading', appLanguage) : t('app.sync.emptyVault.keepEmpty', appLanguage)}
+                  </button>
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={() => void resolveSyncEmptyVault('restoreRemote')}
+                    disabled={Boolean(syncResolutionPending)}
+                  >
+                    {syncResolutionPending === 'restoreRemote' ? t('app.sync.emptyVault.restoreRemoteLoading', appLanguage) : t('app.sync.emptyVault.restoreRemote', appLanguage)}
+                  </button>
+                </>
+              ) : syncConflictNotice.kind === 'shrink' ? (
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() => void confirmSyncShrink()}
+                  disabled={Boolean(syncResolutionPending)}
+                >
+                  {syncResolutionPending === 'allowShrink' ? t('app.sync.shrink.confirmLoading', appLanguage) : t('app.sync.shrink.confirm', appLanguage)}
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void resolveSyncConflict('remote')}
+                    disabled={Boolean(syncResolutionPending)}
+                  >
+                    {syncResolutionPending === 'remote' ? t('app.sync.conflict.keepRemoteLoading', appLanguage) : t('app.sync.conflict.keepRemote', appLanguage)}
+                  </button>
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={() => void resolveSyncConflict('local')}
+                    disabled={Boolean(syncResolutionPending)}
+                  >
+                    {syncResolutionPending === 'local' ? t('app.sync.conflict.keepLocalLoading', appLanguage) : t('app.sync.conflict.keepLocal', appLanguage)}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>,
