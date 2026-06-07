@@ -414,6 +414,99 @@ function readTerminalSnippets(rawSnippets, fallbackSnippets) {
   return snippets;
 }
 
+function readProxyType(value) {
+  if (value === 'http' || value === 'socks5' || value === 'command') {
+    return value;
+  }
+
+  throw new Error('代理类型无效。');
+}
+
+function readProxyConfig(rawConfig) {
+  if (!isPlainObject(rawConfig)) {
+    throw new Error('代理配置无效。');
+  }
+
+  const type = readProxyType(rawConfig.type);
+
+  if (type === 'command') {
+    return {
+      type,
+      host: '',
+      port: 0,
+      command: readBoundedString(rawConfig.command ?? '', '代理命令', 4096, {
+        trim: false,
+        rejectLineBreaks: false,
+      }).trim(),
+      username: '',
+      password: '',
+    };
+  }
+
+  const port = Number(rawConfig.port);
+
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('代理端口无效。');
+  }
+
+  return {
+    type,
+    host: readBoundedString(rawConfig.host, '代理主机', 255),
+    port,
+    command: '',
+    username: readBoundedString(rawConfig.username ?? '', '代理用户名', 128, { required: false }),
+    password: readBoundedString(rawConfig.password ?? '', '代理密码', 4096, {
+      required: false,
+      trim: false,
+      rejectLineBreaks: false,
+    }),
+  };
+}
+
+function readProxyProfile(rawProfile) {
+  if (!isPlainObject(rawProfile)) {
+    throw new Error('代理资料无效。');
+  }
+
+  return {
+    id: readBoundedString(rawProfile.id, '代理 ID', 128),
+    label: readBoundedString(rawProfile.label, '代理名称', 80),
+    config: readProxyConfig(rawProfile.config),
+    createdAt: readTimestampString(rawProfile.createdAt, '代理创建时间'),
+    updatedAt: readTimestampString(rawProfile.updatedAt ?? rawProfile.createdAt, '代理更新时间'),
+  };
+}
+
+function readKnownHost(rawKnownHost) {
+  if (!isPlainObject(rawKnownHost)) {
+    throw new Error('已知主机数据无效。');
+  }
+
+  const port = Number(rawKnownHost.port);
+
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('已知主机端口无效。');
+  }
+
+  return {
+    id: readBoundedString(rawKnownHost.id, '已知主机 ID', 128),
+    hostname: readBoundedString(rawKnownHost.hostname, '已知主机名', 255),
+    port,
+    keyType: readBoundedString(rawKnownHost.keyType ?? '', '主机密钥类型', 80, { required: false }),
+    publicKey: readBoundedString(rawKnownHost.publicKey ?? '', '主机公钥', 128 * 1024, {
+      required: false,
+      trim: true,
+      rejectLineBreaks: false,
+    }),
+    fingerprint: readBoundedString(rawKnownHost.fingerprint ?? '', '主机指纹', 256, { required: false }),
+    discoveredAt: readTimestampString(rawKnownHost.discoveredAt ?? new Date().toISOString(), '发现时间'),
+    lastSeen: rawKnownHost.lastSeen
+      ? readTimestampString(rawKnownHost.lastSeen, '最近看到时间')
+      : '',
+    convertedToHostId: readBoundedString(rawKnownHost.convertedToHostId ?? '', '转换主机 ID', 128, { required: false }),
+  };
+}
+
 function getVaultFilePath() {
   return path.join(app.getPath('userData'), vaultFileName);
 }
@@ -730,6 +823,7 @@ function readStoredHostRecord(rawHost) {
     }),
     jumpHostId: readBoundedString(rawHost.jumpHostId ?? '', '跳板机 ID', 128, { required: false }),
     canBeJumpHost: readBoolean(rawHost.canBeJumpHost, '可作为跳板机', false),
+    proxyProfileId: readBoundedString(rawHost.proxyProfileId ?? '', '代理 ID', 128, { required: false }),
     systemType: readRemoteSystemType(rawHost.systemType),
     systemName: readBoundedString(rawHost.systemName ?? '', '系统名称', 160, { required: false }),
     lastConnectionStatus: readHostConnectionStatus(rawHost.lastConnectionStatus),
@@ -804,6 +898,8 @@ function createEmptyVault() {
     version: vaultSchemaVersion,
     hosts: [],
     sshKeys: [],
+    proxyProfiles: [],
+    knownHosts: [],
     settings: createDefaultSettings(),
     browserBookmarks: [],
     preferences: {},
@@ -946,6 +1042,12 @@ function readVaultPayload(rawPayload) {
     version: vaultSchemaVersion,
     hosts: sortHostsByListOrder(hosts),
     sshKeys: Array.isArray(rawPayload.sshKeys) ? rawPayload.sshKeys.map((key) => readVaultKeyRecord(key)) : [],
+    proxyProfiles: Array.isArray(rawPayload.proxyProfiles)
+      ? rawPayload.proxyProfiles.map((profile) => readProxyProfile(profile))
+      : [],
+    knownHosts: Array.isArray(rawPayload.knownHosts)
+      ? rawPayload.knownHosts.map((knownHost) => readKnownHost(knownHost))
+      : [],
     settings: readAppSettings(rawPayload.settings),
     browserBookmarks: Array.isArray(rawPayload.browserBookmarks)
       ? rawPayload.browserBookmarks.map((collection) => readBookmarkCollection(collection))
@@ -964,6 +1066,16 @@ function toConfigKeyRecord(key) {
   return configKey;
 }
 
+function toConfigProxyProfile(profile) {
+  return {
+    ...profile,
+    config: {
+      ...profile.config,
+      password: '',
+    },
+  };
+}
+
 function toConfigSettings(settings) {
   return {
     ...settings,
@@ -976,6 +1088,8 @@ function createConfigPayload(vault) {
     version: vaultSchemaVersion,
     hosts: sortHostsByListOrder(vault.hosts).map((host) => toConfigHostRecord(host)),
     sshKeys: vault.sshKeys.map((key) => toConfigKeyRecord(key)),
+    proxyProfiles: vault.proxyProfiles.map((profile) => toConfigProxyProfile(profile)),
+    knownHosts: vault.knownHosts,
     settings: toConfigSettings(vault.settings),
     browserBookmarks: vault.browserBookmarks,
     preferences: vault.preferences,
@@ -998,6 +1112,12 @@ function createVaultSecretsPayload(vault) {
       privateKey: key.privateKey,
       passphrase: key.passphrase,
     })),
+    proxyProfileSecrets: vault.proxyProfiles
+      .map((profile) => ({
+        id: profile.id,
+        password: profile.config.password || '',
+      }))
+      .filter((secret) => secret.password),
     aiSecret: {
       apiKey: vault.settings.aiApiKey || '',
     },
@@ -1017,6 +1137,12 @@ function readConfigPayload(rawPayload) {
     version: vaultSchemaVersion,
     hosts: sortHostsByListOrder(hosts),
     sshKeys: Array.isArray(rawPayload.sshKeys) ? rawPayload.sshKeys.map((key) => readStoredKeyRecord(key)) : [],
+    proxyProfiles: Array.isArray(rawPayload.proxyProfiles)
+      ? rawPayload.proxyProfiles.map((profile) => readProxyProfile(profile))
+      : [],
+    knownHosts: Array.isArray(rawPayload.knownHosts)
+      ? rawPayload.knownHosts.map((knownHost) => readKnownHost(knownHost))
+      : [],
     settings: readAppSettings(rawPayload.settings),
     browserBookmarks: Array.isArray(rawPayload.browserBookmarks)
       ? rawPayload.browserBookmarks.map((collection) => readBookmarkCollection(collection))
@@ -1034,7 +1160,15 @@ function readPersistedConfigWrapper(rawPayload) {
     return readConfigPayload(rawPayload.payload);
   }
 
-  if ('hosts' in rawPayload || 'sshKeys' in rawPayload || 'settings' in rawPayload || 'browserBookmarks' in rawPayload || 'preferences' in rawPayload) {
+  if (
+    'hosts' in rawPayload ||
+    'sshKeys' in rawPayload ||
+    'proxyProfiles' in rawPayload ||
+    'knownHosts' in rawPayload ||
+    'settings' in rawPayload ||
+    'browserBookmarks' in rawPayload ||
+    'preferences' in rawPayload
+  ) {
     return readConfigPayload(rawPayload);
   }
 
@@ -1082,6 +1216,21 @@ function readSshKeySecretRecord(rawSecret) {
   };
 }
 
+function readProxyProfileSecretRecord(rawSecret) {
+  if (!isPlainObject(rawSecret)) {
+    throw new Error('代理凭据无效。');
+  }
+
+  return {
+    id: readBoundedString(rawSecret.id, '代理 ID', 128),
+    password: readBoundedString(rawSecret.password ?? '', '代理密码', 4096, {
+      required: false,
+      trim: false,
+      rejectLineBreaks: false,
+    }),
+  };
+}
+
 function readAiSecretRecord(rawSecret) {
   if (!isPlainObject(rawSecret)) {
     return { apiKey: '' };
@@ -1109,6 +1258,9 @@ function readVaultSecretsPayload(rawPayload) {
       ? rawPayload.hostSecrets.map((secret) => readHostSecretRecord(secret))
       : [],
     sshKeySecrets: rawKeySecrets.map((secret) => readSshKeySecretRecord(secret)),
+    proxyProfileSecrets: Array.isArray(rawPayload.proxyProfileSecrets)
+      ? rawPayload.proxyProfileSecrets.map((secret) => readProxyProfileSecretRecord(secret))
+      : [],
     aiSecret: readAiSecretRecord(rawPayload.aiSecret),
   };
 }
@@ -1118,6 +1270,7 @@ function isVaultSecretsPayload(rawPayload) {
     Array.isArray(rawPayload.hostSecrets) ||
     Array.isArray(rawPayload.sshKeySecrets) ||
     Array.isArray(rawPayload.keySecrets) ||
+    Array.isArray(rawPayload.proxyProfileSecrets) ||
     isPlainObject(rawPayload.aiSecret)
   );
 }
@@ -1125,6 +1278,7 @@ function isVaultSecretsPayload(rawPayload) {
 function mergeConfigAndSecrets(configPayload, secretsPayload) {
   const hostSecretsById = new Map(secretsPayload.hostSecrets.map((secret) => [secret.id, secret]));
   const keySecretsById = new Map(secretsPayload.sshKeySecrets.map((secret) => [secret.id, secret]));
+  const proxySecretsById = new Map((secretsPayload.proxyProfileSecrets ?? []).map((secret) => [secret.id, secret]));
 
   const hosts = configPayload.hosts.map((host) => {
     const secret = hostSecretsById.get(host.id);
@@ -1152,11 +1306,24 @@ function mergeConfigAndSecrets(configPayload, secretsPayload) {
       });
     })
     .filter(Boolean);
+  const proxyProfiles = configPayload.proxyProfiles.map((profile) => {
+    const secret = proxySecretsById.get(profile.id);
+
+    return readProxyProfile({
+      ...profile,
+      config: {
+        ...profile.config,
+        password: secret?.password ?? profile.config.password,
+      },
+    });
+  });
 
   return readVaultPayload({
     version: vaultSchemaVersion,
     hosts,
     sshKeys,
+    proxyProfiles,
+    knownHosts: configPayload.knownHosts,
     settings: {
       ...configPayload.settings,
       aiApiKey: secretsPayload.aiSecret?.apiKey || configPayload.settings.aiApiKey,
@@ -1363,6 +1530,8 @@ function createVaultSnapshot(vault = getVault()) {
   return {
     hosts: sortHostsByListOrder(vault.hosts),
     sshKeys: vault.sshKeys.map((key) => toRendererKeyRecord(key)),
+    proxyProfiles: vault.proxyProfiles,
+    knownHosts: vault.knownHosts,
     settings: vault.settings,
     browserBookmarks: vault.browserBookmarks,
     storage: getVaultStorageInfo(),
@@ -1381,6 +1550,8 @@ function createPublicVaultSnapshotFromConfig(configPayload) {
       ...key,
       passphrase: '',
     })),
+    proxyProfiles: configPayload.proxyProfiles.map((profile) => toConfigProxyProfile(profile)),
+    knownHosts: configPayload.knownHosts,
     settings: toConfigSettings(configPayload.settings),
     browserBookmarks: configPayload.browserBookmarks,
     storage: getVaultStorageInfo(),
@@ -1441,6 +1612,12 @@ function upsertVaultCollections(rawPayload) {
   const currentVault = getVault();
   const nextHosts = Array.isArray(rawPayload.hosts) ? rawPayload.hosts.map((host) => readStoredHostRecord(host)) : currentVault.hosts;
   const nextSettings = rawPayload.settings === undefined ? currentVault.settings : readAppSettings(rawPayload.settings);
+  const nextProxyProfiles = Array.isArray(rawPayload.proxyProfiles)
+    ? rawPayload.proxyProfiles.map((profile) => readProxyProfile(profile))
+    : currentVault.proxyProfiles;
+  const nextKnownHosts = Array.isArray(rawPayload.knownHosts)
+    ? rawPayload.knownHosts.map((knownHost) => readKnownHost(knownHost))
+    : currentVault.knownHosts;
   const nextSshKeys = Array.isArray(rawPayload.sshKeys)
     ? rawPayload.sshKeys.map((key) => {
         const nextKey = readStoredKeyRecord(key);
@@ -1461,6 +1638,8 @@ function upsertVaultCollections(rawPayload) {
     ...currentVault,
     hosts: nextHosts,
     sshKeys: nextSshKeys,
+    proxyProfiles: nextProxyProfiles,
+    knownHosts: nextKnownHosts,
     settings: nextSettings,
   });
 
@@ -1482,6 +1661,30 @@ function getHostById(hostId) {
   }
 
   return getVault().hosts.find((host) => host.id === hostId) ?? null;
+}
+
+function getProxyProfileById(proxyProfileId) {
+  if (!proxyProfileId) {
+    return null;
+  }
+
+  return getVault().proxyProfiles.find((profile) => profile.id === proxyProfileId) ?? null;
+}
+
+function getProxyConfigForHost(host, label = '主机') {
+  const proxyProfileId = readBoundedString(host.proxyProfileId ?? '', '代理 ID', 128, { required: false });
+
+  if (!proxyProfileId) {
+    return null;
+  }
+
+  const proxyProfile = getProxyProfileById(proxyProfileId);
+
+  if (!proxyProfile) {
+    throw new Error(`${label}选择的代理不存在，请重新选择。`);
+  }
+
+  return proxyProfile.config;
 }
 
 function readLocalTextFile(filePath, label, maxBytes = maxPrivateKeyBytes) {
@@ -1868,8 +2071,19 @@ function validateHostRequest(rawHost) {
   const { displayHost, sshConfig } = buildSshConfigFromHostRequest(rawHost, matchedStoredHost);
   const privilegeConfig = buildPrivilegeConfigFromHostRequest(rawHost, matchedStoredHost);
   const jumpHostId = readBoundedString(rawHost.jumpHostId || matchedStoredHost?.jumpHostId || '', '跳板机 ID', 128, { required: false });
+  const proxyProfileId = readBoundedString(rawHost.proxyProfileId || matchedStoredHost?.proxyProfileId || '', '代理 ID', 128, { required: false });
   let jumpHost = null;
   let jumpSshConfig = null;
+  let proxyConfig = null;
+  let jumpProxyConfig = null;
+
+  if (jumpHostId && proxyProfileId) {
+    throw new Error('当前不能同时为目标主机选择代理和跳板机。');
+  }
+
+  if (!jumpHostId && proxyProfileId) {
+    proxyConfig = getProxyConfigForHost({ proxyProfileId }, '目标主机');
+  }
 
   if (jumpHostId) {
     if (jumpHostId === hostId) {
@@ -1900,6 +2114,7 @@ function validateHostRequest(rawHost) {
     };
     const jumpConfig = buildSshConfigFromHostRequest(jumpRequest, jumpHost);
     jumpSshConfig = jumpConfig.sshConfig;
+    jumpProxyConfig = getProxyConfigForHost(jumpHost, `跳板机「${jumpHost.name}」`);
     displayHost.jumpHost = {
       id: jumpHost.id,
       name: jumpHost.name,
@@ -1913,7 +2128,9 @@ function validateHostRequest(rawHost) {
     displayHost,
     sshConfig,
     privilegeConfig,
+    proxyConfig,
     jumpSshConfig,
+    jumpProxyConfig,
     jumpHost: displayHost.jumpHost ?? null,
   };
 }
@@ -1995,6 +2212,8 @@ function buildConfigBundle(vault = getVault()) {
       ...toRendererKeyRecord(key),
       privateKeyBase64: Buffer.from(key.privateKey, 'utf8').toString('base64'),
     })),
+    proxyProfiles: vault.proxyProfiles,
+    knownHosts: vault.knownHosts,
     settings: vault.settings,
     browserBookmarks: vault.browserBookmarks,
   };
@@ -2010,6 +2229,12 @@ function readConfigImportPayload(rawPayload) {
   }
 
   const hosts = sortHostsByListOrder(sanitizeHostJumpHostReferences(rawPayload.hosts.map((host) => readStoredHostRecord(host))));
+  const proxyProfiles = Array.isArray(rawPayload.proxyProfiles)
+    ? rawPayload.proxyProfiles.map((profile) => readProxyProfile(profile))
+    : [];
+  const knownHosts = Array.isArray(rawPayload.knownHosts)
+    ? rawPayload.knownHosts.map((knownHost) => readKnownHost(knownHost))
+    : [];
   const sshKeys = rawPayload.sshKeys.map((key) => {
     const isLegacyKey = typeof key.keyPath === 'string' && !('source' in key);
     const baseKey = isLegacyKey ? readLegacyStoredKeyRecord(key) : readStoredKeyRecord(key);
@@ -2030,6 +2255,8 @@ function readConfigImportPayload(rawPayload) {
   return {
     hosts,
     sshKeys,
+    proxyProfiles,
+    knownHosts,
     settings: readAppSettings(rawPayload.settings),
     browserBookmarks: Array.isArray(rawPayload.browserBookmarks)
       ? rawPayload.browserBookmarks.map((collection) => readBookmarkCollection(collection))

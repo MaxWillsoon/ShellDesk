@@ -1,0 +1,272 @@
+/* ===== Proxy Profiles / Known Hosts Pages ===== */
+
+.network-assets-command-bar {
+  grid-template-columns: minmax(260px, 380px) minmax(0, 1fr) auto;
+}
+
+.known-hosts-command-bar {
+  grid-template-columns: minmax(260px, 380px) minmax(0, 1fr) auto auto;
+}
+
+.network-assets-search {
+  min-width: 0;
+}
+
+.network-save-state {
+  min-width: 0;
+  justify-self: end;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: var(--surface-soft);
+  color: var(--muted-strong);
+  font-size: 11.5px;
+  font-weight: 780;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.network-save-state.loading,
+.network-save-state.saving {
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--accent);
+}
+
+.network-save-state.saved {
+  border-color: rgba(119, 244, 197, 0.28);
+  color: #86f7d8;
+}
+
+.network-save-state.error {
+  border-color: rgba(255, 111, 143, 0.3);
+  color: #ffb7bd;
+}
+
+.network-assets-content {
+  grid-template-columns: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.network-list-panel {
+  margin-top: 0;
+}
+
+.network-card-grid {
+  grid-template-columns: repeat(auto-fill, minmax(276px, 1fr));
+}
+
+.network-card {
+  min-height: 106px;
+  align-items: flex-start;
+  padding: 12px 10px;
+}
+
+.network-card.active,
+.network-card:hover {
+  border-color: var(--accent-border);
+  background: var(--surface-soft);
+}
+
+.network-card.converted {
+  opacity: 0.76;
+}
+
+.known-host-card {
+  height: 60px;
+  min-height: 60px;
+  max-height: 60px;
+  align-items: center;
+  padding: 8px 10px;
+}
+
+.known-host-card.converted {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.025)),
+    color-mix(in srgb, var(--surface-soft) 82%, #ffffff 18%);
+  opacity: 1;
+}
+
+.network-card-main {
+  cursor: pointer;
+  padding-right: 38px;
+}
+
+.known-host-card .network-card-main {
+  align-items: center;
+  cursor: default;
+  padding-right: 0;
+  width: 100%;
+}
+
+.known-host-card.clickable .network-card-main {
+  cursor: pointer;
+}
+
+.known-host-card .network-card-main:disabled {
+  cursor: default;
+}
+
+.known-host-card .network-summary {
+  gap: 1px;
+}
+
+.known-host-card .network-summary strong,
+.known-host-card .network-summary small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.known-host-card .network-avatar {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  font-size: 11.5px;
+}
+
+.network-avatar {
+  background:
+    radial-gradient(circle at 68% 24%, rgba(67, 199, 255, 0.26), transparent 42%),
+    linear-gradient(145deg, rgba(39, 112, 163, 0.34), rgba(23, 57, 74, 0.76));
+  color: #9fdcff;
+  font-family: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+  font-size: 15px;
+  letter-spacing: 0;
+}
+
+.network-avatar.socks5 {
+  background:
+    radial-gradient(circle at 68% 24%, rgba(119, 244, 197, 0.24), transparent 42%),
+    linear-gradient(145deg, rgba(35, 157, 126, 0.3), rgba(21, 68, 64, 0.76));
+  color: #86f7d8;
+}
+
+.network-avatar.command {
+  background:
+    radial-gradient(circle at 68% 24%, rgba(255, 179, 71, 0.24), transparent 42%),
+    linear-gradient(145deg, rgba(166, 112, 42, 0.28), rgba(74, 54, 34, 0.78));
+  color: #ffd28a;
+}
+
+.network-avatar.known {
+  background:
+    radial-gradient(circle at 68% 24%, rgba(159, 140, 255, 0.24), transparent 42%),
+    linear-gradient(145deg, rgba(79, 90, 182, 0.34), rgba(39, 49, 98, 0.78));
+  color: #c9c2ff;
+}
+
+.network-type-icon {
+  color: #9fdcff;
+  font-family: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+  font-size: 14px;
+}
+
+.network-type-icon.socks5 {
+  color: #86f7d8;
+}
+
+.network-type-icon.command {
+  color: #ffd28a;
+}
+
+.network-type-icon.known {
+  color: #c9c2ff;
+}
+
+.network-summary {
+  display: grid;
+  gap: 3px;
+}
+
+.network-summary small {
+  display: block;
+  color: var(--muted-strong);
+  font-family: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+}
+
+.network-card-tags {
+  display: flex !important;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px !important;
+  padding-right: 3px;
+}
+
+.network-card-tags em {
+  max-width: 100%;
+  min-height: 21px !important;
+  overflow: hidden;
+  padding: 3px 7px !important;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.network-card-tags em:nth-child(2) {
+  max-width: min(100%, 210px);
+  font-family: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+  font-size: 10.5px !important;
+}
+
+.network-card-actions {
+  top: 7px;
+  right: 7px;
+}
+
+.network-clear-filter span {
+  font-size: 22px;
+  transform: translateY(-1px);
+}
+
+.network-empty {
+  min-height: 240px;
+  padding: 24px;
+}
+
+.network-editor-popover {
+  width: min(500px, calc(100% - 36px));
+}
+
+.network-editor-form {
+  gap: 11px;
+}
+
+.network-hidden-input {
+  display: none;
+}
+
+.host-proxy-inline {
+  color: var(--accent);
+}
+
+@media (max-width: 760px) {
+  .network-assets-command-bar,
+  .known-hosts-command-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .network-save-state {
+    justify-self: stretch;
+  }
+
+  .network-card-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+[data-theme="light"] .network-save-state.saved {
+  border-color: rgba(22, 163, 74, 0.24);
+  color: #15803d;
+}
+
+[data-theme="light"] .network-save-state.error {
+  color: #b42335;
+}
+
+[data-theme="light"] .known-host-card.converted {
+  border-color: color-mix(in srgb, var(--accent) 16%, var(--border));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.68)),
+    color-mix(in srgb, var(--surface-soft) 42%, #ffffff 58%);
+}

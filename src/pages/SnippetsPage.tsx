@@ -63,6 +63,14 @@ function getSaveErrorMessage(error: unknown) {
   return '';
 }
 
+function closeSnippetCardMenu(target: HTMLElement) {
+  const menu = target.closest('details');
+
+  if (menu instanceof HTMLDetailsElement) {
+    menu.open = false;
+  }
+}
+
 function getAiReadinessError(settings: ShellDeskAppSettings, language: ShellDeskAppSettings['language']) {
   const aiControls = window.guiSSH?.ai;
 
@@ -250,6 +258,7 @@ function SnippetsPage({ settings, onSettingsChange }: SnippetsPageProps) {
   const snippets = settings.terminalSnippets ?? [];
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
+  const [isSnippetEditorOpen, setIsSnippetEditorOpen] = useState(false);
   const [editingSnippetId, setEditingSnippetId] = useState('');
   const [snippetDraft, setSnippetDraft] = useState<SnippetDraft>(emptySnippetDraft);
   const [formError, setFormError] = useState('');
@@ -342,12 +351,30 @@ function SnippetsPage({ settings, onSettingsChange }: SnippetsPageProps) {
       group: selectedGroup ?? '',
     });
     setFormError('');
+    setAiPrompt('');
+    setAiError('');
+    setAiStatus('idle');
+    setIsSnippetEditorOpen(true);
   };
 
   const startEditSnippet = (snippet: ShellDeskTerminalSnippet) => {
     setEditingSnippetId(snippet.id);
     setSnippetDraft(snippetToDraft(snippet));
     setFormError('');
+    setAiPrompt('');
+    setAiError('');
+    setAiStatus('idle');
+    setIsSnippetEditorOpen(true);
+  };
+
+  const closeSnippetEditor = () => {
+    setEditingSnippetId('');
+    setSnippetDraft(emptySnippetDraft);
+    setFormError('');
+    setAiPrompt('');
+    setAiError('');
+    setAiStatus('idle');
+    setIsSnippetEditorOpen(false);
   };
 
   const saveSnippet = async (event: FormEvent) => {
@@ -405,7 +432,7 @@ function SnippetsPage({ settings, onSettingsChange }: SnippetsPageProps) {
       });
 
       if (saved) {
-        setSnippetDraft((currentDraft) => ({ ...currentDraft, label, group, command, shortcut }));
+        closeSnippetEditor();
       }
     } else {
       const nextSnippet: ShellDeskTerminalSnippet = {
@@ -424,8 +451,7 @@ function SnippetsPage({ settings, onSettingsChange }: SnippetsPageProps) {
       ]);
 
       if (saved) {
-        setEditingSnippetId(nextSnippet.id);
-        setSnippetDraft(snippetToDraft(nextSnippet));
+        closeSnippetEditor();
       }
     }
 
@@ -436,7 +462,7 @@ function SnippetsPage({ settings, onSettingsChange }: SnippetsPageProps) {
     const saved = await updateSnippets((currentSnippets) => currentSnippets.filter((snippet) => snippet.id !== snippetId));
 
     if (saved && editingSnippetId === snippetId) {
-      startCreateSnippet();
+      closeSnippetEditor();
     }
   };
 
@@ -553,210 +579,234 @@ function SnippetsPage({ settings, onSettingsChange }: SnippetsPageProps) {
         </button>
       </div>
 
-      <section className="vault-content snippets-page">
-        <div className="snippets-main">
-          <div className="snippets-browser">
-            <div className="snippets-page-heading">
-              <span>
-                <strong>{t('snippets.page.title', language)}</strong>
-                <small>{t('snippets.page.subtitle', language)}</small>
-              </span>
-              <b>{t('terminal.snippets.count', language, { count: filteredSnippets.length })}</b>
-            </div>
+      <section className="vault-content hosts-content snippets-page snippets-content">
+        <aside className="hosts-group-panel snippets-group-panel" aria-label={t('snippets.page.groups', language)}>
+          <button
+            type="button"
+            className={`filter-tab all-hosts-filter ${!selectedGroup ? 'active' : ''}`}
+            onClick={() => setSelectedGroup(null)}
+          >
+            <span>{t('snippets.page.allGroups', language)}</span>
+            <b>{snippets.length}</b>
+          </button>
 
-            {snippetGroups.length > 0 && !searchQuery.trim() ? (
-              <section className="snippets-section" aria-label={t('snippets.page.groups', language)}>
-                <div className="snippets-section-heading">
-                  <h3>{t('snippets.page.groups', language)}</h3>
-                  {selectedGroup ? (
-                    <button type="button" onClick={() => setSelectedGroup(null)}>
-                      {t('snippets.page.allGroups', language)}
-                    </button>
-                  ) : null}
-                </div>
-                <div className="snippet-group-grid">
-                  <button
-                    type="button"
-                    className={`snippet-group-card ${selectedGroup === null ? 'active' : ''}`}
-                    onClick={() => setSelectedGroup(null)}
-                  >
-                    <span className="snippet-card-icon" aria-hidden="true">#</span>
-                    <span>
-                      <strong>{t('snippets.page.allGroups', language)}</strong>
-                      <small>{t('terminal.snippets.count', language, { count: snippets.length })}</small>
-                    </span>
-                  </button>
-                  {snippetGroups.map((group) => (
-                    <button
-                      key={group.name}
-                      type="button"
-                      className={`snippet-group-card ${selectedGroup === group.name ? 'active' : ''}`}
-                      onClick={() => setSelectedGroup(group.name)}
-                    >
-                      <span className="snippet-card-icon" aria-hidden="true">/</span>
-                      <span>
-                        <strong>{group.name}</strong>
-                        <small>{t('terminal.snippets.count', language, { count: group.count })}</small>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </section>
-            ) : null}
-
-            <section className="snippets-section" aria-label={t('snippets.page.list', language)}>
-              <div className="snippets-section-heading">
-                <h3>{t('snippets.page.list', language)}</h3>
-                {selectedGroup ? <span>{selectedGroup}</span> : null}
-              </div>
-
-              {filteredSnippets.length ? (
-                <div className="snippet-card-grid">
-                  {filteredSnippets.map((snippet) => (
-                    <article key={snippet.id} className={`snippet-card ${editingSnippetId === snippet.id ? 'active' : ''}`}>
-                      <button type="button" className="snippet-card-main" onClick={() => startEditSnippet(snippet)}>
-                        <span className="snippet-card-icon" aria-hidden="true">{'{}'}</span>
-                        <span className="snippet-card-body">
-                          <span className="snippet-card-title">
-                            <strong>{snippet.label}</strong>
-                            {snippet.shortcut ? <kbd>{snippet.shortcut}</kbd> : null}
-                          </span>
-                          <small>{snippet.group || t('terminal.snippets.ungrouped', language)}</small>
-                          <code>{getSnippetPreview(snippet) || t('snippets.page.commandFallback', language)}</code>
-                        </span>
-                      </button>
-                    </article>
-                  ))}
-                </div>
-              ) : (
-                <div className="empty-state snippets-empty">
-                  <span>SNIPPETS</span>
-                  <h3>{emptyTitle}</h3>
-                  <p>{emptyDescription}</p>
-                </div>
-              )}
-            </section>
+          <div className="section-heading group-panel-heading">
+            <h2>{t('snippets.page.groups', language)}</h2>
+            <button type="button" className="group-add-button" onClick={startCreateSnippet} aria-label={t('terminal.snippets.new', language)}>
+              +
+            </button>
           </div>
 
-          <aside className="snippets-aside-panel" aria-label={editorTitle}>
-            <form className="snippets-editor-panel" onSubmit={saveSnippet}>
-              <div className="snippets-editor-heading">
-                <span>
-                  <strong>{editorTitle}</strong>
-                  <small>{t('snippets.page.editorHint', language)}</small>
-                </span>
-                <div className="snippets-editor-toolbar">
-                  {activeSnippet ? (
-                    <button
-                      type="button"
-                      className="snippet-icon-button danger-text"
-                      onClick={() => void deleteSnippet(activeSnippet.id)}
-                      disabled={saveStatus === 'saving'}
-                      title={t('terminal.snippets.delete', language)}
-                      aria-label={t('terminal.snippets.delete', language)}
-                    >
-                      ×
-                    </button>
-                  ) : null}
-                  <button
-                    type="submit"
-                    className="snippet-icon-button primary"
-                    disabled={saveStatus === 'saving'}
-                    title={t('snippets.page.save', language)}
-                    aria-label={t('snippets.page.save', language)}
+          {snippetGroups.length ? (
+            <div className="group-grid group-list">
+              {snippetGroups.map((group) => (
+                <button
+                  key={group.name}
+                  type="button"
+                  className={`group-card snippet-group-card ${selectedGroup === group.name ? 'active' : ''}`}
+                  onClick={() => setSelectedGroup(group.name)}
+                >
+                  <span className="group-icon snippet-group-icon" aria-hidden="true">#</span>
+                  <strong>{group.name}</strong>
+                  <small>{group.count}</small>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-inline">{t('snippets.page.emptyDesc', language)}</div>
+          )}
+        </aside>
+
+        <section className="vault-section host-section hosts-list-panel snippets-list-panel">
+          <div className="section-heading host-list-heading">
+            <div className="host-list-title">
+              <h2>{selectedGroup || t('snippets.page.allGroups', language)} <b>{filteredSnippets.length}</b></h2>
+            </div>
+            <span className="host-list-controls">
+              {t('terminal.snippets.count', language, { count: filteredSnippets.length })}
+              {selectedGroup || searchQuery.trim() ? (
+                <button
+                  type="button"
+                  className="host-refresh-button snippets-clear-filter"
+                  onClick={() => {
+                    setSelectedGroup(null);
+                    setSearchQuery('');
+                  }}
+                  aria-label={t('snippets.page.clearFilter', language)}
+                  title={t('snippets.page.clearFilter', language)}
+                >
+                  <span aria-hidden="true">×</span>
+                </button>
+              ) : null}
+            </span>
+          </div>
+
+          <div className="host-list-scroll snippets-list-scroll">
+            {filteredSnippets.length ? (
+              <div className="host-grid grid snippet-card-grid">
+                {filteredSnippets.map((snippet) => (
+                  <article
+                    key={snippet.id}
+                    className={`host-card snippet-card ${isSnippetEditorOpen && editingSnippetId === snippet.id ? 'active' : ''}`}
                   >
-                    ✓
-                  </button>
-                </div>
-              </div>
-
-              <div className="snippet-editor-scroll">
-                <label className="snippet-field-card">
-                  <span>{t('terminal.snippets.fieldLabel', language)}</span>
-                  <input
-                    value={snippetDraft.label}
-                    maxLength={80}
-                    onChange={(event) => setSnippetDraft((currentDraft) => ({ ...currentDraft, label: event.target.value }))}
-                    placeholder={t('terminal.snippets.labelPlaceholder', language)}
-                  />
-                </label>
-
-                <label className="snippet-field-card">
-                  <span>{t('terminal.snippets.fieldGroup', language)}</span>
-                  <input
-                    value={snippetDraft.group}
-                    maxLength={80}
-                    onChange={(event) => setSnippetDraft((currentDraft) => ({ ...currentDraft, group: event.target.value }))}
-                    placeholder={t('terminal.snippets.groupPlaceholder', language)}
-                  />
-                </label>
-
-                <label className="snippet-field-card">
-                  <span>{t('terminal.snippets.fieldCommand', language)}</span>
-                  <textarea
-                    value={snippetDraft.command}
-                    onChange={(event) => setSnippetDraft((currentDraft) => ({ ...currentDraft, command: event.target.value }))}
-                    placeholder="systemctl status nginx"
-                  />
-                </label>
-
-                <section className="snippet-ai-inline" aria-label={t('snippets.ai.title', language)}>
-                  <div className="snippet-ai-heading">
-                    <span>
-                      <strong>{t('snippets.ai.title', language)}</strong>
-                      <small>{settings.aiModel ? settings.aiModel : t('snippets.ai.notConfigured', language)}</small>
+                    <div className="host-card-main snippet-card-main">
+                      <span className="host-avatar snippet-avatar" aria-hidden="true">{'{}'}</span>
+                      <span className="host-summary snippet-summary">
+                        <strong>{snippet.label}</strong>
+                        <small>{snippet.group || t('terminal.snippets.ungrouped', language)}</small>
+                        <span className="host-card-tags snippet-card-tags">
+                          {snippet.shortcut ? <em>{snippet.shortcut}</em> : null}
+                          <em>{getSnippetPreview(snippet) || t('snippets.page.commandFallback', language)}</em>
+                        </span>
+                      </span>
+                    </div>
+                    <span className="host-card-actions snippet-card-actions">
+                      <details className="host-card-menu snippet-card-menu" onClick={(event) => event.stopPropagation()}>
+                        <summary aria-label={t('snippets.page.actions', language)}>⋯</summary>
+                        <div className="host-card-menu-panel">
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              closeSnippetCardMenu(event.currentTarget);
+                              startEditSnippet(snippet);
+                            }}
+                          >
+                            {t('app.host.edit', language)}
+                          </button>
+                          <button
+                            type="button"
+                            className="danger-text"
+                            onClick={(event) => {
+                              closeSnippetCardMenu(event.currentTarget);
+                              void deleteSnippet(snippet.id);
+                            }}
+                          >
+                            {t('terminal.snippets.delete', language)}
+                          </button>
+                        </div>
+                      </details>
                     </span>
-                    <button
-                      type="button"
-                      className="command-button muted"
-                      onClick={() => void requestAiCommand()}
-                      disabled={aiStatus === 'running' || saveStatus === 'saving'}
-                    >
-                      {aiStatus === 'running' ? t('snippets.ai.generating', language) : t('snippets.ai.generate', language)}
-                    </button>
-                  </div>
-                  <textarea
-                    value={aiPrompt}
-                    onChange={(event) => setAiPrompt(event.target.value)}
-                    placeholder={t('snippets.ai.placeholder', language)}
-                    disabled={aiStatus === 'running'}
-                  />
-                  {aiError ? <div className="snippet-form-error">{aiError}</div> : null}
-                </section>
-
-                <label className="snippet-field-card">
-                  <span>{t('terminal.snippets.fieldShortcut', language)}</span>
-                  <div className="snippet-shortcut-row">
-                    <input
-                      value={snippetDraft.shortcut}
-                      readOnly
-                      onKeyDown={handleShortcutKeyDown}
-                      placeholder={t('terminal.snippets.shortcutPlaceholder', language)}
-                    />
-                    <button
-                      type="button"
-                      className="command-button muted"
-                      onClick={() => setSnippetDraft((currentDraft) => ({ ...currentDraft, shortcut: '' }))}
-                      disabled={!snippetDraft.shortcut || saveStatus === 'saving'}
-                    >
-                      {t('terminal.snippets.clearShortcut', language)}
-                    </button>
-                  </div>
-                  <small>{t('snippets.page.shortcutHint', language)}</small>
-                  {shortcutWarning ? (
-                    <small className="snippet-shortcut-warning" role="alert">
-                      {shortcutWarning}
-                    </small>
-                  ) : null}
-                </label>
-
-                {formError ? <div className="snippet-form-error">{formError}</div> : null}
-                {saveStatus === 'error' ? <div className="snippet-form-error">{saveStatusText}</div> : null}
+                  </article>
+                ))}
               </div>
-            </form>
-          </aside>
-        </div>
+            ) : (
+              <div className="empty-state snippets-empty">
+                <span>SNIPPETS</span>
+                <h3>{emptyTitle}</h3>
+                <p>{emptyDescription}</p>
+              </div>
+            )}
+          </div>
+        </section>
       </section>
+
+      {isSnippetEditorOpen ? (
+        <aside className="editor-panel snippets-editor-popover no-drag" aria-label={editorTitle}>
+          <div className="editor-header">
+            <span>
+              <strong>{editorTitle}</strong>
+              <small>{activeSnippet ? activeSnippet.label : t('snippets.page.editorHint', language)}</small>
+            </span>
+            <div className="editor-header-actions">
+              <button
+                type="submit"
+                className="editor-header-submit"
+                form="snippet-editor-form"
+                disabled={saveStatus === 'saving'}
+              >
+                {t('common.save', language)}
+              </button>
+              <button type="button" className="editor-header-clear" onClick={closeSnippetEditor}>
+                {t('common.cancel', language)}
+              </button>
+            </div>
+          </div>
+
+          <form id="snippet-editor-form" className="host-form snippet-editor-form" onSubmit={saveSnippet}>
+            <label className="field">
+              <span>{t('terminal.snippets.fieldLabel', language)}</span>
+              <input
+                value={snippetDraft.label}
+                maxLength={80}
+                onChange={(event) => setSnippetDraft((currentDraft) => ({ ...currentDraft, label: event.target.value }))}
+                placeholder={t('terminal.snippets.labelPlaceholder', language)}
+              />
+            </label>
+
+            <label className="field">
+              <span>{t('terminal.snippets.fieldGroup', language)}</span>
+              <input
+                value={snippetDraft.group}
+                maxLength={80}
+                onChange={(event) => setSnippetDraft((currentDraft) => ({ ...currentDraft, group: event.target.value }))}
+                placeholder={t('terminal.snippets.groupPlaceholder', language)}
+              />
+            </label>
+
+            <label className="field snippet-command-field">
+              <span>{t('terminal.snippets.fieldCommand', language)}</span>
+              <textarea
+                value={snippetDraft.command}
+                onChange={(event) => setSnippetDraft((currentDraft) => ({ ...currentDraft, command: event.target.value }))}
+                placeholder="systemctl status nginx"
+              />
+            </label>
+
+            <section className="snippet-ai-inline" aria-label={t('snippets.ai.title', language)}>
+              <div className="snippet-ai-heading">
+                <span>
+                  <strong>{t('snippets.ai.title', language)}</strong>
+                  <small>{settings.aiModel ? settings.aiModel : t('snippets.ai.notConfigured', language)}</small>
+                </span>
+                <button
+                  type="button"
+                  className="command-button muted"
+                  onClick={() => void requestAiCommand()}
+                  disabled={aiStatus === 'running' || saveStatus === 'saving'}
+                >
+                  {aiStatus === 'running' ? t('snippets.ai.generating', language) : t('snippets.ai.generate', language)}
+                </button>
+              </div>
+              <textarea
+                value={aiPrompt}
+                onChange={(event) => setAiPrompt(event.target.value)}
+                placeholder={t('snippets.ai.placeholder', language)}
+                disabled={aiStatus === 'running'}
+              />
+              {aiError ? <div className="snippet-form-error">{aiError}</div> : null}
+            </section>
+
+            <label className="field">
+              <span>{t('terminal.snippets.fieldShortcut', language)}</span>
+              <div className="snippet-shortcut-row">
+                <input
+                  value={snippetDraft.shortcut}
+                  readOnly
+                  onKeyDown={handleShortcutKeyDown}
+                  placeholder={t('terminal.snippets.shortcutPlaceholder', language)}
+                />
+                <button
+                  type="button"
+                  className="command-button muted"
+                  onClick={() => setSnippetDraft((currentDraft) => ({ ...currentDraft, shortcut: '' }))}
+                  disabled={!snippetDraft.shortcut || saveStatus === 'saving'}
+                >
+                  {t('terminal.snippets.clearShortcut', language)}
+                </button>
+              </div>
+              <small className="field-note">{t('snippets.page.shortcutHint', language)}</small>
+              {shortcutWarning ? (
+                <small className="snippet-shortcut-warning" role="alert">
+                  {shortcutWarning}
+                </small>
+              ) : null}
+            </label>
+
+            {formError ? <div className="snippet-form-error">{formError}</div> : null}
+            {saveStatus === 'error' ? <div className="snippet-form-error">{saveStatusText}</div> : null}
+          </form>
+        </aside>
+      ) : null}
     </>
   );
 }

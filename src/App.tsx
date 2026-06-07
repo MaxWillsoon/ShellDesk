@@ -14,6 +14,10 @@ const KeysPage = lazy(() =>
   Promise.all([loadFullMessageCatalog(), import('./pages/KeysPage')]).then(([, module]) => module));
 const SnippetsPage = lazy(() =>
   Promise.all([loadFullMessageCatalog(), import('./pages/SnippetsPage')]).then(([, module]) => module));
+const ProxyProfilesPage = lazy(() =>
+  Promise.all([loadFullMessageCatalog(), import('./pages/ProxyProfilesPage')]).then(([, module]) => module));
+const KnownHostsPage = lazy(() =>
+  Promise.all([loadFullMessageCatalog(), import('./pages/KnownHostsPage')]).then(([, module]) => module));
 const LogsPage = lazy(() =>
   Promise.all([loadFullMessageCatalog(), import('./pages/LogsPage')]).then(([, module]) => module));
 const SettingsPage = lazy(() =>
@@ -123,7 +127,7 @@ const defaultAppSettings: ShellDeskAppSettings = {
   terminalSnippets: createDefaultTerminalSnippets(defaultAppLanguage),
 };
 
-type AppPage = 'hosts' | 'keys' | 'snippets' | 'logs' | 'settings';
+type AppPage = 'hosts' | 'keys' | 'snippets' | 'proxies' | 'known-hosts' | 'logs' | 'settings';
 type HostListSortMode = 'createdDesc' | 'createdAsc' | 'updatedDesc' | 'updatedAsc' | 'nameAsc' | 'nameDesc' | 'addressAsc';
 type SyncConflictNotice = Pick<ShellDeskSyncResult, 'conflictCount' | 'conflicts' | 'config'>;
 type UpdateReadyNotice = Pick<ShellDeskUpdateStatus, 'version' | 'releaseDate' | 'releaseNotes'>;
@@ -158,6 +162,8 @@ const navigationItems: ReadonlyArray<{ page: Exclude<AppPage, 'settings'>; icon:
   { page: 'hosts', icon: 'hosts', labelId: 'app.nav.hosts' },
   { page: 'keys', icon: 'keys', labelId: 'app.nav.keys' },
   { page: 'snippets', icon: 'snippets', labelId: 'app.nav.snippets' },
+  { page: 'proxies', icon: 'proxies', labelId: 'app.nav.proxies' },
+  { page: 'known-hosts', icon: 'known-hosts', labelId: 'app.nav.knownHosts' },
   { page: 'logs', icon: 'logs', labelId: 'app.nav.logs' },
 ];
 
@@ -593,6 +599,7 @@ interface Host {
   rootPassword: string;
   jumpHostId: string;
   canBeJumpHost: boolean;
+  proxyProfileId: string;
   systemType: HostSystemType;
   systemName: string;
   group: string;
@@ -612,6 +619,8 @@ interface ConnectionHost extends Omit<Host, 'authMethod'> {
 interface VaultCollectionsSavePayload {
   hosts: Host[];
   sshKeys: SshKey[];
+  proxyProfiles: ShellDeskProxyProfile[];
+  knownHosts: ShellDeskKnownHost[];
   settings: ShellDeskAppSettings;
 }
 
@@ -625,8 +634,8 @@ interface ConnectionErrorNotice {
 
 type ConnectionLaunchSource = 'host-card' | 'quick-connect' | 'credential';
 
-type StoredHost = Omit<Host, 'authMethod' | 'password' | 'keyId' | 'keyPath' | 'passphrase' | 'privilegeMode' | 'rootPassword' | 'jumpHostId' | 'canBeJumpHost' | 'systemType' | 'systemName' | 'lastConnectionStatus' | 'lastConnectionAt' | 'lastConnectionError'> &
-  Partial<Pick<Host, 'authMethod' | 'password' | 'keyId' | 'keyPath' | 'passphrase' | 'privilegeMode' | 'rootPassword' | 'jumpHostId' | 'canBeJumpHost' | 'systemType' | 'systemName' | 'lastConnectionStatus' | 'lastConnectionAt' | 'lastConnectionError'>>;
+type StoredHost = Omit<Host, 'authMethod' | 'password' | 'keyId' | 'keyPath' | 'passphrase' | 'privilegeMode' | 'rootPassword' | 'jumpHostId' | 'canBeJumpHost' | 'proxyProfileId' | 'systemType' | 'systemName' | 'lastConnectionStatus' | 'lastConnectionAt' | 'lastConnectionError'> &
+  Partial<Pick<Host, 'authMethod' | 'password' | 'keyId' | 'keyPath' | 'passphrase' | 'privilegeMode' | 'rootPassword' | 'jumpHostId' | 'canBeJumpHost' | 'proxyProfileId' | 'systemType' | 'systemName' | 'lastConnectionStatus' | 'lastConnectionAt' | 'lastConnectionError'>>;
 
 interface HostFormState {
   name: string;
@@ -642,6 +651,7 @@ interface HostFormState {
   rootPassword: string;
   jumpHostId: string;
   canBeJumpHost: boolean;
+  proxyProfileId: string;
   group: string;
   tags: string;
   note: string;
@@ -706,6 +716,7 @@ const emptyHostForm: HostFormState = {
   rootPassword: '',
   jumpHostId: '',
   canBeJumpHost: false,
+  proxyProfileId: '',
   group: '',
   tags: '',
   note: '',
@@ -812,6 +823,26 @@ function getHostConnectionStateView(host: Pick<Host, 'lastConnectionStatus' | 'l
   };
 }
 
+function getProxyConfigEndpoint(config: ShellDeskProxyConfig | undefined) {
+  if (!config) {
+    return '';
+  }
+
+  if (config.type === 'command') {
+    return 'ProxyCommand';
+  }
+
+  return `${config.host}:${config.port}`;
+}
+
+function getProxyConfigTypeLabel(config: ShellDeskProxyConfig | undefined) {
+  if (!config) {
+    return '';
+  }
+
+  return config.type === 'command' ? 'ProxyCommand' : config.type.toUpperCase();
+}
+
 function isStoredHost(value: unknown): value is StoredHost {
   if (!value || typeof value !== 'object') {
     return false;
@@ -846,6 +877,7 @@ function normalizeStoredHost(host: StoredHost): Host {
     rootPassword: getPrivilegeMode(host.privilegeMode) === 'su-root' && typeof host.rootPassword === 'string' ? host.rootPassword : '',
     jumpHostId: typeof host.jumpHostId === 'string' ? host.jumpHostId : '',
     canBeJumpHost: host.canBeJumpHost === true,
+    proxyProfileId: typeof host.proxyProfileId === 'string' ? host.proxyProfileId : '',
     systemType: getHostSystemType(host.systemType, host.systemName),
     systemName: typeof host.systemName === 'string' ? host.systemName : '',
     lastConnectionStatus: getHostConnectionStatus(host.lastConnectionStatus),
@@ -1131,6 +1163,7 @@ function validateHostForm(
   keys: SshKey[],
   hosts: Host[],
   editingHostId: string | null,
+  proxyProfiles: ShellDeskProxyProfile[],
   language: ShellDeskAppSettings['language'],
 ) {
   const port = Number(form.port);
@@ -1189,6 +1222,18 @@ function validateHostForm(
     }
   }
 
+  if (jumpHostId && form.proxyProfileId.trim()) {
+    return language === 'zh-CN'
+      ? '当前不能同时为目标主机选择代理和跳板机。'
+      : 'A target host cannot use a proxy and a jump host at the same time.';
+  }
+
+  if (form.proxyProfileId.trim() && !proxyProfiles.some((profile) => profile.id === form.proxyProfileId.trim())) {
+    return language === 'zh-CN'
+      ? '请选择有效的代理配置。'
+      : 'Choose a valid proxy profile.';
+  }
+
   if (editingHostId && !form.canBeJumpHost) {
     const isUsedAsJumpHost = hosts.some((host) => host.id !== editingHostId && host.jumpHostId === editingHostId);
 
@@ -1232,6 +1277,7 @@ function createHostFromForm(form: HostFormState, selectedKey: SshKey | null): Ho
     rootPassword: privilegeMode === 'su-root' ? form.rootPassword : '',
     jumpHostId: form.jumpHostId.trim(),
     canBeJumpHost: form.canBeJumpHost,
+    proxyProfileId: form.proxyProfileId.trim(),
     systemType: 'unknown',
     systemName: '',
     group: form.group.trim(),
@@ -1251,7 +1297,9 @@ function updateHostFromForm(host: Host, form: HostFormState, selectedKey: SshKey
     host.port !== Number(form.port) ||
     host.username !== form.username.trim();
   const nextJumpHostId = form.jumpHostId.trim();
+  const nextProxyProfileId = form.proxyProfileId.trim();
   const jumpHostChanged = host.jumpHostId !== nextJumpHostId;
+  const proxyProfileChanged = host.proxyProfileId !== nextProxyProfileId;
   const nextPassword = form.authMethod === 'password' ? form.password : '';
   const nextKeyId = form.authMethod === 'key' ? selectedKey?.id ?? '' : '';
   const rootLogin = isRootLoginUsername(form.username);
@@ -1260,6 +1308,7 @@ function updateHostFromForm(host: Host, form: HostFormState, selectedKey: SshKey
   const connectionProfileChanged =
     endpointChanged ||
     jumpHostChanged ||
+    proxyProfileChanged ||
     host.authMethod !== form.authMethod ||
     host.password !== nextPassword ||
     host.keyId !== nextKeyId ||
@@ -1281,8 +1330,9 @@ function updateHostFromForm(host: Host, form: HostFormState, selectedKey: SshKey
     rootPassword: nextRootPassword,
     jumpHostId: nextJumpHostId,
     canBeJumpHost: form.canBeJumpHost,
-    systemType: endpointChanged || jumpHostChanged ? 'unknown' : host.systemType,
-    systemName: endpointChanged || jumpHostChanged ? '' : host.systemName,
+    proxyProfileId: nextProxyProfileId,
+    systemType: endpointChanged || jumpHostChanged || proxyProfileChanged ? 'unknown' : host.systemType,
+    systemName: endpointChanged || jumpHostChanged || proxyProfileChanged ? '' : host.systemName,
     group: form.group.trim(),
     tags: parseTags(form.tags),
     note: form.note.trim(),
@@ -1308,6 +1358,7 @@ function toFormState(host: Host): HostFormState {
     rootPassword: host.rootPassword,
     jumpHostId: host.jumpHostId,
     canBeJumpHost: host.canBeJumpHost,
+    proxyProfileId: host.proxyProfileId,
     group: host.group,
     tags: formatTags(host.tags),
     note: host.note,
@@ -1476,6 +1527,12 @@ function App() {
   const [sshKeys, setSshKeys] = useState<SshKey[]>(() => (
     initialPublicSnapshot ? initialPublicSnapshot.sshKeys.filter(isStoredSshKey) : []
   ));
+  const [proxyProfiles, setProxyProfiles] = useState<ShellDeskProxyProfile[]>(() => (
+    initialPublicSnapshot ? initialPublicSnapshot.proxyProfiles : []
+  ));
+  const [knownHosts, setKnownHosts] = useState<ShellDeskKnownHost[]>(() => (
+    initialPublicSnapshot ? initialPublicSnapshot.knownHosts : []
+  ));
   const [form, setForm] = useState<HostFormState>(emptyHostForm);
   const [keyForm, setKeyForm] = useState<KeyFormState>(emptyKeyForm);
   const [editingHostId, setEditingHostId] = useState<string | null>(null);
@@ -1536,6 +1593,8 @@ function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const hostsRef = useRef(hosts);
   const sshKeysRef = useRef(sshKeys);
+  const proxyProfilesRef = useRef(proxyProfiles);
+  const knownHostsRef = useRef(knownHosts);
   const settingsRef = useRef(settings);
   const lastPersistedCollectionsRef = useRef('');
   const collectionsSaveInFlightRef = useRef(false);
@@ -1557,6 +1616,7 @@ function App() {
   const editingKey = sshKeys.find((key) => key.id === editingKeyId) ?? null;
   const sshKeyById = useMemo(() => new Map(sshKeys.map((key) => [key.id, key])), [sshKeys]);
   const hostById = useMemo(() => new Map(hosts.map((host) => [host.id, host])), [hosts]);
+  const proxyProfileById = useMemo(() => new Map(proxyProfiles.map((profile) => [profile.id, profile])), [proxyProfiles]);
   const jumpHostOptions = useMemo(
     () => hosts.filter((host) => host.id !== editingHostId && host.canBeJumpHost && !host.jumpHostId),
     [editingHostId, hosts],
@@ -1590,6 +1650,7 @@ function App() {
     return hosts.filter((host) => {
       const hostKey = sshKeyById.get(host.keyId) ?? null;
       const jumpHost = host.jumpHostId ? hostById.get(host.jumpHostId) ?? null : null;
+      const proxyProfile = host.proxyProfileId ? proxyProfileById.get(host.proxyProfileId) ?? null : null;
       const matchesGroup = !activeGroupKey || getHostGroupKey(host) === activeGroupKey;
       const matchesQuery =
         !query ||
@@ -1606,6 +1667,9 @@ function App() {
           hostKey?.algorithm,
           jumpHost?.name,
           jumpHost?.address,
+          proxyProfile?.label,
+          getProxyConfigEndpoint(proxyProfile?.config),
+          getProxyConfigTypeLabel(proxyProfile?.config),
           getAuthLabel(host, hostKey, appLanguage),
           ...host.tags,
         ]
@@ -1615,7 +1679,7 @@ function App() {
 
       return matchesGroup && matchesQuery;
     }).sort((left, right) => compareHostsByHostListSortMode(left, right, hostListSortMode, appLocale));
-  }, [activeGroupKey, appLanguage, appLocale, hostById, hostListSortMode, hosts, searchQuery, sshKeyById]);
+  }, [activeGroupKey, appLanguage, appLocale, hostById, hostListSortMode, hosts, proxyProfileById, searchQuery, sshKeyById]);
 
   const filteredKeys = useMemo(() => {
     const query = keySearchQuery.trim().toLowerCase();
@@ -1642,16 +1706,24 @@ function App() {
     if (updateCollections) {
       const nextHosts = normalizeStoredHosts(snapshot.hosts.filter(isStoredHost));
       const nextKeys = snapshot.sshKeys.filter(isStoredSshKey);
+      const nextProxyProfiles = snapshot.proxyProfiles;
+      const nextKnownHosts = snapshot.knownHosts;
 
       hostsRef.current = nextHosts;
       sshKeysRef.current = nextKeys;
+      proxyProfilesRef.current = nextProxyProfiles;
+      knownHostsRef.current = nextKnownHosts;
       setHosts(nextHosts);
       setSshKeys(nextKeys);
+      setProxyProfiles(nextProxyProfiles);
+      setKnownHosts(nextKnownHosts);
 
       if (hydrated) {
         lastPersistedCollectionsRef.current = JSON.stringify({
           hosts: nextHosts,
           sshKeys: nextKeys,
+          proxyProfiles: nextProxyProfiles,
+          knownHosts: nextKnownHosts,
           settings: shouldRepairPersistedSettings ? snapshot.settings : nextSettings,
         });
       }
@@ -1671,6 +1743,8 @@ function App() {
       queueCollectionsSaveIfChanged({
         hosts: hostsRef.current,
         sshKeys: sshKeysRef.current,
+        proxyProfiles: proxyProfilesRef.current,
+        knownHosts: knownHostsRef.current,
         settings: nextSettings,
       });
     }
@@ -1754,6 +1828,8 @@ function App() {
     const payload: VaultCollectionsSavePayload = {
       hosts: hostsRef.current,
       sshKeys: sshKeysRef.current,
+      proxyProfiles: proxyProfilesRef.current,
+      knownHosts: knownHostsRef.current,
       settings: settingsRef.current,
     };
     const serializedPayload = JSON.stringify(payload);
@@ -1790,19 +1866,31 @@ function App() {
     nextHosts: Host[],
     nextSshKeys: SshKey[],
     nextSettings: ShellDeskAppSettings,
+    nextProxyProfiles: ShellDeskProxyProfile[] = proxyProfilesRef.current,
+    nextKnownHosts: ShellDeskKnownHost[] = knownHostsRef.current,
   ) => {
     const orderedHosts = sortHostsByListOrder(sanitizeHostJumpHostReferences(nextHosts));
 
     hostsRef.current = orderedHosts;
     sshKeysRef.current = nextSshKeys;
+    proxyProfilesRef.current = nextProxyProfiles;
+    knownHostsRef.current = nextKnownHosts;
     settingsRef.current = nextSettings;
     setHosts(orderedHosts);
     setSshKeys(nextSshKeys);
+    setProxyProfiles(nextProxyProfiles);
+    setKnownHosts(nextKnownHosts);
     setSettings(nextSettings);
     if (!vaultControls) {
       storeTerminalSnippets(nextSettings.terminalSnippets ?? []);
     }
-    queueCollectionsSaveIfChanged({ hosts: orderedHosts, sshKeys: nextSshKeys, settings: nextSettings });
+    queueCollectionsSaveIfChanged({
+      hosts: orderedHosts,
+      sshKeys: nextSshKeys,
+      proxyProfiles: nextProxyProfiles,
+      knownHosts: nextKnownHosts,
+      settings: nextSettings,
+    });
   }, [queueCollectionsSaveIfChanged, vaultControls]);
 
   const commitHosts = useCallback((nextHosts: Host[]) => {
@@ -1811,6 +1899,14 @@ function App() {
 
   const commitSshKeys = useCallback((nextSshKeys: SshKey[]) => {
     commitCollectionsState(hostsRef.current, nextSshKeys, settingsRef.current);
+  }, [commitCollectionsState]);
+
+  const commitProxyProfiles = useCallback((nextProxyProfiles: ShellDeskProxyProfile[], nextHosts: Host[] = hostsRef.current) => {
+    commitCollectionsState(nextHosts, sshKeysRef.current, settingsRef.current, nextProxyProfiles, knownHostsRef.current);
+  }, [commitCollectionsState]);
+
+  const commitKnownHosts = useCallback((nextKnownHosts: ShellDeskKnownHost[], nextHosts: Host[] = hostsRef.current) => {
+    commitCollectionsState(nextHosts, sshKeysRef.current, settingsRef.current, proxyProfilesRef.current, nextKnownHosts);
   }, [commitCollectionsState]);
 
   const refreshHosts = async () => {
@@ -1874,6 +1970,14 @@ function App() {
   useEffect(() => {
     sshKeysRef.current = sshKeys;
   }, [sshKeys]);
+
+  useEffect(() => {
+    proxyProfilesRef.current = proxyProfiles;
+  }, [proxyProfiles]);
+
+  useEffect(() => {
+    knownHostsRef.current = knownHosts;
+  }, [knownHosts]);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -2059,8 +2163,8 @@ function App() {
   }, [isConnectionWindow, isVaultReady]);
 
   useEffect(() => {
-    queueCollectionsSaveIfChanged({ hosts, sshKeys, settings });
-  }, [hosts, queueCollectionsSaveIfChanged, settings, sshKeys]);
+    queueCollectionsSaveIfChanged({ hosts, sshKeys, proxyProfiles, knownHosts, settings });
+  }, [hosts, knownHosts, proxyProfiles, queueCollectionsSaveIfChanged, settings, sshKeys]);
 
   useEffect(() => {
     const closeOpenHostCardMenus = (target: EventTarget | null) => {
@@ -2684,7 +2788,7 @@ function App() {
     event.preventDefault();
 
     const selectedKey = sshKeyById.get(form.keyId) ?? null;
-    const validationError = validateHostForm(form, sshKeys, hostsRef.current, editingHostId, appLanguage);
+    const validationError = validateHostForm(form, sshKeys, hostsRef.current, editingHostId, proxyProfilesRef.current, appLanguage);
 
     if (validationError) {
       setFormError(validationError);
@@ -2946,6 +3050,7 @@ function App() {
       rootPassword: '',
       jumpHostId: '',
       canBeJumpHost: false,
+      proxyProfileId: '',
       systemType: 'unknown',
       systemName: '',
       group: '',
@@ -3413,6 +3518,7 @@ function App() {
                       const connectionState = getHostConnectionStateView(host, appLanguage);
                       const isHostConnecting = connectingHostId === host.id;
                       const jumpHost = host.jumpHostId ? hostById.get(host.jumpHostId) ?? null : null;
+                      const proxyProfile = host.proxyProfileId ? proxyProfileById.get(host.proxyProfileId) ?? null : null;
 
                       return (
                         <article
@@ -3440,6 +3546,15 @@ function App() {
                                     ↪
                                   </span>
                                 ) : null}
+                                {proxyProfile ? (
+                                  <span
+                                    className="host-jump-inline host-proxy-inline"
+                                    title={`${proxyProfile.label} · ${getProxyConfigEndpoint(proxyProfile.config)}`}
+                                    aria-label={`${proxyProfile.label} · ${getProxyConfigEndpoint(proxyProfile.config)}`}
+                                  >
+                                    ⤳
+                                  </span>
+                                ) : null}
                                 <span className="host-endpoint">{host.username ? `${host.username}@` : ''}{host.address}:{host.port}</span>
                               </small>
                               <span className="host-card-tags">
@@ -3447,6 +3562,7 @@ function App() {
                                 {(host.authMethod === 'password' && host.password) || host.authMethod === 'key' ? (
                                   <span className="credential-icon" title={host.authMethod === 'key' ? t('app.auth.keyLogin', appLanguage) : t('app.host.passwordSavedTitle', appLanguage)}>🔑</span>
                                 ) : null}
+                                {proxyProfile ? <em>{getProxyConfigTypeLabel(proxyProfile.config)}</em> : null}
                                 <em className={!host.group ? 'host-card-tag-placeholder' : undefined}>{host.group || t('app.host.group.ungrouped', appLanguage)}</em>
                                 <em className={!host.tags.length ? 'host-card-tag-placeholder' : undefined}>{host.tags.length ? host.tags.join(' / ') : t('app.host.noTags', appLanguage)}</em>
                               </span>
@@ -3536,6 +3652,26 @@ function App() {
           ) : activePage === 'snippets' ? (
             <Suspense fallback={<LazyContentFallback language={appLanguage} />}>
               <SnippetsPage settings={settings} onSettingsChange={updateSettingsAndPersist} />
+            </Suspense>
+          ) : activePage === 'proxies' ? (
+            <Suspense fallback={<LazyContentFallback language={appLanguage} />}>
+              <ProxyProfilesPage
+                hosts={hosts}
+                proxyProfiles={proxyProfiles}
+                onProxyProfilesChange={(nextProxyProfiles, nextHosts = hostsRef.current) => {
+                  commitProxyProfiles(nextProxyProfiles, nextHosts as Host[]);
+                }}
+              />
+            </Suspense>
+          ) : activePage === 'known-hosts' ? (
+            <Suspense fallback={<LazyContentFallback language={appLanguage} />}>
+              <KnownHostsPage
+                hosts={hosts}
+                knownHosts={knownHosts}
+                onKnownHostsChange={(nextKnownHosts, nextHosts = hostsRef.current) => {
+                  commitKnownHosts(nextKnownHosts, nextHosts as Host[]);
+                }}
+              />
             </Suspense>
           ) : activePage === 'logs' ? (
             <Suspense fallback={<LazyContentFallback language={appLanguage} />}>
@@ -3723,7 +3859,12 @@ function App() {
                   <span>{t('app.host.field.jumpHost', appLanguage)}</span>
                   <select
                     value={form.jumpHostId}
-                    onChange={(event) => updateFormField('jumpHostId', event.target.value)}
+                    onChange={(event) => {
+                      updateFormField('jumpHostId', event.target.value);
+                      if (event.target.value) {
+                        updateFormField('proxyProfileId', '');
+                      }
+                    }}
                   >
                     <option value="">{t('app.host.field.jumpHostDirect', appLanguage)}</option>
                     {jumpHostOptions.map((host) => (
@@ -3734,6 +3875,31 @@ function App() {
                     {jumpHostOptions.length
                       ? t('app.host.field.jumpHostHint', appLanguage)
                       : t('app.host.field.jumpHostEmpty', appLanguage)}
+                  </small>
+                </label>
+
+                <label className="field">
+                  <span>{appLanguage === 'zh-CN' ? '代理' : 'Proxy'}</span>
+                  <select
+                    value={form.proxyProfileId}
+                    onChange={(event) => {
+                      updateFormField('proxyProfileId', event.target.value);
+                      if (event.target.value) {
+                        updateFormField('jumpHostId', '');
+                      }
+                    }}
+                  >
+                    <option value="">{appLanguage === 'zh-CN' ? '直连，不使用代理' : 'Direct, no proxy'}</option>
+                    {proxyProfiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.label} · {getProxyConfigTypeLabel(profile.config)} · {getProxyConfigEndpoint(profile.config)}
+                      </option>
+                    ))}
+                  </select>
+                  <small className="field-note">
+                    {proxyProfiles.length
+                      ? (appLanguage === 'zh-CN' ? '代理用于目标主机直连；选择后将取消跳板机。' : 'Proxy is used for direct target connections; choosing one clears the jump host.')
+                      : (appLanguage === 'zh-CN' ? '暂无代理配置；可在左侧“代理”页面添加。' : 'No proxy profiles yet. Add one from the Proxies page.')}
                   </small>
                 </label>
 

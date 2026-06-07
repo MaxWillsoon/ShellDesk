@@ -320,7 +320,13 @@ function saveSyncConfig(rawConfig) {
 }
 
 function readEntityType(value) {
-  if (value === 'host' || value === 'bookmark' || value === 'settings') {
+  if (
+    value === 'host' ||
+    value === 'bookmark' ||
+    value === 'settings' ||
+    value === 'proxyProfile' ||
+    value === 'knownHost'
+  ) {
     return value;
   }
 
@@ -369,6 +375,16 @@ function toPublicSettingsPayload(settings) {
   };
 }
 
+function toPublicProxyProfilePayload(profile) {
+  return {
+    ...profile,
+    config: {
+      ...profile.config,
+      password: '',
+    },
+  };
+}
+
 function createSyncRecord(entityId, type, payload, updatedAt, deviceId) {
   return {
     id: entityId,
@@ -391,6 +407,35 @@ function createLocalRecords(vault, state, now) {
       'host',
       payload,
       getValidDateTime(host.updatedAt, now),
+      state.deviceId,
+    );
+  }
+
+  for (const profile of vault.proxyProfiles) {
+    const payload = toPublicProxyProfilePayload(profile);
+    const entityId = `proxyProfile:${profile.id}`;
+    records[entityId] = createSyncRecord(
+      entityId,
+      'proxyProfile',
+      payload,
+      getValidDateTime(profile.updatedAt, now),
+      state.deviceId,
+    );
+  }
+
+  for (const knownHost of vault.knownHosts) {
+    const payload = knownHost;
+    const entityId = `knownHost:${knownHost.id}`;
+    const payloadHash = hashPayload(payload);
+    const previousRecord = state.lastRecords[entityId];
+    const updatedAt = previousRecord?.hash === payloadHash
+      ? previousRecord.updatedAt || state.lastSyncAt || now
+      : now;
+    records[entityId] = createSyncRecord(
+      entityId,
+      'knownHost',
+      payload,
+      updatedAt,
       state.deviceId,
     );
   }
@@ -944,7 +989,11 @@ function addConflict(conflicts, record, reason) {
       ? record.payload.name || record.payload.address || record.id
       : record.type === 'bookmark'
         ? record.payload.bookmark?.title || record.payload.bookmark?.url || record.id
-        : '应用设置',
+        : record.type === 'proxyProfile'
+          ? record.payload.name || record.payload.config?.host || record.id
+          : record.type === 'knownHost'
+            ? `${record.payload.hostname || record.id}:${record.payload.port || 22}`
+            : '应用设置',
     reason,
   });
 }
@@ -1157,12 +1206,31 @@ function mergeHostSecrets(publicHost, currentHost) {
   };
 }
 
+function mergeProxyProfileSecrets(publicProfile, currentProfile) {
+  return {
+    ...publicProfile,
+    config: {
+      ...publicProfile.config,
+      password: currentProfile?.config?.password || '',
+    },
+  };
+}
+
 function applyMergedDocumentToVault(document) {
   const currentVault = getVault();
   const currentHostsById = new Map(currentVault.hosts.map((host) => [host.id, host]));
+  const currentProxyProfilesById = new Map(currentVault.proxyProfiles.map((profile) => [profile.id, profile]));
   const hosts = Object.values(document.records)
     .filter((record) => record.type === 'host')
     .map((record) => mergeHostSecrets(record.payload, currentHostsById.get(record.payload.id)));
+  const proxyProfiles = Object.values(document.records)
+    .filter((record) => record.type === 'proxyProfile')
+    .map((record) => mergeProxyProfileSecrets(record.payload, currentProxyProfilesById.get(record.payload.id)))
+    .sort((left, right) => String(left.name).localeCompare(String(right.name), 'zh-CN'));
+  const knownHosts = Object.values(document.records)
+    .filter((record) => record.type === 'knownHost')
+    .map((record) => record.payload)
+    .sort((left, right) => `${left.hostname}:${left.port}`.localeCompare(`${right.hostname}:${right.port}`, 'zh-CN'));
   const settingsRecord = document.records['settings:app'];
   const settings = settingsRecord?.type === 'settings'
     ? {
@@ -1174,6 +1242,8 @@ function applyMergedDocumentToVault(document) {
     ...currentVault,
     hosts,
     settings,
+    proxyProfiles,
+    knownHosts,
     browserBookmarks: rebuildBookmarksFromRecords(document.records),
   });
 

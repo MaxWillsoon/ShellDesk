@@ -1,5 +1,6 @@
 const { app, dialog, ipcMain } = require('electron');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { maxConfigImportBytes } = require('./constants.cjs');
 const { getSystemFontFamilies } = require('./systemFonts.cjs');
@@ -72,6 +73,49 @@ function sanitizeTextFileName(value, fallback) {
   return sanitizedValue || fallback;
 }
 
+function getSystemKnownHostsPaths() {
+  const homeDir = os.homedir();
+  const paths = [];
+
+  if (homeDir) {
+    paths.push(path.join(homeDir, '.ssh', 'known_hosts'));
+    paths.push(path.join(homeDir, '.ssh', 'known_hosts2'));
+  }
+
+  if (process.platform === 'win32') {
+    paths.push(path.join(process.env.PROGRAMDATA || 'C:\\ProgramData', 'ssh', 'known_hosts'));
+  } else {
+    paths.push('/etc/ssh/ssh_known_hosts');
+  }
+
+  return Array.from(new Set(paths));
+}
+
+function readSystemKnownHosts() {
+  const chunks = [];
+  const paths = [];
+
+  for (const filePath of getSystemKnownHostsPaths()) {
+    try {
+      const stats = fs.statSync(filePath);
+
+      if (!stats.isFile() || stats.size > 5 * 1024 * 1024) {
+        continue;
+      }
+
+      chunks.push(fs.readFileSync(filePath, 'utf8'));
+      paths.push(filePath);
+    } catch {
+      // Missing known_hosts files are normal on fresh systems.
+    }
+  }
+
+  return {
+    content: chunks.join('\n'),
+    paths,
+  };
+}
+
 function registerConfigHandlers(registerIpcHandler) {
   ipcMain.handle('dialog:select-private-key', async (event) => {
     const window = getSenderWindow(event);
@@ -125,6 +169,8 @@ function registerConfigHandlers(registerIpcHandler) {
   registerIpcHandler('preferences:set', async (_event, rawKey, rawValue) => setConfigPreference(rawKey, rawValue));
 
   registerIpcHandler('system:list-fonts', async () => getSystemFontFamilies());
+
+  registerIpcHandler('system:read-known-hosts', async () => readSystemKnownHosts());
 
   registerIpcHandler('vault:save-collections', async (_event, rawPayload) => upsertVaultCollections(rawPayload));
 
@@ -232,6 +278,8 @@ function registerConfigHandlers(registerIpcHandler) {
     const nextVault = setVault({
       hosts: importedPayload.hosts,
       sshKeys: importedPayload.sshKeys,
+      proxyProfiles: importedPayload.proxyProfiles,
+      knownHosts: importedPayload.knownHosts,
       settings: importedPayload.settings,
       browserBookmarks: importedPayload.browserBookmarks,
     });

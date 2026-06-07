@@ -42,6 +42,42 @@ interface ShellDeskTerminalSnippet {
   updatedAt: string;
 }
 
+type ShellDeskProxyType = 'http' | 'socks5' | 'command';
+
+interface ShellDeskProxyConfig {
+  type: ShellDeskProxyType;
+  host: string;
+  port: number;
+  command?: string;
+  username?: string;
+  password?: string;
+}
+
+interface ShellDeskProxyProfile {
+  id: string;
+  label: string;
+  config: ShellDeskProxyConfig;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ShellDeskKnownHost {
+  id: string;
+  hostname: string;
+  port: number;
+  keyType: string;
+  publicKey: string;
+  fingerprint: string;
+  discoveredAt: string;
+  lastSeen?: string;
+  convertedToHostId?: string;
+}
+
+interface ShellDeskKnownHostsReadResult {
+  content: string;
+  paths: string[];
+}
+
 interface ShellDeskUpdateCheckResult {
   repository: string;
   currentVersion: string;
@@ -329,6 +365,7 @@ interface ShellDeskStoredHostRecord {
   rootPassword?: string;
   jumpHostId?: string;
   canBeJumpHost?: boolean;
+  proxyProfileId?: string;
   systemType?: ShellDeskHostSystemType;
   systemName?: string;
   lastConnectionStatus?: 'unknown' | 'success' | 'failed';
@@ -366,6 +403,8 @@ interface ShellDeskStorageInfo {
 interface ShellDeskVaultSnapshot {
   hosts: ShellDeskStoredHostRecord[];
   sshKeys: ShellDeskStoredKeyRecord[];
+  proxyProfiles: ShellDeskProxyProfile[];
+  knownHosts: ShellDeskKnownHost[];
   settings: ShellDeskAppSettings;
   browserBookmarks: ShellDeskBrowserBookmarkCollection[];
   storage: ShellDeskStorageInfo;
@@ -376,6 +415,8 @@ interface ShellDeskConfigImportResult extends ShellDeskVaultSnapshot {}
 interface ShellDeskVaultCollectionsPayload {
   hosts?: ShellDeskStoredHostRecord[];
   sshKeys?: ShellDeskStoredKeyRecord[];
+  proxyProfiles?: ShellDeskProxyProfile[];
+  knownHosts?: ShellDeskKnownHost[];
   settings?: ShellDeskAppSettings;
 }
 
@@ -413,6 +454,7 @@ interface ShellDeskHostConnectionRequest {
   privilegeMode?: ShellDeskPrivilegeMode;
   rootPassword?: string;
   jumpHostId?: string;
+  proxyProfileId?: string;
   systemType?: ShellDeskHostSystemType;
   systemName?: string;
 }
@@ -866,6 +908,7 @@ interface ShellDeskPreferenceControls {
 
 interface ShellDeskSystemControls {
   listFonts: () => Promise<string[]>;
+  readKnownHosts: () => Promise<ShellDeskKnownHostsReadResult>;
 }
 
 interface ShellDeskAiControls {
@@ -912,7 +955,7 @@ interface ShellDeskSyncRunInput extends Partial<ShellDeskSyncConfigInput> {
 }
 
 interface ShellDeskSyncConflict {
-  type: 'host' | 'bookmark' | 'settings';
+  type: 'host' | 'bookmark' | 'settings' | 'proxyProfile' | 'knownHost';
   id: string;
   name: string;
   reason: string;

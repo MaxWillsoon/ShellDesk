@@ -1,6 +1,8 @@
 const { BrowserWindow } = require('electron');
+const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const net = require('node:net');
+const { Duplex } = require('node:stream');
 const { Client } = require('ssh2');
 const {
   createPowerShellCommand,
@@ -142,12 +144,360 @@ function formatJumpHostLabel(jumpHost, jumpSshConfig) {
   return formatSshEndpoint(jumpSshConfig);
 }
 
-async function connectSshClientWithJump(sshConfig, jumpSshConfig = null, jumpHost = null) {
+function getProxyLabel(proxyConfig) {
+  if (!proxyConfig) {
+    return '';
+  }
+
+  if (proxyConfig.type === 'command') {
+    return 'ProxyCommand';
+  }
+
+  return `${String(proxyConfig.type || '').toUpperCase()} ${proxyConfig.host}:${proxyConfig.port}`;
+}
+
+function connectTcpSocket(host, port, label) {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect({ host, port });
+    let settled = false;
+
+    const finish = (callback) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      socket.setTimeout(0);
+      socket.removeListener('connect', onConnect);
+      socket.removeListener('error', onError);
+      socket.removeListener('timeout', onTimeout);
+      callback();
+    };
+
+    const onConnect = () => finish(() => resolve(socket));
+    const onError = (error) => finish(() => {
+      closeSocket(socket);
+      reject(error);
+    });
+    const onTimeout = () => finish(() => {
+      closeSocket(socket);
+      reject(new Error(`${label}连接超时。`));
+    });
+
+    socket.setTimeout(15000);
+    socket.once('connect', onConnect);
+    socket.once('error', onError);
+    socket.once('timeout', onTimeout);
+  });
+}
+
+function writeSocket(socket, chunk) {
+  return new Promise((resolve, reject) => {
+    const onError = (error) => {
+      socket.removeListener('drain', onDrain);
+      reject(error);
+    };
+    const onDrain = () => {
+      socket.removeListener('error', onError);
+      resolve();
+    };
+
+    socket.once('error', onError);
+    if (socket.write(chunk)) {
+      socket.removeListener('error', onError);
+      resolve();
+      return;
+    }
+
+    socket.once('drain', onDrain);
+  });
+}
+
+async function readHttpProxyHeader(socket, reader) {
+  const chunks = [];
+  let length = 0;
+
+  while (length < 32 * 1024) {
+    const chunk = await reader.read(1);
+    chunks.push(chunk);
+    length += 1;
+
+    const header = Buffer.concat(chunks, length);
+
+    if (header.includes('\r\n\r\n')) {
+      return header.toString('latin1');
+    }
+  }
+
+  throw new Error('HTTP 代理响应头过大。');
+}
+
+async function createHttpProxySocket(proxyConfig, destinationHost, destinationPort) {
+  const socket = await connectTcpSocket(proxyConfig.host, proxyConfig.port, 'HTTP 代理');
+  const reader = createBufferedReader(socket);
+
+  try {
+    const authHeader = proxyConfig.username
+      ? `Proxy-Authorization: Basic ${Buffer.from(`${proxyConfig.username}:${proxyConfig.password || ''}`, 'utf8').toString('base64')}\r\n`
+      : '';
+    await writeSocket(socket, Buffer.from(
+      `CONNECT ${destinationHost}:${destinationPort} HTTP/1.1\r\n` +
+      `Host: ${destinationHost}:${destinationPort}\r\n` +
+      'Proxy-Connection: Keep-Alive\r\n' +
+      authHeader +
+      '\r\n',
+      'utf8',
+    ));
+    const header = await readHttpProxyHeader(socket, reader);
+    const statusLine = header.split(/\r\n/u)[0] || '';
+
+    if (!/^HTTP\/\d(?:\.\d)?\s+2\d\d\b/i.test(statusLine)) {
+      throw new Error(`HTTP 代理拒绝连接：${statusLine || '无状态行'}`);
+    }
+
+    const pending = reader.drain();
+    reader.dispose();
+
+    if (pending.length) {
+      socket.unshift(pending);
+    }
+
+    return markTransport(socket, 'http-proxy');
+  } catch (error) {
+    reader.dispose();
+    closeSocket(socket);
+    throw error;
+  }
+}
+
+function encodeSocksAddress(host) {
+  const ipVersion = net.isIP(host);
+
+  if (ipVersion === 4) {
+    return Buffer.from([0x01, ...host.split('.').map((part) => Number(part))]);
+  }
+
+  if (ipVersion === 6) {
+    const normalized = host.replace(/^\[|\]$/g, '');
+    const sections = normalized.split(':');
+    const emptyIndex = sections.indexOf('');
+    let expanded = sections;
+
+    if (emptyIndex !== -1) {
+      const missing = 8 - (sections.length - 1);
+      expanded = [
+        ...sections.slice(0, emptyIndex),
+        ...Array.from({ length: missing }, () => '0'),
+        ...sections.slice(emptyIndex + 1),
+      ];
+    }
+
+    const bytes = [];
+    for (const section of expanded) {
+      const value = Number.parseInt(section || '0', 16);
+      bytes.push((value >> 8) & 0xff, value & 0xff);
+    }
+
+    return Buffer.from([0x04, ...bytes.slice(0, 16)]);
+  }
+
+  const hostBytes = Buffer.from(host, 'utf8');
+
+  if (hostBytes.length > 255) {
+    throw new Error('SOCKS5 目标主机名过长。');
+  }
+
+  return Buffer.concat([Buffer.from([0x03, hostBytes.length]), hostBytes]);
+}
+
+async function createSocks5ProxySocket(proxyConfig, destinationHost, destinationPort) {
+  const socket = await connectTcpSocket(proxyConfig.host, proxyConfig.port, 'SOCKS5 代理');
+  const reader = createBufferedReader(socket);
+
+  try {
+    const usePassword = Boolean(proxyConfig.username);
+    await writeSocket(socket, Buffer.from(usePassword ? [0x05, 0x02, 0x00, 0x02] : [0x05, 0x01, 0x00]));
+    const methodResponse = await reader.read(2);
+
+    if (methodResponse[0] !== 0x05 || methodResponse[1] === 0xff) {
+      throw new Error('SOCKS5 代理没有可用认证方式。');
+    }
+
+    if (methodResponse[1] === 0x02) {
+      const username = Buffer.from(proxyConfig.username || '', 'utf8');
+      const password = Buffer.from(proxyConfig.password || '', 'utf8');
+
+      if (username.length > 255 || password.length > 255) {
+        throw new Error('SOCKS5 代理用户名或密码过长。');
+      }
+
+      await writeSocket(socket, Buffer.concat([Buffer.from([0x01, username.length]), username, Buffer.from([password.length]), password]));
+      const authResponse = await reader.read(2);
+
+      if (authResponse[1] !== 0x00) {
+        throw new Error('SOCKS5 代理认证失败。');
+      }
+    } else if (methodResponse[1] !== 0x00) {
+      throw new Error('SOCKS5 代理返回了不支持的认证方式。');
+    }
+
+    const portBytes = Buffer.alloc(2);
+    portBytes.writeUInt16BE(destinationPort, 0);
+    await writeSocket(socket, Buffer.concat([
+      Buffer.from([0x05, 0x01, 0x00]),
+      encodeSocksAddress(destinationHost),
+      portBytes,
+    ]));
+
+    const responseHead = await reader.read(4);
+
+    if (responseHead[0] !== 0x05 || responseHead[1] !== 0x00) {
+      throw new Error(`SOCKS5 代理连接失败，响应码 ${responseHead[1] ?? 'unknown'}。`);
+    }
+
+    if (responseHead[3] === 0x01) {
+      await reader.read(4);
+    } else if (responseHead[3] === 0x03) {
+      const length = (await reader.read(1))[0];
+      await reader.read(length);
+    } else if (responseHead[3] === 0x04) {
+      await reader.read(16);
+    } else {
+      throw new Error('SOCKS5 代理响应地址类型无效。');
+    }
+
+    await reader.read(2);
+    const pending = reader.drain();
+    reader.dispose();
+
+    if (pending.length) {
+      socket.unshift(pending);
+    }
+
+    return markTransport(socket, 'socks5-proxy');
+  } catch (error) {
+    reader.dispose();
+    closeSocket(socket);
+    throw error;
+  }
+}
+
+function createProxyCommandSocket(proxyConfig, destinationHost, destinationPort) {
+  const command = String(proxyConfig.command || '')
+    .replace(/\{host\}|%h/gu, destinationHost)
+    .replace(/\{port\}|%p/gu, String(destinationPort))
+    .trim();
+
+  if (!command) {
+    throw new Error('ProxyCommand 不能为空。');
+  }
+
+  const child = spawn(command, {
+    shell: true,
+    windowsHide: true,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const stderrChunks = [];
+
+  const stream = new Duplex({
+    read() {},
+    write(chunk, encoding, callback) {
+      if (!child.stdin.writable) {
+        callback(new Error('ProxyCommand 标准输入不可写。'));
+        return;
+      }
+
+      if (child.stdin.write(chunk, encoding)) {
+        callback();
+        return;
+      }
+
+      child.stdin.once('drain', callback);
+    },
+    final(callback) {
+      child.stdin.end();
+      callback();
+    },
+    destroy(error, callback) {
+      if (!child.killed) {
+        child.kill();
+      }
+
+      callback(error);
+    },
+  });
+
+  child.stdout.on('data', (chunk) => {
+    stream.push(chunk);
+  });
+  child.stderr.on('data', (chunk) => {
+    if (Buffer.concat(stderrChunks).length < 8192) {
+      stderrChunks.push(Buffer.from(chunk));
+    }
+  });
+  child.once('error', (error) => {
+    stream.destroy(error);
+  });
+  child.once('exit', (code) => {
+    if (code && !stream.destroyed) {
+      const stderr = Buffer.concat(stderrChunks).toString('utf8').trim();
+      stream.destroy(new Error(stderr || `ProxyCommand 已退出，退出码 ${code}。`));
+      return;
+    }
+
+    stream.push(null);
+  });
+
+  return markTransport(stream, 'proxy-command');
+}
+
+async function createProxySocket(proxyConfig, destinationHost, destinationPort) {
+  if (!proxyConfig) {
+    return null;
+  }
+
+  if (proxyConfig.type === 'http') {
+    return createHttpProxySocket(proxyConfig, destinationHost, destinationPort);
+  }
+
+  if (proxyConfig.type === 'socks5') {
+    return createSocks5ProxySocket(proxyConfig, destinationHost, destinationPort);
+  }
+
+  if (proxyConfig.type === 'command') {
+    return createProxyCommandSocket(proxyConfig, destinationHost, destinationPort);
+  }
+
+  throw new Error('代理类型无效。');
+}
+
+async function connectSshClientWithProxy(sshConfig, proxyConfig, label) {
+  if (!proxyConfig) {
+    return connectSshClient(sshConfig);
+  }
+
+  console.info(`[shelldesk] SSH connect via proxy ${getProxyLabel(proxyConfig)} -> ${formatSshEndpoint(sshConfig)}`);
+  const sock = await createProxySocket(proxyConfig, sshConfig.host, sshConfig.port);
+
+  try {
+    return await connectSshClient({
+      ...sshConfig,
+      sock,
+    });
+  } catch (error) {
+    closeStream(sock);
+    throw new Error(`${label}通过代理连接失败：${toErrorMessage(error)}`);
+  }
+}
+
+async function connectSshClientWithJump(sshConfig, jumpSshConfig = null, jumpHost = null, proxyConfig = null, jumpProxyConfig = null) {
   if (!jumpSshConfig) {
-    console.info(`[shelldesk] SSH connect direct ${formatSshEndpoint(sshConfig)}`);
+    if (!proxyConfig) {
+      console.info(`[shelldesk] SSH connect direct ${formatSshEndpoint(sshConfig)}`);
+    }
 
     return {
-      client: await connectSshClient(sshConfig),
+      client: await connectSshClientWithProxy(sshConfig, proxyConfig, '目标主机'),
       jumpClient: null,
     };
   }
@@ -159,7 +509,7 @@ async function connectSshClientWithJump(sshConfig, jumpSshConfig = null, jumpHos
   let targetStream = null;
 
   try {
-    jumpClient = await connectSshClient(jumpSshConfig);
+    jumpClient = await connectSshClientWithProxy(jumpSshConfig, jumpProxyConfig, `跳板机「${jumpLabel}」`);
   } catch (error) {
     throw new Error(`跳板机「${jumpLabel}」连接失败：${toErrorMessage(error)}`);
   }
@@ -301,6 +651,8 @@ async function reconnectActiveConnection(activeConnection, reason = 'SSH 连接�
       activeConnection.sshConfig,
       activeConnection.jumpSshConfig,
       activeConnection.jumpHost,
+      activeConnection.proxyConfig,
+      activeConnection.jumpProxyConfig,
     );
 
     if (
