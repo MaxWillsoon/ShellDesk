@@ -1127,6 +1127,41 @@ function openSshTcpStream(client, destinationHost, destinationPort, sourcePort) 
   });
 }
 
+function openLocalTcpStream(destinationHost, destinationPort) {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(destinationPort, destinationHost);
+    let settled = false;
+    const connectTimer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      socket.destroy();
+      reject(new Error('本地 TCP 连接超时。'));
+    }, 12000);
+
+    socket.once('connect', () => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(connectTimer);
+      resolve(socket);
+    });
+    socket.once('error', (error) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(connectTimer);
+      reject(error);
+    });
+  });
+}
+
 function openExecTcpRelayStream(client, destinationHost, destinationPort, tunnelError) {
   const metadata = clientConnectionMetadata.get(client) || {};
   const command = metadata.systemType === 'windows'
@@ -1189,6 +1224,10 @@ function openExecTcpRelayStream(client, destinationHost, destinationPort, tunnel
 }
 
 async function forwardOut(client, destinationHost, destinationPort, sourcePort = randomSourcePort()) {
+  if (client?.__shelldeskLocalClient) {
+    return markTransport(await openLocalTcpStream(destinationHost, destinationPort), 'local-direct');
+  }
+
   try {
     const stream = await openSshTcpStream(client, destinationHost, destinationPort, sourcePort);
     return markTransport(stream, 'ssh-tunnel');
@@ -1406,6 +1445,7 @@ async function closeActiveConnection(connectionId, reason = '连接已断开。'
 function toConnectionInfo(activeConnection) {
   return {
     id: activeConnection.id,
+    kind: activeConnection.kind || 'ssh',
     partition: activeConnection.partition,
     proxyPort: activeConnection.proxyPort,
     connectedAt: activeConnection.connectedAt,

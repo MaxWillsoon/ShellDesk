@@ -1891,6 +1891,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
           connectionId={connection.id}
           terminalId={desktopWindow.terminalId ?? desktopWindow.id}
           settings={settings}
+          connectionKind={connection.kind}
           systemType={connection.host.systemType}
           launchOptions={desktopWindow.terminalLaunchOptions}
           commandRequest={desktopWindow.terminalCommandRequest}

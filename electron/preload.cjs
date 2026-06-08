@@ -52,6 +52,16 @@ async function connectHost(host) {
   return result.connection;
 }
 
+async function openLocalConnection() {
+  const result = await ipcRenderer.invoke('connection:open-local');
+
+  if (!result?.ok) {
+    throw new Error(result?.error || '打开本地模式失败。');
+  }
+
+  return result.connection;
+}
+
 function getVaultSnapshot() {
   return ipcRenderer.invoke('vault:get-snapshot');
 }
@@ -127,6 +137,7 @@ contextBridge.exposeInMainWorld('guiSSH', {
   },
   connections: {
     connect: connectHost,
+    openLocal: openLocalConnection,
     respondKeyboardInteractive: (payload) => ipcRenderer.invoke('connection:keyboard-interactive-response', payload),
     respondHostKeyVerification: (payload) => ipcRenderer.invoke('connection:host-key-response', payload),
     getInfo: (connectionId) => ipcRenderer.invoke('connection:get-info', connectionId),

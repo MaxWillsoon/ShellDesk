@@ -1587,6 +1587,7 @@ function App() {
   const [connectingHostId, setConnectingHostId] = useState<string | null>(null);
   const [isQuickConnecting, setIsQuickConnecting] = useState(false);
   const [isCredentialConnecting, setIsCredentialConnecting] = useState(false);
+  const [isLocalOpening, setIsLocalOpening] = useState(false);
   const [connectionErrorNotice, setConnectionErrorNotice] = useState<ConnectionErrorNotice | null>(null);
   const [keyboardInteractiveRequest, setKeyboardInteractiveRequest] = useState<ShellDeskKeyboardInteractiveRequest | null>(null);
   const [keyboardInteractiveResponses, setKeyboardInteractiveResponses] = useState<string[]>([]);
@@ -1620,13 +1621,18 @@ function App() {
   const platform = window.guiSSH?.platform;
   const windowControls = window.guiSSH?.window;
   const vaultControls = window.guiSSH?.vault;
+  const appLanguage = settings.language;
+  const appLocale = getAppLocale(appLanguage);
   const isMacOS = platform === 'darwin';
   const showWindowControls = Boolean(windowControls) && !isMacOS;
   const isConnectionWindow = Boolean(windowConnectionId);
+  const isLocalDesktopConnection = connection?.kind === 'local';
   const titlebarConnectionAddress = connection
-    ? `${connection.host.username}@${connection.host.address}:${connection.host.port}`
+    ? isLocalDesktopConnection
+      ? `${connection.host.username}@${connection.host.address}`
+      : `${connection.host.username}@${connection.host.address}:${connection.host.port}`
     : '';
-  const isConnectionPending = Boolean(connectingHostId) || isQuickConnecting || isCredentialConnecting;
+  const isConnectionPending = Boolean(connectingHostId) || isQuickConnecting || isCredentialConnecting || isLocalOpening;
   const editingHost = hosts.find((host) => host.id === editingHostId) ?? null;
   const editingKey = sshKeys.find((key) => key.id === editingKeyId) ?? null;
   const sshKeyById = useMemo(() => new Map(sshKeys.map((key) => [key.id, key])), [sshKeys]);
@@ -1636,9 +1642,6 @@ function App() {
     () => hosts.filter((host) => host.id !== editingHostId && host.canBeJumpHost && !host.jumpHostId),
     [editingHostId, hosts],
   );
-  const appLanguage = settings.language;
-  const appLocale = getAppLocale(appLanguage);
-
   useShellDeskI18n(appLanguage);
 
   const hostGroups = useMemo<HostGroup[]>(() => {
@@ -3253,6 +3256,42 @@ function App() {
     }
   };
 
+  const openLocalDesktop = async () => {
+    if (isConnectionPending) {
+      return false;
+    }
+
+    if (!window.guiSSH?.connections?.openLocal) {
+      const message = t('app.connection.localUnsupported', appLanguage);
+      setStatusMessage(message);
+      addLog('connection', 'error', t('app.connection.localOpenFailedLog', appLanguage), message);
+      return false;
+    }
+
+    setIsLocalOpening(true);
+    setConnectionErrorNotice(null);
+    preloadFullMessageCatalog();
+
+    try {
+      const nextConnection = await window.guiSSH.connections.openLocal();
+
+      if (isConnectionWindow) {
+        setConnection(nextConnection);
+      }
+
+      addLog('connection', 'success', t('app.connection.localOpenLog', appLanguage), nextConnection.host.systemName || nextConnection.host.address);
+      setStatusMessage(t('app.connection.localOpenStatus', appLanguage));
+      return true;
+    } catch (error) {
+      const message = getErrorMessage(error, appLanguage);
+      addLog('connection', 'error', t('app.connection.localOpenFailedLog', appLanguage), message);
+      setStatusMessage(t('app.connection.localOpenFailedStatus', appLanguage, { error: message }));
+      return false;
+    } finally {
+      setIsLocalOpening(false);
+    }
+  };
+
   const openHostFromList = (host: ConnectionHost) => {
     if (isConnectionPending) {
       return;
@@ -3511,7 +3550,11 @@ function App() {
             <>
               <strong>ShellDesk</strong>
               <span>{titlebarConnectionAddress}</span>
-              <span>SOCKS :{connection.proxyPort}</span>
+              {isLocalDesktopConnection ? (
+                <span>{t('app.connection.localBadge', appLanguage)}</span>
+              ) : (
+                <span>SOCKS :{connection.proxyPort}</span>
+              )}
             </>
           ) : (
             'ShellDesk'
@@ -3825,6 +3868,10 @@ function App() {
 
             <button type="button" className="command-button" onClick={connectCommandBarInput} disabled={isConnectionPending}>
               {isQuickConnecting ? t('app.host.connectingButton', appLanguage) : t('app.host.connectButton', appLanguage)}
+            </button>
+
+            <button type="button" className="command-button local-mode-button" onClick={() => void openLocalDesktop()} disabled={isConnectionPending}>
+              {isLocalOpening ? t('app.host.localOpeningButton', appLanguage) : t('app.host.localModeButton', appLanguage)}
             </button>
 
             <button type="button" className="primary-action" onClick={openCreateHost}>{t('app.host.new', appLanguage)}</button>

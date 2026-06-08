@@ -14,6 +14,10 @@ const {
 } = require('./connectionManager.cjs');
 const { detectRemoteSystem } = require('./remoteConnectionHandlers.cjs');
 const {
+  createLocalClient,
+  createLocalDisplayHost,
+} = require('./localConnection.cjs');
+const {
   classifyHostKey,
   describeHostKey,
   matchesHostAndPort,
@@ -523,8 +527,61 @@ function registerConnectionHandlers(registerIpcHandler) {
     }
   });
 
+  ipcMain.handle('connection:open-local', async () => {
+    const reuseKey = 'local';
+    const reusableConnection = findReusableActiveConnection(reuseKey);
+
+    if (reusableConnection) {
+      focusConnectionWindow(reusableConnection);
+      return {
+        ok: true,
+        reused: true,
+        connection: toConnectionInfo(reusableConnection),
+      };
+    }
+
+    const id = crypto.randomUUID();
+    const partition = `shelldesk-${id}`;
+    const localSession = session.fromPartition(partition);
+    const activeConnection = {
+      id,
+      kind: 'local',
+      client: createLocalClient(),
+      jumpClient: null,
+      sshConfig: null,
+      privilegeConfig: null,
+      proxyConfig: null,
+      jumpSshConfig: null,
+      jumpProxyConfig: null,
+      jumpHost: null,
+      socksServer: null,
+      proxyPort: 0,
+      reuseKey,
+      partition,
+      browserSession: localSession,
+      browserCertificateTrust: new Set(),
+      displayHost: createLocalDisplayHost(),
+      connectedAt: new Date().toISOString(),
+      terminalSessions: new Map(),
+      clientOnline: true,
+      reconnectPromise: null,
+      lastDisconnectReason: '',
+    };
+
+    await localSession.setProxy({ mode: 'direct' });
+    localSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+    activeConnections.set(id, activeConnection);
+    createConnectionWindow(activeConnection);
+
+    return {
+      ok: true,
+      connection: toConnectionInfo(activeConnection),
+    };
+  });
+
   registerIpcHandler('connection:disconnect', async (_event, connectionId) => {
-    await closeActiveConnection(connectionId, '已断开 SSH 连接。');
+    const activeConnection = getActiveConnection(connectionId);
+    await closeActiveConnection(connectionId, activeConnection.kind === 'local' ? '已关闭本地模式。' : '已断开 SSH 连接。');
     return true;
   });
 

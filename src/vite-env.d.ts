@@ -485,6 +485,7 @@ interface ShellDeskJumpHostConnectionInfo {
 
 interface ShellDeskConnectionInfo {
   id: string;
+  kind?: 'ssh' | 'local';
   partition: string;
   proxyPort: number;
   connectedAt: string;
@@ -628,6 +629,7 @@ interface ShellDeskLocalUploadItem {
 
 interface ShellDeskConnectionControls {
   connect: (host: ShellDeskHostConnectionRequest) => Promise<ShellDeskConnectionInfo>;
+  openLocal: () => Promise<ShellDeskConnectionInfo>;
   respondKeyboardInteractive: (payload: ShellDeskKeyboardInteractiveResponse) => Promise<boolean>;
   respondHostKeyVerification: (payload: ShellDeskHostKeyVerificationResponse) => Promise<boolean>;
   getInfo: (connectionId: string) => Promise<ShellDeskConnectionInfo>;

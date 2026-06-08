@@ -15,6 +15,30 @@ const {
   withActiveConnectionClientRetry,
 } = require('./connectionManager.cjs');
 const {
+  cancelLocalTransfer,
+  copyLocalDownload,
+  copyLocalUpload,
+  createLocalDirectory,
+  createLocalFile,
+  deleteLocalPath,
+  getLocalMetrics,
+  getLocalStatus,
+  getLocalSystemInfo,
+  isLocalConnection,
+  listLocalDirectory,
+  readLocalTextFile,
+  renameLocalPath,
+  runLocalCommand,
+  setLocalPathPermissions,
+  startLocalTerminal,
+  statLocalPath,
+  writeLocalTextFile,
+} = require('./localConnection.cjs');
+const {
+  cleanPowerShellCliXmlOutput,
+  createPowerShellCliXmlStreamCleaner,
+} = require('./powershellCliXml.cjs');
+const {
   createPowerShellCommand,
   escapeShellSingleQuotedArg,
   quotePowerShellString,
@@ -1443,84 +1467,6 @@ function looksLikeUtf16Le(buffer) {
   return nullOddBytes / Math.max(1, Math.floor(sampleLength / 2)) > 0.35;
 }
 
-function decodePowerShellCliXmlText(value) {
-  return value
-    .replace(/_x([0-9A-Fa-f]{4})_/g, (_match, code) => String.fromCharCode(Number.parseInt(code, 16)))
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&');
-}
-
-function extractPowerShellCliXmlMessages(value) {
-  const messages = [];
-  const xmlTextRegex = /<S(?:\s+[^>]*)?>([\s\S]*?)<\/S>/g;
-  let match;
-
-  while ((match = xmlTextRegex.exec(value)) !== null) {
-    const message = decodePowerShellCliXmlText(match[1]).trim();
-
-    if (message) {
-      messages.push(message);
-    }
-  }
-
-  return messages.join('\n');
-}
-
-function cleanPowerShellCliXmlOutput(value) {
-  return value
-    .replace(/#< CLIXML[ \t]*(?:\r?\n)?/g, '')
-    .replace(/<Objs\b[\s\S]*?<\/Objs>/g, (cliXml) => extractPowerShellCliXmlMessages(cliXml))
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter((line) => line.trim() !== '#< CLIXML')
-    .join('\n');
-}
-
-function createPowerShellCliXmlStreamCleaner() {
-  let buffer = '';
-
-  const push = (text = '', flush = false) => {
-    buffer += text;
-    let output = '';
-
-    while (buffer) {
-      const xmlStart = buffer.indexOf('<Objs');
-
-      if (xmlStart === -1) {
-        output += cleanPowerShellCliXmlOutput(buffer);
-        buffer = '';
-        break;
-      }
-
-      output += cleanPowerShellCliXmlOutput(buffer.slice(0, xmlStart));
-
-      const xmlEnd = buffer.indexOf('</Objs>', xmlStart);
-
-      if (xmlEnd === -1) {
-        if (flush) {
-          output += cleanPowerShellCliXmlOutput(buffer.slice(xmlStart));
-          buffer = '';
-        } else {
-          buffer = buffer.slice(xmlStart);
-        }
-
-        break;
-      }
-
-      const xmlCloseEnd = xmlEnd + '</Objs>'.length;
-      output += extractPowerShellCliXmlMessages(buffer.slice(xmlStart, xmlCloseEnd));
-      buffer = buffer.slice(xmlCloseEnd);
-    }
-
-    return output;
-  };
-
-  return { push };
-}
-
 function decodeSshOutputBuffer(buffer) {
   if (!buffer.length) {
     return '';
@@ -1712,6 +1658,12 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
 
     if (!Number.isInteger(columns) || !Number.isInteger(rows) || columns < 20 || rows < 5 || columns > 300 || rows > 120) {
       throw new Error('终端尺寸无效。');
+    }
+
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      await startLocalTerminal(activeConnection, terminalId, columns, rows, event.sender, sendTerminalData);
+      return true;
     }
 
     await withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
@@ -1920,6 +1872,11 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
   registerIpcHandler('connection:list-directory', async (_event, connectionId, rawPath, rawOptions) => {
     const remotePath = validateRemotePath(rawPath);
     const options = readFilePrivilegeOptions(rawOptions);
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      return listLocalDirectory(remotePath);
+    }
+
     const directory = await withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
       return withSftpPermissionFallback(
         activeConnection,
@@ -1936,6 +1893,11 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
   registerIpcHandler('connection:create-directory', async (_event, connectionId, rawPath, rawOptions) => {
     const remotePath = validateMutableRemotePath(rawPath);
     const options = readFilePrivilegeOptions(rawOptions);
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      return createLocalDirectory(remotePath, options);
+    }
+
     await withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
       await withSftpPermissionFallback(
         activeConnection,
@@ -1952,6 +1914,11 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     const remotePath = validateMutableRemotePath(rawPath);
     const entryType = rawType === 'directory' ? 'directory' : 'file';
     const options = readFilePrivilegeOptions(rawOptions);
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      return deleteLocalPath(remotePath, entryType, options);
+    }
+
     await withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
       await withSftpPermissionFallback(
         activeConnection,
@@ -1968,6 +1935,11 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     const oldPath = validateMutableRemotePath(rawOldPath);
     const newPath = validateMutableRemotePath(rawNewPath);
     const options = readFilePrivilegeOptions(rawOptions);
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      return renameLocalPath(oldPath, newPath, options);
+    }
+
     await withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
       await withSftpPermissionFallback(
         activeConnection,
@@ -1983,6 +1955,11 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
   registerIpcHandler('connection:create-file', async (_event, connectionId, rawPath, rawOptions) => {
     const remotePath = validateMutableRemotePath(rawPath);
     const options = readFilePrivilegeOptions(rawOptions);
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      return createLocalFile(remotePath, options);
+    }
+
     await withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
       await withSftpPermissionFallback(
         activeConnection,
@@ -2821,6 +2798,11 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
   registerIpcHandler('connection:stat-path', async (_event, connectionId, rawPath, rawOptions) => {
     const remotePath = validateRemotePath(rawPath);
     const privilegeOptions = readFilePrivilegeOptions(rawOptions);
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      return statLocalPath(remotePath);
+    }
+
     return withActiveConnectionClientRetry(connectionId, (activeConnection) =>
       withSftpPermissionFallback(
         activeConnection,
@@ -2835,6 +2817,11 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     const remotePath = validateMutableRemotePath(rawPath);
     const options = readPathPermissionOptions(rawOptions);
     const privilegeOptions = readFilePrivilegeOptions(rawOptions);
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      return setLocalPathPermissions(remotePath, { ...options, ...privilegeOptions });
+    }
+
     await withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
       await withSftpPermissionFallback(
         activeConnection,
@@ -2850,6 +2837,10 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
   registerIpcHandler('connection:read-file', async (_event, connectionId, rawPath, rawOptions) => {
     const remotePath = validateRemotePath(rawPath);
     const options = readFilePrivilegeOptions(rawOptions);
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      return readLocalTextFile(remotePath, options);
+    }
 
     return withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
       try {
@@ -2870,6 +2861,10 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       throw new Error('文件内容必须是字符串。');
     }
     const options = readFilePrivilegeOptions(rawOptions);
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      return writeLocalTextFile(remotePath, content, options);
+    }
 
     await withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
       try {
@@ -3094,6 +3089,11 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
   }
 
   registerIpcHandler('connection:cancel-transfer', (_event, connectionId) => {
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      return cancelLocalTransfer(connectionId) || cancelActiveTransferQueue(connectionId);
+    }
+
     return cancelActiveTransferQueue(connectionId);
   });
 
@@ -3119,6 +3119,11 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
   }
 
   registerIpcHandler('connection:check-sftp', async (_event, connectionId) => {
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      return { available: true };
+    }
+
     try {
       await withActiveConnectionClientRetry(connectionId, (activeConnection) =>
         createSftpSession(activeConnection.client, async () => true));
@@ -4134,6 +4139,12 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       return { canceled: true };
     }
 
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      const transferResult = await copyLocalDownload(connectionId, event.sender, [remotePath], result.filePath, true);
+      return { ...transferResult, filePath: result.filePath };
+    }
+
     const transferResult = await runDownloadTransfer(connectionId, event.sender, [{
       remotePath,
       localPath: result.filePath,
@@ -4159,6 +4170,12 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     }
 
     const localDirectory = result.filePaths[0];
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      const transferResult = await copyLocalDownload(connectionId, event.sender, remotePaths, localDirectory, false);
+      return { ...transferResult, directoryPath: localDirectory };
+    }
+
     const roots = remotePaths.map((remotePath) => {
       const fileName = getRemoteFileName(remotePath);
       return {
@@ -4221,6 +4238,17 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       return { canceled: true };
     }
 
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      const transferResult = await copyLocalUpload(
+        connectionId,
+        event.sender,
+        result.filePaths.slice(0, 1).map((localPath) => ({ localPath })),
+        currentPath,
+      );
+      return { ...transferResult, remotePath: currentPath };
+    }
+
     return runUploadTransfer(connectionId, event.sender, result.filePaths.slice(0, 1), currentPath, options);
   });
 
@@ -4237,6 +4265,17 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
 
     if (result.canceled || !result.filePaths.length) {
       return { canceled: true };
+    }
+
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      const transferResult = await copyLocalUpload(
+        connectionId,
+        event.sender,
+        result.filePaths.map((localPath) => ({ localPath })),
+        currentPath,
+      );
+      return { ...transferResult, remotePath: currentPath };
     }
 
     return runUploadTransfer(connectionId, event.sender, result.filePaths, currentPath, options);
@@ -4256,6 +4295,17 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       return { canceled: true };
     }
 
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      const transferResult = await copyLocalUpload(
+        connectionId,
+        event.sender,
+        result.filePaths.map((localPath) => ({ localPath })),
+        currentPath,
+      );
+      return { ...transferResult, remotePath: currentPath };
+    }
+
     return runUploadTransfer(connectionId, event.sender, result.filePaths, currentPath, options);
   });
 
@@ -4263,21 +4313,41 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
     const currentPath = validateRemotePath(rawRemotePath);
     const localItems = readLocalUploadItems(rawItems);
     const options = readFilePrivilegeOptions(rawOptions);
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      const transferResult = await copyLocalUpload(connectionId, event.sender, localItems, currentPath);
+      return { ...transferResult, remotePath: currentPath };
+    }
 
     return runUploadTransfer(connectionId, event.sender, localItems, currentPath, options);
   });
 
   registerIpcHandler('connection:get-status', async (_event, connectionId) => {
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      return getLocalStatus();
+    }
+
     return withActiveConnectionClientRetry(connectionId, (activeConnection) =>
       getRemoteStatus(activeConnection.client, activeConnection.displayHost.systemType));
   });
 
   registerIpcHandler('connection:get-system-info', async (_event, connectionId) => {
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      return getLocalSystemInfo();
+    }
+
     return withActiveConnectionClientRetry(connectionId, (activeConnection) =>
       getRemoteSystemInfo(activeConnection.client, activeConnection.displayHost.systemType));
   });
 
   registerIpcHandler('connection:get-metrics', async (_event, connectionId) => {
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      return getLocalMetrics();
+    }
+
     return withActiveConnectionClientRetry(connectionId, (activeConnection) =>
       getRemoteMetrics(activeConnection.client, activeConnection.displayHost.systemType));
   });
@@ -4288,6 +4358,10 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       ? readBoundedString(rawStdin, '命令输入', maxRemoteCommandInputLength, { required: false, trim: false, rejectLineBreaks: false })
       : '';
     const options = readFilePrivilegeOptions(rawOptions);
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      return runLocalCommand(command, stdin);
+    }
 
     return withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
       const privilege = getConfiguredPrivilege(activeConnection, options);
@@ -4326,6 +4400,20 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       : '';
     const streamId = readBoundedString(rawStreamId, '命令流标识', 120);
     const options = readFilePrivilegeOptions(rawOptions);
+    const activeConnection = getActiveConnection(connectionId);
+    if (isLocalConnection(activeConnection)) {
+      return runLocalCommand(command, stdin, {
+        onChunk: (chunk, streamName) => {
+          if (!event.sender.isDestroyed()) {
+            event.sender.send('connection:run-command-stream:chunk', {
+              streamId,
+              stream: streamName,
+              chunk,
+            });
+          }
+        },
+      });
+    }
 
     return withActiveConnectionClientRetry(connectionId, async (activeConnection) => {
       const privilege = getConfiguredPrivilege(activeConnection, options);

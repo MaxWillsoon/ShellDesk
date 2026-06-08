@@ -196,14 +196,19 @@ function showMainWindow() {
 }
 
 function createConnectionWindow(activeConnection) {
-  const connectionTitle = `${activeConnection.displayHost.username}@${activeConnection.displayHost.address}:${activeConnection.displayHost.port}`;
+  const isLocalConnection = activeConnection.kind === 'local';
+  const connectionTitle = isLocalConnection
+    ? '本地模式'
+    : `${activeConnection.displayHost.username}@${activeConnection.displayHost.address}:${activeConnection.displayHost.port}`;
   const connectionWindow = new BrowserWindow({
     width: 1240,
     height: 800,
     minWidth: 960,
     minHeight: 640,
     show: false,
-    title: `ShellDesk - ${connectionTitle} - SOCKS :${activeConnection.proxyPort}`,
+    title: isLocalConnection
+      ? `ShellDesk - ${connectionTitle}`
+      : `ShellDesk - ${connectionTitle} - SOCKS :${activeConnection.proxyPort}`,
     icon: appIconPath,
     backgroundColor: '#0b1017',
     autoHideMenuBar: true,

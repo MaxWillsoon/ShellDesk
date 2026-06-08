@@ -12,6 +12,11 @@ const {
   readBoundedString,
   readIntegerInRange,
 } = require('./validation.cjs');
+const {
+  isLocalConnection,
+  runLocalCommand,
+  statLocalPath,
+} = require('./localConnection.cjs');
 
 let RedisModule = null;
 let mysqlModule = null;
@@ -1422,6 +1427,19 @@ exit $LASTEXITCODE
     return normalizedResult.stdout;
   }
 
+  async function execSqliteOnLocal(systemType, filePath, command) {
+    const commandInput = systemType === 'windows'
+      ? createWindowsSqliteCommand(filePath, command)
+      : createUnixSqliteCommand(filePath, command);
+    const result = await runLocalCommand(commandInput.command, commandInput.stdin);
+
+    if (result.code !== 0) {
+      throw new Error(result.stderr || result.stdout || `sqlite3 返回码 ${result.code}`);
+    }
+
+    return result.stdout;
+  }
+
   async function assertRemoteSqliteFile(client, systemType, filePath, privilege = null) {
     if (systemType === 'windows' || !privilege) {
       const stat = await statRemotePath(client, filePath);
@@ -1460,6 +1478,16 @@ exit $LASTEXITCODE
 
   async function openSqliteOnConnection(activeConnection, filePath, options = {}) {
     const systemType = activeConnection.displayHost.systemType;
+    if (isLocalConnection(activeConnection)) {
+      const stat = await statLocalPath(filePath);
+      if (stat.type !== 'file') {
+        throw new Error('请选择可读取的 SQLite 文件。');
+      }
+
+      await execSqliteOnLocal(systemType, filePath, 'PRAGMA schema_version');
+      return { activeConnection, privilege: null };
+    }
+
     const explicitSudoPrivilege = hasSudoPasswordOption(options)
       ? getSqlitePrivilegeFromConnection(activeConnection, options)
       : null;
@@ -1497,6 +1525,10 @@ exit $LASTEXITCODE
 
   async function execSqliteForSession(entry, rawOptions, sql) {
     const options = readSqlitePrivilegeOptions(rawOptions);
+    if (entry.kind === 'local') {
+      return execSqliteOnLocal(entry.systemType, entry.filePath, sql);
+    }
+
     const explicitSudoPrivilege = hasSudoPasswordOption(options)
       ? getSqlitePrivilegeFromSession(entry, options)
       : null;
@@ -1559,6 +1591,7 @@ exit $LASTEXITCODE
       sqliteId,
       filePath,
       client: activeConnection.client,
+      kind: activeConnection.kind || 'ssh',
       systemType: activeConnection.displayHost.systemType,
       privilege,
       privilegeConfig: activeConnection.privilegeConfig ?? null,

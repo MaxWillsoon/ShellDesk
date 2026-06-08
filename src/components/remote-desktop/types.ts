@@ -27,6 +27,7 @@ export type RemoteSystemType =
 
 export interface RemoteConnectionInfo {
   id: string;
+  kind?: 'ssh' | 'local';
   partition: string;
   proxyPort: number;
   connectedAt: string;

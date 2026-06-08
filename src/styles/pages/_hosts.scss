@@ -1202,7 +1202,7 @@
 }
 
 .command-bar {
-  grid-template-columns: minmax(300px, 1fr) 104px 150px;
+  grid-template-columns: minmax(300px, 1fr) 104px 112px 150px;
   gap: 12px;
   padding: 8px 18px;
   backdrop-filter: blur(22px);
@@ -1217,6 +1217,10 @@
   width: 104px;
   padding-inline: 0;
   white-space: nowrap;
+}
+
+.command-bar > .local-mode-button {
+  width: 112px;
 }
 
 .command-bar > .primary-action {

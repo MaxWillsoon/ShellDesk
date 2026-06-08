@@ -1,6 +1,7 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon, type ISearchOptions } from '@xterm/addon-search';
-import { type ITerminalOptions, Terminal as XTerminal } from '@xterm/xterm';
+import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes';
+import { type ITerminalOptions, type IWindowsPty, Terminal as XTerminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import * as Zmodem from 'zmodem.js';
 import {
@@ -98,6 +99,7 @@ interface RemoteTerminalProps {
   connectionId: string;
   terminalId: string;
   settings: ShellDeskAppSettings;
+  connectionKind?: 'ssh' | 'local';
   systemType?: RemoteSystemType;
   launchOptions?: RemoteTerminalLaunchOptions;
   commandRequest?: RemoteTerminalCommandRequest | null;
@@ -542,10 +544,23 @@ function buildSftpProgressText(
   ].filter(Boolean).join(' · ') + itemText + statusSuffix;
 }
 
-function buildTerminalOptions(settings: ShellDeskAppSettings): ITerminalOptions {
+function isWindowsClientPlatform() {
+  if (typeof navigator === 'undefined') {
+    return false;
+  }
+
+  return /windows|win32|win64/i.test(navigator.userAgent || navigator.platform || '');
+}
+
+function getLocalWindowsPtyOption(enabled: boolean): IWindowsPty | undefined {
+  return enabled && isWindowsClientPlatform() ? { backend: 'conpty' } : undefined;
+}
+
+function buildTerminalOptions(settings: ShellDeskAppSettings, windowsPty?: IWindowsPty): ITerminalOptions {
   return {
     allowTransparency: true,
     altClickMovesCursor: settings.terminalAltClickMovesCursor,
+    ...(windowsPty ? { allowProposedApi: true } : {}),
     cursorBlink: settings.terminalCursorBlink,
     cursorInactiveStyle: settings.terminalCursorInactiveStyle,
     cursorStyle: settings.terminalCursorStyle,
@@ -557,18 +572,20 @@ function buildTerminalOptions(settings: ShellDeskAppSettings): ITerminalOptions 
     ignoreBracketedPasteMode: !settings.terminalBracketedPasteMode,
     lineHeight: settings.terminalLineHeight,
     minimumContrastRatio: settings.terminalMinimumContrastRatio,
+    rescaleOverlappingGlyphs: true,
     screenReaderMode: settings.terminalScreenReaderMode,
     scrollback: settings.terminalScrollback,
     scrollOnEraseInDisplay: settings.terminalScrollOnEraseInDisplay,
     scrollOnUserInput: settings.terminalScrollOnUserInput,
     scrollSensitivity: settings.terminalScrollSensitivity,
     fastScrollSensitivity: settings.terminalFastScrollSensitivity,
+    ...(windowsPty ? { windowsPty } : {}),
     theme: { ...getTerminalTheme(settings.terminalTheme) },
   };
 }
 
-function applyTerminalOptions(terminal: XTerminal, settings: ShellDeskAppSettings) {
-  const { allowTransparency: _allowTransparency, ...terminalOptions } = buildTerminalOptions(settings);
+function applyTerminalOptions(terminal: XTerminal, settings: ShellDeskAppSettings, windowsPty?: IWindowsPty) {
+  const { allowTransparency: _allowTransparency, ...terminalOptions } = buildTerminalOptions(settings, windowsPty);
   terminal.options = terminalOptions;
 }
 
@@ -726,6 +743,7 @@ function RemoteTerminal({
   connectionId,
   terminalId,
   settings,
+  connectionKind,
   systemType,
   launchOptions,
   commandRequest,
@@ -790,6 +808,10 @@ function RemoteTerminal({
   const terminalTheme = getTerminalTheme(settings.terminalTheme);
   const sessionTitle = getTerminalSessionTitle(terminalId, launchOptions);
   const shellChoices = useMemo(() => getShellChoices(systemType), [systemType]);
+  const localWindowsPty = useMemo(
+    () => getLocalWindowsPtyOption(connectionKind === 'local' && isWindowsSystem(systemType)),
+    [connectionKind, systemType],
+  );
   const terminalPaneStyle = useMemo(() => ({
     '--terminal-background': terminalTheme.background ?? '#181a24',
     '--terminal-font-feature-settings': settings.terminalFontLigatures ? '"calt" 1, "liga" 1' : '"calt" 0, "liga" 0',
@@ -922,7 +944,7 @@ function RemoteTerminal({
       return undefined;
     }
 
-    applyTerminalOptions(terminal, settings);
+    applyTerminalOptions(terminal, settings, localWindowsPty);
     const animationFrame = window.requestAnimationFrame(() => {
       fitAndSyncSizeRef.current?.();
     });
@@ -930,7 +952,7 @@ function RemoteTerminal({
     return () => {
       window.cancelAnimationFrame(animationFrame);
     };
-  }, [settings]);
+  }, [localWindowsPty, settings]);
 
   useEffect(() => {
     onSessionEventRef.current = onSessionEvent;
@@ -994,9 +1016,10 @@ function RemoteTerminal({
     let animationFrame = 0;
     let startWarningTimer = 0;
     const supportsTerminalIpcOptions = typeof api.connections.getIpcCapabilities === 'function';
-    const terminal = new XTerminal(buildTerminalOptions(settingsRef.current));
+    const terminal = new XTerminal(buildTerminalOptions(settingsRef.current, localWindowsPty));
     const fitAddon = new FitAddon();
     const searchAddon = new SearchAddon({ highlightLimit: 500 });
+    const unicodeGraphemesAddon = localWindowsPty ? new UnicodeGraphemesAddon() : null;
 
     isTerminalReadyRef.current = false;
     terminalRef.current = terminal;
@@ -1004,6 +1027,9 @@ function RemoteTerminal({
     searchAddonRef.current = searchAddon;
     terminal.loadAddon(fitAddon);
     terminal.loadAddon(searchAddon);
+    if (unicodeGraphemesAddon) {
+      terminal.loadAddon(unicodeGraphemesAddon);
+    }
     terminal.open(host);
     terminal.focus();
     setSessionStatus('idle');
@@ -1884,7 +1910,7 @@ function RemoteTerminal({
       restartTerminalRef.current = null;
       sendInputRef.current = null;
     };
-  }, [connectionId, emitSessionEvent, terminalId]);
+  }, [connectionId, emitSessionEvent, localWindowsPty, terminalId]);
 
   useEffect(() => {
     if (!commandRequest || handledCommandRequestRef.current === commandRequest.id || sessionStatus !== 'running') {

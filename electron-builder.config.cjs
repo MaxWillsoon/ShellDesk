@@ -23,6 +23,7 @@ module.exports = {
     },
   ],
   asarUnpack: [
+    'node_modules/node-pty/**/*',
     'node_modules/ssh2/**/*',
     'node_modules/cpu-features/**/*',
   ],
@@ -96,4 +97,3 @@ module.exports = {
     },
   ],
 };
-
