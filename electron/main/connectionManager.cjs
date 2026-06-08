@@ -1413,10 +1413,15 @@ async function closeActiveConnection(connectionId, reason = '连接已断开。'
   activeConnections.delete(connectionId);
   activeConnection.isClosing = true;
   if (activeConnection.terminalSessions) {
-    for (const stream of activeConnection.terminalSessions.values()) {
-      stream.removeAllListeners();
-      stream.on('error', () => undefined);
-      stream.end();
+    for (const terminalSession of activeConnection.terminalSessions.values()) {
+      if (typeof terminalSession.dispose === 'function') {
+        terminalSession.dispose();
+        continue;
+      }
+
+      terminalSession.removeAllListeners();
+      terminalSession.on('error', () => undefined);
+      terminalSession.end();
     }
   }
 

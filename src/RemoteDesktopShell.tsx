@@ -256,7 +256,7 @@ interface DesktopWindowTitlebarClickState {
 }
 
 const windowEdgePadding = 14;
-const windowDockSafeArea = 92;
+const windowDockSafeArea = 72;
 const windowMinWidth = 360;
 const windowMinHeight = 260;
 const titlebarDoubleClickDelayMs = 500;
@@ -327,16 +327,12 @@ function applyWindowFrameToElement(element: HTMLElement, frame: DesktopWindowFra
 }
 
 function getMaximizedWindowFrame(surfaceWidth: number, surfaceHeight: number) {
-  return clampWindowFrame(
-    {
-      x: windowEdgePadding,
-      y: windowEdgePadding,
-      width: surfaceWidth - windowEdgePadding * 2,
-      height: surfaceHeight - windowEdgePadding - windowDockSafeArea,
-    },
-    surfaceWidth,
-    surfaceHeight,
-  );
+  return {
+    x: 0,
+    y: 0,
+    width: Math.max(windowMinWidth, surfaceWidth),
+    height: Math.max(windowMinHeight, surfaceHeight - windowDockSafeArea),
+  };
 }
 
 function createDesktopWindow(appKey: DesktopAppKey, sequence: number, zIndex: number, language: ShellDeskAppSettings['language']): DesktopWindowState {
