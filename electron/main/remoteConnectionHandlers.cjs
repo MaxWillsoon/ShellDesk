@@ -1861,9 +1861,13 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
 
     if (terminalStream) {
       activeConnection.terminalSessions.delete(terminalId);
-      terminalStream.removeAllListeners();
-      terminalStream.on('error', () => undefined);
-      terminalStream.end();
+      if (typeof terminalStream.dispose === 'function') {
+        terminalStream.dispose();
+      } else {
+        terminalStream.removeAllListeners();
+        terminalStream.on('error', () => undefined);
+        terminalStream.end();
+      }
     }
 
     return true;

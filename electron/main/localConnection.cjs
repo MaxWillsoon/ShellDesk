@@ -1,7 +1,8 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const childProcess = require('node:child_process');
+const { spawn } = childProcess;
 const { TextDecoder } = require('node:util');
 
 const {
@@ -22,6 +23,7 @@ const maxLocalTransferItems = 20000;
 const maxLocalCommandOutputBytes = 16 * 1024 * 1024;
 const activeLocalTransfers = new Map();
 let nodePty = null;
+let didPatchNodePtyConsoleListAgent = false;
 
 function isLocalPermissionError(error) {
   const message = String(error?.message ?? error ?? '');
@@ -91,7 +93,10 @@ function createLocalOutputDecoder() {
 
 function sendLocalTerminalText(sender, connectionId, terminalId, text, cleaner = null, flush = false) {
   const normalizedText = process.platform === 'win32' ? text.replace(/\x7f/g, '\b') : text;
-  const outputText = cleaner ? cleaner.push(normalizedText, flush) : normalizedText;
+  const cleanedText = cleaner ? cleaner.push(normalizedText, flush) : normalizedText;
+  const outputText = process.platform === 'win32'
+    ? cleanedText.replace(/\r?\n/g, '\r\n')
+    : cleanedText;
 
   if (!outputText || sender.isDestroyed()) {
     return;
@@ -111,12 +116,54 @@ function loadNodePty() {
     return nodePty;
   }
 
+  patchNodePtyConsoleListAgent();
+
   try {
     nodePty = require('node-pty');
     return nodePty;
   } catch (error) {
     throw new Error(`本地终端 PTY 后端不可用：${toErrorMessage(error)}`);
   }
+}
+
+function patchNodePtyConsoleListAgent() {
+  if (process.platform !== 'win32' || didPatchNodePtyConsoleListAgent) {
+    return;
+  }
+
+  didPatchNodePtyConsoleListAgent = true;
+  const originalFork = childProcess.fork;
+
+  if (typeof originalFork !== 'function' || originalFork.__shelldeskPatchedConptyAgent) {
+    return;
+  }
+
+  const patchedFork = function patchedFork(modulePath, args, options) {
+    const normalizedPath = typeof modulePath === 'string' ? modulePath.replace(/\\/g, '/') : '';
+    const isNodePtyConsoleListAgent = normalizedPath.includes('/node-pty/') &&
+      normalizedPath.endsWith('/conpty_console_list_agent');
+
+    if (!isNodePtyConsoleListAgent) {
+      return originalFork.apply(this, arguments);
+    }
+
+    const forkArgs = Array.isArray(args) ? args : [];
+    const forkOptions = Array.isArray(args) ? options : args;
+    const child = originalFork.call(this, modulePath, forkArgs, {
+      ...(forkOptions || {}),
+      silent: true,
+    });
+
+    child.stdout?.on('data', () => undefined);
+    child.stderr?.on('data', () => undefined);
+    child.on('error', () => undefined);
+    return child;
+  };
+
+  Object.defineProperty(patchedFork, '__shelldeskPatchedConptyAgent', {
+    value: true,
+  });
+  childProcess.fork = patchedFork;
 }
 
 function isLocalConnection(activeConnection) {
@@ -497,6 +544,15 @@ async function getLocalSymlinkTargetType(localPath) {
   try {
     const stats = await fs.promises.stat(localPath);
     if (stats.isDirectory()) {
+      if (process.platform === 'win32') {
+        try {
+          const directory = await fs.promises.opendir(localPath);
+          await directory.close();
+        } catch {
+          return 'unknown';
+        }
+      }
+
       return 'directory';
     }
     if (stats.isFile()) {
@@ -509,6 +565,34 @@ async function getLocalSymlinkTargetType(localPath) {
   return 'unknown';
 }
 
+async function getLocalSymlinkTargetPath(localPath) {
+  try {
+    return await fs.promises.readlink(localPath);
+  } catch {
+    return '';
+  }
+}
+
+async function createLocalDirectoryReadError(localPath, error) {
+  if (process.platform !== 'win32' || !['EACCES', 'EPERM'].includes(error?.code)) {
+    return error;
+  }
+
+  try {
+    const stats = await fs.promises.lstat(localPath);
+    if (!stats.isSymbolicLink()) {
+      return error;
+    }
+  } catch {
+    return error;
+  }
+
+  const targetPath = await getLocalSymlinkTargetPath(localPath);
+  const targetHint = targetPath ? `请直接打开目标路径：${toDisplayPath(targetPath)}。` : '请改为打开它指向的真实目录。';
+
+  return new Error(`无法打开 Windows 兼容性目录链接：${toDisplayPath(localPath)}。${targetHint}`);
+}
+
 async function readLocalDirectoryEntry(localPath, dirent) {
   const pathModule = getPathModuleForLocal();
   const entryPath = pathModule.join(localPath, dirent.name);
@@ -516,12 +600,16 @@ async function readLocalDirectoryEntry(localPath, dirent) {
   try {
     const entryStats = await fs.promises.lstat(entryPath);
     const type = toLocalEntryType(entryStats);
+    const targetPath = type === 'symlink' ? await getLocalSymlinkTargetPath(entryPath) : '';
 
     return {
       name: dirent.name,
       longname: dirent.name,
       type,
-      ...(type === 'symlink' ? { targetType: await getLocalSymlinkTargetType(entryPath) } : {}),
+      ...(type === 'symlink' ? {
+        targetType: await getLocalSymlinkTargetType(entryPath),
+        ...(targetPath ? { targetPath: toDisplayPath(targetPath) } : {}),
+      } : {}),
       size: entryStats.isFile() ? entryStats.size : 0,
       modifiedAt: new Date(entryStats.mtimeMs).toISOString(),
     };
@@ -571,7 +659,13 @@ async function listLocalDirectory(rawPath) {
     throw new Error('本地路径不是目录。');
   }
 
-  const dirents = await fs.promises.readdir(localPath, { withFileTypes: true });
+  let dirents;
+  try {
+    dirents = await fs.promises.readdir(localPath, { withFileTypes: true });
+  } catch (error) {
+    throw await createLocalDirectoryReadError(localPath, error);
+  }
+
   const entries = (await Promise.all(dirents.map((dirent) => readLocalDirectoryEntry(localPath, dirent))))
     .filter(Boolean);
 
@@ -913,9 +1007,24 @@ function runLocalCommand(rawCommand, stdin = '', callbacks = {}) {
 
 function getLocalTerminalShell() {
   if (process.platform === 'win32') {
+    const startupCommand = [
+      "try { Remove-Module PSReadLine -ErrorAction SilentlyContinue } catch {}",
+      "[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)",
+      "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+      "$OutputEncoding = [Console]::OutputEncoding",
+    ].join('; ');
+
     return {
       file: 'powershell.exe',
-      args: ['-NoLogo'],
+      args: [
+        '-NoLogo',
+        '-NoProfile',
+        '-NoExit',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        startupCommand,
+      ],
     };
   }
 
@@ -967,12 +1076,22 @@ function createLocalTerminalSession(ptyProcess) {
       }
     },
     end() {
+      session.dispose();
+    },
+    dispose() {
       if (closed || ptyProcess.killed) {
         return;
       }
 
       closed = true;
-      ptyProcess.kill();
+      while (disposables.length) {
+        disposables.pop()?.dispose?.();
+      }
+      try {
+        ptyProcess.kill();
+      } catch {
+        // Ignore stale PTY cleanup errors.
+      }
     },
     on(eventName, handler) {
       if (eventName === 'exit' || eventName === 'close') {
