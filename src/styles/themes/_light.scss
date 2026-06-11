@@ -441,7 +441,9 @@
   color: #c8304e;
 }
 
-[data-theme="light"] .log-category {
+[data-theme="light"] .log-category,
+[data-theme="light"] .log-component,
+[data-theme="light"] .log-host {
   border-color: rgba(16, 32, 51, 0.1);
 }
 

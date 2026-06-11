@@ -101,6 +101,18 @@ function readLogEntry(rawEntry) {
     required: false,
     rejectLineBreaks: false,
   });
+  const component = typeof rawEntry.component === 'string' && rawEntry.component.trim()
+    ? readBoundedString(rawEntry.component, '日志组件', 180, { required: false })
+    : '';
+  const hostId = typeof rawEntry.hostId === 'string' && rawEntry.hostId.trim()
+    ? readBoundedString(rawEntry.hostId, '日志主机 ID', 180, { required: false })
+    : '';
+  const hostName = typeof rawEntry.hostName === 'string' && rawEntry.hostName.trim()
+    ? readBoundedString(rawEntry.hostName, '日志主机名称', 180, { required: false })
+    : '';
+  const hostAddress = typeof rawEntry.hostAddress === 'string' && rawEntry.hostAddress.trim()
+    ? readBoundedString(rawEntry.hostAddress, '日志主机地址', 255, { required: false })
+    : '';
 
   if (!id || !message) {
     return null;
@@ -113,6 +125,10 @@ function readLogEntry(rawEntry) {
     level,
     message,
     detail,
+    ...(component ? { component } : {}),
+    ...(hostId ? { hostId } : {}),
+    ...(hostName ? { hostName } : {}),
+    ...(hostAddress ? { hostAddress } : {}),
   };
 }
 

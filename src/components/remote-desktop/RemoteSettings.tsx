@@ -750,7 +750,7 @@ function NetworkPanel() {
         </button>
       </div>
       {error ? (
-        <DismissibleAlert className="error-banner" onDismiss={() => setError('')} role="alert">
+        <DismissibleAlert className="error-banner" source="RemoteSettings" onDismiss={() => setError('')} role="alert">
           {error}
         </DismissibleAlert>
       ) : null}
@@ -1417,7 +1417,7 @@ MIRROR_EOF`;
         </button>
       </div>
       {error ? (
-        <DismissibleAlert className="error-banner" onDismiss={() => setError('')} role="alert">
+        <DismissibleAlert className="error-banner" source="RemoteSettings" onDismiss={() => setError('')} role="alert">
           {error}
         </DismissibleAlert>
       ) : null}
@@ -1613,7 +1613,7 @@ function UpdatePanel() {
         </div>
       </div>
       {error ? (
-        <DismissibleAlert className="error-banner" onDismiss={() => setError('')} role="alert">
+        <DismissibleAlert className="error-banner" source="RemoteSettings" onDismiss={() => setError('')} role="alert">
           {error}
         </DismissibleAlert>
       ) : null}
@@ -1759,7 +1759,7 @@ function HostsPanel() {
         </div>
       </div>
       {error ? (
-        <DismissibleAlert className="error-banner" onDismiss={() => setError('')} role="alert">
+        <DismissibleAlert className="error-banner" source="RemoteSettings" onDismiss={() => setError('')} role="alert">
           {error}
         </DismissibleAlert>
       ) : null}
@@ -1930,7 +1930,7 @@ function RoutePanel() {
         </button>
       </div>
       {error ? (
-        <DismissibleAlert className="error-banner" onDismiss={() => setError('')} role="alert">
+        <DismissibleAlert className="error-banner" source="RemoteSettings" onDismiss={() => setError('')} role="alert">
           {error}
         </DismissibleAlert>
       ) : null}
@@ -2008,7 +2008,7 @@ function DiskPanel() {
         </button>
       </div>
       {error ? (
-        <DismissibleAlert className="error-banner" onDismiss={() => setError('')} role="alert">
+        <DismissibleAlert className="error-banner" source="RemoteSettings" onDismiss={() => setError('')} role="alert">
           {error}
         </DismissibleAlert>
       ) : null}
@@ -2300,7 +2300,7 @@ function SystemInfoPanel({ connectionId }: { connectionId: string }) {
         </button>
       </div>
       {error ? (
-        <DismissibleAlert className="error-banner" onDismiss={() => setError('')} role="alert">
+        <DismissibleAlert className="error-banner" source="RemoteSettings" onDismiss={() => setError('')} role="alert">
           {error}
         </DismissibleAlert>
       ) : null}
@@ -2361,7 +2361,7 @@ function WindowsSystemInfoPanel({ connectionId }: { connectionId: string }) {
         </button>
       </div>
       {error ? (
-        <DismissibleAlert className="error-banner" onDismiss={() => setError('')} role="alert">
+        <DismissibleAlert className="error-banner" source="RemoteSettings" onDismiss={() => setError('')} role="alert">
           {error}
         </DismissibleAlert>
       ) : null}
@@ -2422,7 +2422,7 @@ function WindowsNetworkPanel() {
         </button>
       </div>
       {error ? (
-        <DismissibleAlert className="error-banner" onDismiss={() => setError('')} role="alert">
+        <DismissibleAlert className="error-banner" source="RemoteSettings" onDismiss={() => setError('')} role="alert">
           {error}
         </DismissibleAlert>
       ) : null}
@@ -2538,7 +2538,7 @@ function WindowsHostsPanel({ connectionId }: { connectionId: string }) {
         </div>
       </div>
       {error ? (
-        <DismissibleAlert className="error-banner" onDismiss={() => setError('')} role="alert">
+        <DismissibleAlert className="error-banner" source="RemoteSettings" onDismiss={() => setError('')} role="alert">
           {error}
         </DismissibleAlert>
       ) : null}
@@ -2605,7 +2605,7 @@ function WindowsRoutePanel() {
         </button>
       </div>
       {error ? (
-        <DismissibleAlert className="error-banner" onDismiss={() => setError('')} role="alert">
+        <DismissibleAlert className="error-banner" source="RemoteSettings" onDismiss={() => setError('')} role="alert">
           {error}
         </DismissibleAlert>
       ) : null}
@@ -2659,7 +2659,7 @@ function WindowsDiskPanel() {
         </button>
       </div>
       {error ? (
-        <DismissibleAlert className="error-banner" onDismiss={() => setError('')} role="alert">
+        <DismissibleAlert className="error-banner" source="RemoteSettings" onDismiss={() => setError('')} role="alert">
           {error}
         </DismissibleAlert>
       ) : null}

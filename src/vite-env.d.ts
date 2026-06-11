@@ -1037,6 +1037,10 @@ interface ShellDeskLogEntry {
   level: 'info' | 'success' | 'warning' | 'error';
   message: string;
   detail: string;
+  component?: string;
+  hostId?: string;
+  hostName?: string;
+  hostAddress?: string;
 }
 
 interface ShellDeskLogsControls {
@@ -1259,6 +1263,11 @@ interface ShellDeskApi {
 
   interface Window {
     guiSSH?: ShellDeskApi;
+    __shellDeskLogContext?: {
+      hostId?: string;
+      hostName?: string;
+      hostAddress?: string;
+    };
   }
 }
 

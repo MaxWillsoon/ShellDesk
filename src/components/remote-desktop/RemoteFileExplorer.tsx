@@ -2393,7 +2393,7 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
           }}
         >
           {filesError ? (
-            <DismissibleAlert className="error-banner" onDismiss={() => setFilesError('')} role="alert">
+            <DismissibleAlert className="error-banner" onDismiss={() => setFilesError('')} role="alert" source="RemoteFileExplorer">
               {filesError}
             </DismissibleAlert>
           ) : null}

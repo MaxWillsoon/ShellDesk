@@ -707,7 +707,7 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
               </div>
             </div>
             {errorMessage ? (
-              <DismissibleAlert className="mysql-error-banner" onDismiss={() => setErrorMessage('')} role="alert">
+              <DismissibleAlert className="mysql-error-banner" onDismiss={() => setErrorMessage('')} role="alert" source="RemoteClickHouse">
                 {errorMessage}
               </DismissibleAlert>
             ) : null}
@@ -1013,6 +1013,7 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
                 className={`mysql-message-banner ${message.type}`}
                 onDismiss={() => setMessage(null)}
                 role={message.type === 'error' ? 'alert' : 'status'}
+                source="RemoteClickHouse"
               >
                 {message.text}
               </DismissibleAlert>

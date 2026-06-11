@@ -696,6 +696,12 @@ interface ConnectionRestoredPayload {
 export type LogCategory = 'connection' | 'host' | 'key' | 'config' | 'system';
 export type LogLevel = 'info' | 'success' | 'warning' | 'error';
 
+export interface LogHostMeta {
+  hostId?: string;
+  hostName?: string;
+  hostAddress?: string;
+}
+
 export interface LogEntry {
   id: string;
   timestamp: string;
@@ -703,6 +709,10 @@ export interface LogEntry {
   level: LogLevel;
   message: string;
   detail: string;
+  component?: string;
+  hostId?: string;
+  hostName?: string;
+  hostAddress?: string;
 }
 
 interface CredentialFormState {
@@ -765,8 +775,12 @@ function isAuthFailureMessage(message: string) {
   return /\u8ba4\u8bc1\u5931\u8d25|authentication methods failed|password|private key|passphrase|\u5bc6\u94a5|\u53e3\u4ee4/i.test(message);
 }
 
-function shouldHoldStatusMessage(message: string) {
-  return /\u5931\u8d25|\u8d85\u65f6|\u65ad\u5f00|\u62d2\u7edd|\u91cd\u7f6e|\u4e0d\u53ef\u7528|\u65e0\u6548|fail|timeout|disconnect|closed|refused|reset|unavailable|invalid/i.test(message);
+function getLogHostMeta(host: { id?: string; name?: string; address?: string }): LogHostMeta {
+  return {
+    hostId: host.id,
+    hostName: host.name || host.address,
+    hostAddress: host.address,
+  };
 }
 
 function parseTags(value: string) {
@@ -2280,12 +2294,33 @@ function App() {
   }, [logs, isConnectionWindow, isLogsReady]);
 
   useEffect(() => {
+    const handleExternalLogEntry = (event: Event) => {
+      const entry = (event as CustomEvent<LogEntry>).detail;
+
+      if (!entry || typeof entry.id !== 'string' || typeof entry.message !== 'string') {
+        return;
+      }
+
+      setLogs((current) => {
+        if (current.some((currentEntry) => currentEntry.id === entry.id)) {
+          return current;
+        }
+
+        const next = [entry, ...current];
+        return next.length > 500 ? next.slice(0, 500) : next;
+      });
+    };
+
+    window.addEventListener('shelldesk:log-entry', handleExternalLogEntry);
+    return () => window.removeEventListener('shelldesk:log-entry', handleExternalLogEntry);
+  }, []);
+
+  useEffect(() => {
     if (!statusMessage) {
       return;
     }
 
-    const delay = shouldHoldStatusMessage(statusMessage) ? 8000 : 2400;
-    const timer = window.setTimeout(() => setStatusMessage(''), delay);
+    const timer = window.setTimeout(() => setStatusMessage(''), 5000);
     return () => window.clearTimeout(timer);
   }, [statusMessage]);
 
@@ -2419,7 +2454,7 @@ function App() {
       if (payload.connectionId === connection.id) {
         const message = payload.reason || t('app.connection.closedDefault', appLanguage);
         const time = new Date().toLocaleTimeString(appLocale);
-        addLog('connection', 'warning', t('app.connection.closedLog', appLanguage, { host: connection.host.address }), `${time} - ${message}`);
+        addLog('connection', 'warning', t('app.connection.closedLog', appLanguage, { host: connection.host.address }), `${time} - ${message}`, getLogHostMeta(connection.host));
         setStatusMessage(message);
         // Keep the window open so the user can see why the connection dropped.
         setWindowConnectionError(`${time} - ${message}`);
@@ -2439,7 +2474,7 @@ function App() {
       }
 
       const time = new Date().toLocaleTimeString(appLocale);
-      addLog('connection', 'success', t('app.connection.restoredLog', appLanguage, { host: connection.host.address }), `${time} - ${t('app.connection.restoredDetail', appLanguage)}`);
+      addLog('connection', 'success', t('app.connection.restoredLog', appLanguage, { host: connection.host.address }), `${time} - ${t('app.connection.restoredDetail', appLanguage)}`, getLogHostMeta(connection.host));
       setWindowConnectionError('');
       setStatusMessage(t('app.connection.restoredStatus', appLanguage));
     });
@@ -2484,7 +2519,7 @@ function App() {
     await persistCurrentCollections();
   }, [commitCollectionsState, persistCurrentCollections]);
 
-  const addLog = (category: LogCategory, level: LogLevel, message: string, detail = '') => {
+  const addLog = (category: LogCategory, level: LogLevel, message: string, detail = '', hostMeta: LogHostMeta = {}) => {
     const entry: LogEntry = {
       id: createId(),
       timestamp: new Date().toISOString(),
@@ -2492,6 +2527,7 @@ function App() {
       level,
       message,
       detail,
+      ...hostMeta,
     };
 
     setLogs((current) => {
@@ -3062,12 +3098,12 @@ function App() {
     if (editingHost) {
       const updatedHost = updateHostFromForm(editingHost, form, selectedKey);
       commitHosts(hostsRef.current.map((host) => (host.id === editingHost.id ? updatedHost : host)));
-      addLog('host', 'success', t('app.host.updateLog', appLanguage, { name: updatedHost.name }), `${updatedHost.username}@${updatedHost.address}:${updatedHost.port}`);
+      addLog('host', 'success', t('app.host.updateLog', appLanguage, { name: updatedHost.name }), `${updatedHost.username}@${updatedHost.address}:${updatedHost.port}`, getLogHostMeta(updatedHost));
       setStatusMessage(t('app.host.updatedStatus', appLanguage, { name: updatedHost.name }));
     } else {
       const nextHost = createHostFromForm(form, selectedKey);
       commitHosts([nextHost, ...hostsRef.current]);
-      addLog('host', 'success', t('app.host.addLog', appLanguage, { name: nextHost.name }), `${nextHost.username}@${nextHost.address}:${nextHost.port}`);
+      addLog('host', 'success', t('app.host.addLog', appLanguage, { name: nextHost.name }), `${nextHost.username}@${nextHost.address}:${nextHost.port}`, getLogHostMeta(nextHost));
       setStatusMessage(t('app.host.addedStatus', appLanguage, { name: nextHost.name }));
     }
 
@@ -3095,7 +3131,7 @@ function App() {
   const confirmDeleteHost = (host: Host) => {
     const nextHosts = hostsRef.current.filter((currentHost) => currentHost.id !== host.id);
     commitHosts(nextHosts);
-    addLog('host', 'info', t('app.host.deleteLog', appLanguage, { name: host.name }), `${host.username}@${host.address}:${host.port}`);
+    addLog('host', 'info', t('app.host.deleteLog', appLanguage, { name: host.name }), `${host.username}@${host.address}:${host.port}`, getLogHostMeta(host));
     setStatusMessage(t('app.host.deletedStatus', appLanguage, { name: host.name }));
 
     if (editingHostId === host.id) {
@@ -3230,10 +3266,10 @@ function App() {
 
       if (isConnectionWindow) {
         setConnection({ ...nextConnection, host: nextConnection.host ?? hostForConnection });
-        addLog('connection', 'success', t('app.connection.successLog', appLanguage, { host: host.name }), `${host.username}@${host.address}:${host.port}`);
+        addLog('connection', 'success', t('app.connection.successLog', appLanguage, { host: host.name }), `${host.username}@${host.address}:${host.port}`, getLogHostMeta(host));
         setStatusMessage(t('app.connection.successStatus', appLanguage, { host: host.name }));
       } else {
-        addLog('connection', 'success', t('app.connection.openWindowLog', appLanguage, { host: host.name }), `${host.username}@${host.address}:${host.port}`);
+        addLog('connection', 'success', t('app.connection.openWindowLog', appLanguage, { host: host.name }), `${host.username}@${host.address}:${host.port}`, getLogHostMeta(host));
         setStatusMessage(t('app.connection.openWindowStatus', appLanguage, { host: host.name }));
       }
 
@@ -3243,7 +3279,7 @@ function App() {
     } catch (error) {
       const message = getErrorMessage(error, appLanguage);
       markHostConnectionResult(hostForConnection, 'failed', message);
-      addLog('connection', 'error', t('app.connection.failedLog', appLanguage, { host: host.name }), `${host.username}@${host.address}:${host.port} - ${message}`);
+      addLog('connection', 'error', t('app.connection.failedLog', appLanguage, { host: host.name }), `${host.username}@${host.address}:${host.port} - ${message}`, getLogHostMeta(host));
       showConnectionError(hostForConnection, message);
 
       if (isAuthFailureMessage(message)) {
@@ -3285,7 +3321,7 @@ function App() {
         setConnection(nextConnection);
       }
 
-      addLog('connection', 'success', t('app.connection.localOpenLog', appLanguage), nextConnection.host.systemName || nextConnection.host.address);
+      addLog('connection', 'success', t('app.connection.localOpenLog', appLanguage), nextConnection.host.systemName || nextConnection.host.address, getLogHostMeta(nextConnection.host));
       setStatusMessage(t('app.connection.localOpenStatus', appLanguage));
       return true;
     } catch (error) {
@@ -4399,7 +4435,7 @@ function App() {
                 </label>
 
                 {formError ? (
-                  <DismissibleAlert className="error-banner" onDismiss={() => setFormError('')} role="alert">
+                  <DismissibleAlert className="error-banner" onDismiss={() => setFormError('')} role="alert" source="HostEditor">
                     {formError}
                   </DismissibleAlert>
                 ) : null}
@@ -4492,7 +4528,7 @@ function App() {
                 </label>
 
                 {keyFormError ? (
-                  <DismissibleAlert className="error-banner" onDismiss={() => setKeyFormError('')} role="alert">
+                  <DismissibleAlert className="error-banner" onDismiss={() => setKeyFormError('')} role="alert" source="KeyEditor">
                     {keyFormError}
                   </DismissibleAlert>
                 ) : null}
@@ -4607,7 +4643,7 @@ function App() {
                 ) : null}
 
                 {credentialError ? (
-                  <DismissibleAlert className="error-banner" onDismiss={() => setCredentialError('')} role="alert">
+                  <DismissibleAlert className="error-banner" onDismiss={() => setCredentialError('')} role="alert" source="CredentialDialog">
                     {credentialError}
                   </DismissibleAlert>
                 ) : null}

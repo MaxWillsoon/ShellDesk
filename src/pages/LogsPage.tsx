@@ -29,6 +29,8 @@ const levelIcons: Record<LogLevel, string> = {
   error: '✕',
 };
 
+const noHostFilterKey = '__none__';
+
 function formatTimestamp(isoString: string) {
   try {
     const date = new Date(isoString);
@@ -39,22 +41,46 @@ function formatTimestamp(isoString: string) {
   }
 }
 
+function getLogHostKey(log: LogEntry) {
+  return log.hostId || log.hostAddress || log.hostName || '';
+}
+
+function getLogHostLabel(log: LogEntry, noHostLabel: string) {
+  if (!getLogHostKey(log)) {
+    return noHostLabel;
+  }
+
+  if (log.hostName && log.hostAddress && log.hostName !== log.hostAddress) {
+    return `${log.hostName} (${log.hostAddress})`;
+  }
+
+  return log.hostName || log.hostAddress || log.hostId || noHostLabel;
+}
+
+function getLogComponentLabel(log: LogEntry) {
+  return log.component?.trim() ?? '';
+}
+
 function LogsPage({ logs, onClearLogs }: LogsPageProps) {
   const language = useCurrentAppLanguage();
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<LogCategory | 'all'>('all');
   const [levelFilter, setLevelFilter] = useState<LogLevel | 'all'>('all');
+  const [hostFilter, setHostFilter] = useState('all');
 
   const filteredLogs = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
+    const noHostLabel = t('logs.host.unassigned', language);
 
     return logs.filter((log) => {
       const matchesCategory = categoryFilter === 'all' || log.category === categoryFilter;
       const matchesLevel = levelFilter === 'all' || log.level === levelFilter;
-      const matchesQuery = !query || `${log.message} ${log.detail}`.toLowerCase().includes(query);
-      return matchesCategory && matchesLevel && matchesQuery;
+      const logHostKey = getLogHostKey(log);
+      const matchesHost = hostFilter === 'all' || (hostFilter === noHostFilterKey ? !logHostKey : logHostKey === hostFilter);
+      const matchesQuery = !query || `${log.message} ${log.detail} ${getLogHostLabel(log, noHostLabel)} ${getLogComponentLabel(log)}`.toLowerCase().includes(query);
+      return matchesCategory && matchesLevel && matchesHost && matchesQuery;
     });
-  }, [logs, searchQuery, categoryFilter, levelFilter]);
+  }, [logs, searchQuery, categoryFilter, levelFilter, hostFilter, language]);
 
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = { all: logs.length };
@@ -71,6 +97,30 @@ function LogsPage({ logs, onClearLogs }: LogsPageProps) {
     }
     return counts;
   }, [logs]);
+
+  const hostOptions = useMemo(() => {
+    const noHostLabel = t('logs.host.unassigned', language);
+    const options = new Map<string, { label: string; count: number }>();
+
+    for (const log of logs) {
+      const key = getLogHostKey(log) || noHostFilterKey;
+      const current = options.get(key);
+
+      if (current) {
+        current.count += 1;
+        continue;
+      }
+
+      options.set(key, {
+        label: getLogHostLabel(log, noHostLabel),
+        count: 1,
+      });
+    }
+
+    return Array.from(options.entries())
+      .map(([key, option]) => ({ key, ...option }))
+      .sort((first, second) => first.label.localeCompare(second.label, language === 'zh-CN' ? 'zh-CN' : 'en-US'));
+  }, [logs, language]);
 
   return (
     <>
@@ -139,6 +189,30 @@ function LogsPage({ logs, onClearLogs }: LogsPageProps) {
               ))}
             </div>
           </div>
+          {hostOptions.length ? (
+            <div className="logs-filter-group">
+              <span className="logs-filter-label">{t('logs.host.label', language)}</span>
+              <div className="logs-filter-chips">
+                <button
+                  type="button"
+                  className={`logs-filter-chip ${hostFilter === 'all' ? 'active' : ''}`}
+                  onClick={() => setHostFilter('all')}
+                >
+                  {t('logs.filter.all', language)} <small>{logs.length}</small>
+                </button>
+                {hostOptions.map((option) => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    className={`logs-filter-chip ${hostFilter === option.key ? 'active' : ''}`}
+                    onClick={() => setHostFilter(option.key)}
+                  >
+                    {option.label} <small>{option.count}</small>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
 
         {filteredLogs.length ? (
@@ -152,6 +226,8 @@ function LogsPage({ logs, onClearLogs }: LogsPageProps) {
                   <div className="log-header">
                     <strong className="log-message">{log.message}</strong>
                     <span className="log-category">{t(categoryLabelIds[log.category], language)}</span>
+                    {getLogComponentLabel(log) ? <span className="log-component">{getLogComponentLabel(log)}</span> : null}
+                    {getLogHostKey(log) ? <span className="log-host">{getLogHostLabel(log, t('logs.host.unassigned', language))}</span> : null}
                     <time className="log-time">{formatTimestamp(log.timestamp)}</time>
                   </div>
                   {log.detail ? <p className="log-detail">{log.detail}</p> : null}

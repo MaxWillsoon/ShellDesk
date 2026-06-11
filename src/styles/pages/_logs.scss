@@ -150,7 +150,9 @@
   white-space: nowrap;
 }
 
-.log-category {
+.log-category,
+.log-component,
+.log-host {
   flex: 0 0 auto;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -158,6 +160,14 @@
   color: var(--muted-strong);
   font-size: 10.5px;
   font-weight: 750;
+}
+
+.log-component,
+.log-host {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .log-time {

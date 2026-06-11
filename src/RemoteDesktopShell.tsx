@@ -1087,6 +1087,22 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
   ));
 
   useEffect(() => {
+    const logContext = {
+      hostId: connection.host.id || connection.id,
+      hostName: connection.host.name || connection.host.systemName || connection.host.address,
+      hostAddress: connection.host.address,
+    };
+
+    window.__shellDeskLogContext = logContext;
+
+    return () => {
+      if (window.__shellDeskLogContext === logContext) {
+        delete window.__shellDeskLogContext;
+      }
+    };
+  }, [connection.id, connection.host.address, connection.host.id, connection.host.name, connection.host.systemName]);
+
+  useEffect(() => {
     const normalizedLayout = normalizeRemoteDesktopLayout(settings.remoteDesktopLayout);
     const currentLayout = desktopLayoutRef.current;
 
