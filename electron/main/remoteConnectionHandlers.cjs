@@ -2028,6 +2028,27 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       /permission denied|access denied|eacces|eperm/i.test(message);
   }
 
+  function isSftpPermissionLikeFailure(error) {
+    if (isPermissionDeniedError(error)) {
+      return true;
+    }
+
+    const message = String(error?.message ?? error ?? '');
+    const code = error?.code;
+
+    return (code === 4 || code === 'FAILURE') &&
+      /failure|failed|unable to open|open failed/i.test(message);
+  }
+
+  function canAttemptPrivilegedUploadFallback(activeConnection, options, error) {
+    if (activeConnection.displayHost.systemType === 'windows' || !isSftpPermissionLikeFailure(error)) {
+      return false;
+    }
+
+    return Boolean(getConfiguredPrivilege(activeConnection, options)) ||
+      isSudoPrivilegeMode(activeConnection);
+  }
+
   function readFilePrivilegeOptions(rawOptions) {
     if (!rawOptions || typeof rawOptions !== 'object' || Array.isArray(rawOptions)) {
       return {};
@@ -4059,7 +4080,7 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
             try {
               await makeSftpDirectory(sftp, directory.remotePath);
             } catch (error) {
-              if (activeConnection.displayHost.systemType === 'windows' || !isPermissionDeniedError(error)) {
+              if (!canAttemptPrivilegedUploadFallback(activeConnection, options, error)) {
                 throw error;
               }
 
@@ -4106,7 +4127,7 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
             try {
               await transferLocalFileToRemote(sftp, file, queue);
             } catch (error) {
-              if (activeConnection.displayHost.systemType === 'windows' || !isPermissionDeniedError(error)) {
+              if (!canAttemptPrivilegedUploadFallback(activeConnection, options, error)) {
                 throw error;
               }
 
