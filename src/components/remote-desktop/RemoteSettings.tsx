@@ -13,7 +13,7 @@ interface RemoteSettingsProps {
   systemType?: RemoteSystemType;
 }
 
-type SettingsTab = 'systeminfo' | 'network' | 'mirrors' | 'update' | 'hosts' | 'route' | 'disk';
+type SettingsTab = 'systeminfo' | 'network' | 'update' | 'hosts' | 'route';
 
 interface SettingsTabDef {
   key: SettingsTab;
@@ -98,18 +98,6 @@ const SETTINGS_GROUPS: SettingsGroup[] = [
       { key: 'route', labelId: 'remoteSettings.tab.route.label', icon: '\u{1F6E3}\uFE0F', descriptionId: 'remoteSettings.tab.route.description' },
     ],
   },
-  {
-    labelId: 'remoteSettings.group.software',
-    tabs: [
-      { key: 'mirrors', labelId: 'remoteSettings.tab.mirrors.label', icon: '\u{1F3EA}', descriptionId: 'remoteSettings.tab.mirrors.description' },
-    ],
-  },
-  {
-    labelId: 'remoteSettings.group.storage',
-    tabs: [
-      { key: 'disk', labelId: 'remoteSettings.tab.disk.label', icon: '\u{1F4BD}', descriptionId: 'remoteSettings.tab.disk.description' },
-    ],
-  },
 ];
 
 const WINDOWS_SETTINGS_GROUPS: SettingsGroup[] = [
@@ -125,12 +113,6 @@ const WINDOWS_SETTINGS_GROUPS: SettingsGroup[] = [
       { key: 'network', labelId: 'remoteSettings.tab.network.windowsLabel', icon: '\u{1F310}', descriptionId: 'remoteSettings.tab.network.windowsDescription' },
       { key: 'hosts', labelId: 'remoteSettings.tab.hosts.label', icon: '\u{1F4CB}', descriptionId: 'remoteSettings.tab.hosts.windowsDescription' },
       { key: 'route', labelId: 'remoteSettings.tab.route.windowsLabel', icon: '\u{1F6E3}\uFE0F', descriptionId: 'remoteSettings.tab.route.windowsDescription' },
-    ],
-  },
-  {
-    labelId: 'remoteSettings.group.storage',
-    tabs: [
-      { key: 'disk', labelId: 'remoteSettings.tab.disk.windowsLabel', icon: '\u{1F4BD}', descriptionId: 'remoteSettings.tab.disk.windowsDescription' },
     ],
   },
 ];
@@ -2825,7 +2807,6 @@ Write-Output ("PRIV=" + $privilege)
         case 'network': return <WindowsNetworkPanel />;
         case 'hosts': return <WindowsHostsPanel connectionId={connectionId} />;
         case 'route': return <WindowsRoutePanel />;
-        case 'disk': return <WindowsDiskPanel />;
         default: return <WindowsSystemInfoPanel connectionId={connectionId} />;
       }
     }
@@ -2833,11 +2814,9 @@ Write-Output ("PRIV=" + $privilege)
     switch (activeTab) {
       case 'systeminfo': return <SystemInfoPanel connectionId={connectionId} />;
       case 'network': return <NetworkPanel />;
-      case 'mirrors': return <MirrorsPanel />;
       case 'update': return <UpdatePanel />;
       case 'hosts': return <HostsPanel />;
       case 'route': return <RoutePanel />;
-      case 'disk': return <DiskPanel />;
       default: return null;
     }
   };

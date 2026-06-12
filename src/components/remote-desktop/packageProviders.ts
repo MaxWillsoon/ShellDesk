@@ -5,6 +5,13 @@ export type PackageManagerKind = 'apt' | 'dnf' | 'yum' | 'pacman' | 'zypper' | '
 export type PackageView = 'upgradable' | 'installed' | 'search';
 export type PackageAction = 'install' | 'remove' | 'upgrade' | 'upgrade-all' | 'refresh';
 
+export interface PackageSourceFile {
+  path: string;
+  content: string;
+  exists: boolean;
+  readable: boolean;
+}
+
 export interface RemotePackageInfo {
   name: string;
   version?: string;
@@ -21,6 +28,14 @@ function shellSingleQuote(value: string) {
 
 function privilegedPackageCommand(command: string) {
   return `if [ "$(id -u 2>/dev/null)" = "0" ]; then ${command}; else sudo -n ${command}; fi`;
+}
+
+function privilegedShellScript(script: string) {
+  return `if [ "$(id -u 2>/dev/null)" = "0" ]; then sh -c ${shellSingleQuote(script)}; else sudo -n sh -c ${shellSingleQuote(script)}; fi`;
+}
+
+function isValidSourcePath(path: string) {
+  return /^\/etc\/(?:apt\/sources\.list(?:\.d\/[A-Za-z0-9._+-]+\.(?:list|sources))?|yum\.repos\.d\/[A-Za-z0-9._+-]+\.repo|zypp\/repos\.d\/[A-Za-z0-9._+-]+\.repo|pacman\.conf|pacman\.d\/mirrorlist|apk\/repositories)$/.test(path);
 }
 
 function createRpmPackageNameSearchCommand(kind: 'dnf' | 'yum', query: string) {
@@ -273,6 +288,134 @@ export function createPackageActionCommand(kind: PackageManagerKind, action: Pac
     default:
       throw new Error(tCurrent('auto.packageProviders.15gqg90'));
   }
+}
+
+export function createPackageSourceInspectCommand(kind: PackageManagerKind) {
+  const pathCommands: Partial<Record<PackageManagerKind, string>> = {
+    apt: `
+print_file /etc/apt/sources.list
+if [ -d /etc/apt/sources.list.d ]; then
+  find /etc/apt/sources.list.d -maxdepth 1 -type f \\( -name '*.list' -o -name '*.sources' \\) 2>/dev/null | sort | while IFS= read -r path; do
+    print_file "$path"
+  done
+fi
+`,
+    dnf: `
+if [ -d /etc/yum.repos.d ]; then
+  find /etc/yum.repos.d -maxdepth 1 -type f -name '*.repo' 2>/dev/null | sort | while IFS= read -r path; do
+    print_file "$path"
+  done
+fi
+`,
+    yum: `
+if [ -d /etc/yum.repos.d ]; then
+  find /etc/yum.repos.d -maxdepth 1 -type f -name '*.repo' 2>/dev/null | sort | while IFS= read -r path; do
+    print_file "$path"
+  done
+fi
+`,
+    pacman: `
+print_file /etc/pacman.conf
+print_file /etc/pacman.d/mirrorlist
+`,
+    zypper: `
+if [ -d /etc/zypp/repos.d ]; then
+  find /etc/zypp/repos.d -maxdepth 1 -type f -name '*.repo' 2>/dev/null | sort | while IFS= read -r path; do
+    print_file "$path"
+  done
+fi
+`,
+    apk: 'print_file /etc/apk/repositories',
+  };
+  const body = pathCommands[kind];
+
+  if (!body) {
+    throw new Error(tCurrent('auto.packageProviders.14qi5h4'));
+  }
+
+  return `
+print_file() {
+  path="$1"
+  printf '__SHELLDESK_SOURCE_BEGIN__\\t%s\\n' "$path"
+  if [ -e "$path" ]; then
+    if [ -r "$path" ]; then
+      printf '__SHELLDESK_SOURCE_META__\\texists=1\\treadable=1\\n'
+      sed -n '1,2000p' "$path"
+    else
+      printf '__SHELLDESK_SOURCE_META__\\texists=1\\treadable=0\\n'
+    fi
+  else
+    printf '__SHELLDESK_SOURCE_META__\\texists=0\\treadable=0\\n'
+  fi
+  printf '__SHELLDESK_SOURCE_END__\\n'
+}
+${body}
+`.trim();
+}
+
+export function createPackageSourceSaveCommand(path: string, content: string) {
+  const cleanPath = path.trim();
+
+  if (!isValidSourcePath(cleanPath)) {
+    throw new Error(tCurrent('auto.packageProviders.1bn4kqg'));
+  }
+
+  return privilegedShellScript(`
+path=${shellSingleQuote(cleanPath)}
+dir="$(dirname "$path")"
+stamp="$(date +%Y%m%d%H%M%S 2>/dev/null || printf backup)"
+mkdir -p "$dir" || exit $?
+if [ -e "$path" ]; then
+  cp -a "$path" "$path.shelldesk-bak-$stamp" || exit $?
+fi
+tmp="$(mktemp)" || exit $?
+printf %s ${shellSingleQuote(content)} > "$tmp" || { rm -f "$tmp"; exit 1; }
+install -m 0644 "$tmp" "$path" || { rm -f "$tmp"; exit 1; }
+rm -f "$tmp"
+`);
+}
+
+export function parsePackageSourceFiles(stdout: string): PackageSourceFile[] {
+  const files: PackageSourceFile[] = [];
+  const lines = stdout.split(/\r?\n/);
+  let current: { path: string; exists: boolean; readable: boolean; contentLines: string[] } | null = null;
+
+  for (const line of lines) {
+    if (line.startsWith('__SHELLDESK_SOURCE_BEGIN__\t')) {
+      current = {
+        path: line.slice('__SHELLDESK_SOURCE_BEGIN__\t'.length).trim(),
+        exists: false,
+        readable: false,
+        contentLines: [],
+      };
+      continue;
+    }
+
+    if (!current) {
+      continue;
+    }
+
+    if (line.startsWith('__SHELLDESK_SOURCE_META__\t')) {
+      current.exists = line.includes('\texists=1');
+      current.readable = line.includes('\treadable=1');
+      continue;
+    }
+
+    if (line === '__SHELLDESK_SOURCE_END__') {
+      files.push({
+        path: current.path,
+        exists: current.exists,
+        readable: current.readable,
+        content: current.contentLines.join('\n'),
+      });
+      current = null;
+      continue;
+    }
+
+    current.contentLines.push(line);
+  }
+
+  return files.filter((file) => file.path);
 }
 
 function parseAptUpgradable(line: string): RemotePackageInfo | null {
