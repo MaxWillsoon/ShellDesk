@@ -58,7 +58,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfuse2 rpm
+          sudo apt-get install -y libfuse2 rpm libarchive-tools
 
       - name: Install deps
         run: pnpm install --frozen-lockfile
@@ -91,6 +91,7 @@ jobs:
             release/*.AppImage
             release/*.deb
             release/*.rpm
+            release/*.pacman
             release/*.yml
             release/*.blockmap
           if-no-files-found: ignore
@@ -150,6 +151,7 @@ jobs:
             artifacts/*.AppImage
             artifacts/*.deb
             artifacts/*.rpm
+            artifacts/*.pacman
             artifacts/*.yml
             artifacts/*.blockmap
           generate_release_notes: true

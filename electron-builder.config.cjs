@@ -82,11 +82,15 @@ module.exports = {
   },
   linux: {
     icon: 'src/assets/images/icon.png',
-    target: ['AppImage', 'deb', 'rpm'],
+    target: ['AppImage', 'deb', 'rpm', 'pacman'],
     category: 'Development',
   },
   deb: {
     compression: 'gz',
+  },
+  pacman: {
+    afterInstall: 'scripts/linux/after-install.tpl',
+    afterRemove: 'scripts/linux/after-remove.tpl',
   },
   publish: [
     {
