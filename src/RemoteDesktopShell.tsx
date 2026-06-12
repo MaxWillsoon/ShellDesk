@@ -253,6 +253,20 @@ interface TerminalTitlebarMenuState {
   y: number;
 }
 
+interface TmuxSessionInfo {
+  name: string;
+  windows: number;
+  attached: number;
+  createdAt: number | null;
+  lastAttachedAt: number | null;
+}
+
+interface TmuxMenuState {
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  sessions: TmuxSessionInfo[];
+  error?: string;
+}
+
 interface DesktopWindowTitlebarClickState {
   windowId: string;
   timestamp: number;
@@ -1046,6 +1060,67 @@ function getTerminalSnippetPreview(snippet: ShellDeskTerminalSnippet) {
   return snippet.command.split(/\r?\n/u)[0].trim();
 }
 
+function quotePosixShellArg(value: string) {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function createTmuxListCommand() {
+  return [
+    'if ! command -v tmux >/dev/null 2>&1; then exit 127; fi',
+    `tmux list-sessions -F ${quotePosixShellArg('#{session_name}\t#{session_windows}\t#{session_attached}\t#{session_created}\t#{session_last_attached}')} 2>/dev/null || true`,
+  ].join('; ');
+}
+
+function parseTmuxSessions(output: string): TmuxSessionInfo[] {
+  return output
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [name = '', windows = '0', attached = '0', createdAt = '', lastAttachedAt = ''] = line.split('\t');
+      return {
+        name,
+        windows: Number.parseInt(windows, 10) || 0,
+        attached: Number.parseInt(attached, 10) || 0,
+        createdAt: Number.isFinite(Number(createdAt)) ? Number(createdAt) : null,
+        lastAttachedAt: Number.isFinite(Number(lastAttachedAt)) ? Number(lastAttachedAt) : null,
+      };
+    })
+    .filter((session) => session.name.length > 0)
+    .sort((first, second) => {
+      const firstTime = first.lastAttachedAt ?? first.createdAt ?? 0;
+      const secondTime = second.lastAttachedAt ?? second.createdAt ?? 0;
+      return secondTime - firstTime || first.name.localeCompare(second.name);
+    });
+}
+
+function createTmuxSessionName() {
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/u, '').replace('T', '-');
+  return `shelldesk-${stamp}`;
+}
+
+function createTmuxLaunchOptions(sessionName: string, command: 'attach' | 'new' = 'attach'): RemoteTerminalLaunchOptions {
+  const quotedSessionName = quotePosixShellArg(sessionName);
+  return {
+    mode: 'tmux',
+    title: `tmux: ${sessionName}`,
+    initialCommand: command === 'new'
+      ? `tmux new-session -A -s ${quotedSessionName}`
+      : `tmux attach-session -t ${quotedSessionName} || tmux new-session -A -s ${quotedSessionName}`,
+  };
+}
+
+function readCreatedTmuxSessionName(command: string) {
+  const normalizedCommand = command.trim();
+
+  if (!/^tmux(?:\s|$)/u.test(normalizedCommand) || !/\b(?:new|new-session)\b/u.test(normalizedCommand)) {
+    return null;
+  }
+
+  const sessionMatch = normalizedCommand.match(/(?:^|\s)-s\s*(?:"([^"]+)"|'([^']+)'|([^\s;|&]+))/u);
+  return sessionMatch?.[1] ?? sessionMatch?.[2] ?? sessionMatch?.[3] ?? null;
+}
+
 function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminalSessionEvent }: RemoteDesktopProps) {
   const desktopSurfaceRef = useRef<HTMLElement | null>(null);
   const windowPointerStateRef = useRef<DesktopWindowPointerState | null>(null);
@@ -1054,6 +1129,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
   const windowSequenceRef = useRef(0);
   const terminalToolRequestSequenceRef = useRef(0);
   const terminalCommandRequestSequenceRef = useRef(0);
+  const tmuxRefreshRequestRef = useRef(0);
   const zIndexRef = useRef(0);
   const launchpadCloseTimerRef = useRef<number | null>(null);
   const folderCloseTimerRef = useRef<number | null>(null);
@@ -1071,6 +1147,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
   const [renameFolderDialog, setRenameFolderDialog] = useState<FolderRenameDialogState | null>(null);
   const [launchpadTooltip, setLaunchpadTooltip] = useState<LaunchpadTooltipState | null>(null);
   const [terminalTitlebarMenu, setTerminalTitlebarMenu] = useState<TerminalTitlebarMenuState | null>(null);
+  const [tmuxMenuState, setTmuxMenuState] = useState<TmuxMenuState>({ status: 'idle', sessions: [] });
   const [pendingCloseWindowId, setPendingCloseWindowId] = useState('');
   const [presetWallpaperUrl, setPresetWallpaperUrl] = useState('');
   const focusedWindow = desktopWindows.find((desktopWindow) => desktopWindow.id === focusedWindowId && !desktopWindow.isMinimized) ?? null;
@@ -1483,6 +1560,109 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
     });
   };
 
+  const refreshTmuxSessions = async () => {
+    const requestId = tmuxRefreshRequestRef.current + 1;
+    tmuxRefreshRequestRef.current = requestId;
+    setTmuxMenuState((currentState) => ({ ...currentState, status: 'loading', error: undefined }));
+
+    if (connection.host.systemType === 'windows') {
+      setTmuxMenuState({
+        status: 'error',
+        sessions: [],
+        error: t('terminal.tmux.unsupported', settings.language),
+      });
+      return;
+    }
+
+    const api = window.guiSSH?.connections;
+
+    if (!api?.runCommand) {
+      setTmuxMenuState({
+        status: 'error',
+        sessions: [],
+        error: t('terminal.tmux.bridgeUnavailable', settings.language),
+      });
+      return;
+    }
+
+    try {
+      const result = await api.runCommand(connection.id, createTmuxListCommand());
+
+      if (tmuxRefreshRequestRef.current !== requestId) {
+        return;
+      }
+
+      if (result.code === 127) {
+        setTmuxMenuState({
+          status: 'error',
+          sessions: [],
+          error: t('terminal.tmux.notInstalled', settings.language),
+        });
+        return;
+      }
+
+      if (result.code !== 0 && result.stderr.trim()) {
+        setTmuxMenuState({
+          status: 'error',
+          sessions: [],
+          error: result.stderr.trim(),
+        });
+        return;
+      }
+
+      setTmuxMenuState({
+        status: 'ready',
+        sessions: parseTmuxSessions(result.stdout),
+      });
+    } catch (error) {
+      if (tmuxRefreshRequestRef.current !== requestId) {
+        return;
+      }
+
+      setTmuxMenuState({
+        status: 'error',
+        sessions: [],
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  const rememberTmuxSession = (sessionName: string) => {
+    setTmuxMenuState((currentState) => {
+      if (currentState.sessions.some((session) => session.name === sessionName)) {
+        return currentState;
+      }
+
+      return {
+        status: currentState.status === 'idle' ? 'ready' : currentState.status,
+        sessions: [
+          {
+            name: sessionName,
+            windows: 1,
+            attached: 0,
+            createdAt: Math.floor(Date.now() / 1000),
+            lastAttachedAt: Math.floor(Date.now() / 1000),
+          },
+          ...currentState.sessions,
+        ],
+        error: currentState.error,
+      };
+    });
+  };
+
+  const openTmuxTerminal = (sessionName: string, command: 'attach' | 'new' = 'attach') => {
+    rememberTmuxSession(sessionName);
+    openTerminalWindow(createTmuxLaunchOptions(sessionName, command));
+    setTerminalTitlebarMenu(null);
+    window.setTimeout(() => {
+      void refreshTmuxSessions();
+    }, 900);
+  };
+
+  const openNewTmuxTerminal = () => {
+    openTmuxTerminal(createTmuxSessionName(), 'new');
+  };
+
   const openNotepadFile = (filePath: string) => {
     const existingWindow = getTopDesktopWindow(desktopWindows, (desktopWindow) => desktopWindow.appKey === 'notepad');
 
@@ -1589,7 +1769,11 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
   const closeDesktopWindow = (windowId: string) => {
     const desktopWindow = desktopWindows.find((currentWindow) => currentWindow.id === windowId);
 
-    if (desktopWindow?.appKey === 'terminal' && desktopWindow.terminalHasForegroundTask) {
+    if (
+      desktopWindow?.appKey === 'terminal' &&
+      desktopWindow.terminalLaunchOptions?.mode !== 'tmux' &&
+      desktopWindow.terminalHasForegroundTask
+    ) {
       setPendingCloseWindowId(windowId);
       return;
     }
@@ -1903,6 +2087,25 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
     )));
   };
 
+  const handleTerminalSessionEvent = (event: RemoteTerminalSessionEvent) => {
+    onTerminalSessionEvent?.(event);
+
+    if (event.type !== 'terminal-command') {
+      return;
+    }
+
+    const sessionName = readCreatedTmuxSessionName(event.command);
+
+    if (!sessionName) {
+      return;
+    }
+
+    rememberTmuxSession(sessionName);
+    window.setTimeout(() => {
+      openTmuxTerminal(sessionName, 'attach');
+    }, 800);
+  };
+
   const renderWindowContent = (desktopWindow: DesktopWindowState) => {
     if (desktopWindow.appKey === 'terminal') {
       return (
@@ -1920,7 +2123,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
           onToolRequestHandled={(requestId) => completeTerminalToolRequest(desktopWindow.id, requestId)}
           onOpenTerminal={openTerminalWindow}
           onOpenNote={openNotepadNote}
-          onSessionEvent={onTerminalSessionEvent}
+          onSessionEvent={handleTerminalSessionEvent}
           onSessionStateChange={(payload) => updateTerminalSessionState(desktopWindow.id, payload)}
           onSettingsChange={onSettingsChange}
         />
@@ -2192,6 +2395,20 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
                         </span>
                       ) : null}
                     </>
+                  ) : desktopWindow.appKey === 'terminal' ? (
+                    <>
+                      <span className="desktop-window-kicker">{appLabel}</span>
+                      {desktopWindow.chromeTitle ? (
+                        <strong title={desktopWindow.chromeTitle}>
+                          {desktopWindow.chromeTitle}
+                        </strong>
+                      ) : null}
+                      {desktopWindow.chromeStatus ? (
+                        <span className={`desktop-window-state-pill ${desktopWindow.chromeTone || 'idle'}`}>
+                          {desktopWindow.chromeStatus}
+                        </span>
+                      ) : null}
+                    </>
                   ) : (
                     <strong>{appLabel}</strong>
                   )}
@@ -2219,6 +2436,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
                           x: Math.max(menuEdgePadding, Math.min(buttonRect.right - menuWidth, window.innerWidth - menuWidth - menuEdgePadding)),
                           y: buttonRect.bottom + 5,
                         });
+                        void refreshTmuxSessions();
                       }}
                     >
                       <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
@@ -2721,6 +2939,60 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
           <button type="button" role="menuitem" onClick={() => requestTerminalTool(terminalTitlebarMenuWindow.id, 'clear')}>
             {t('terminal.titlebar.clear', settings.language)}
           </button>
+          {connection.host.systemType !== 'windows' ? (
+            <div className="context-menu-item-has-submenu terminal-titlebar-tmux-menu">
+              <button type="button" role="menuitem" aria-haspopup="menu">
+                {t('terminal.tmux.menu', settings.language)}
+              </button>
+              <div className="context-submenu terminal-titlebar-tmux-submenu" role="menu" aria-label={t('terminal.tmux.menu', settings.language)}>
+                <button type="button" role="menuitem" onClick={openNewTmuxTerminal}>
+                  {t('terminal.tmux.newSession', settings.language)}
+                </button>
+                <button type="button" role="menuitem" onClick={(event) => {
+                  event.stopPropagation();
+                  void refreshTmuxSessions();
+                }}>
+                  {t('terminal.tmux.refresh', settings.language)}
+                </button>
+                <div className="context-menu-sep" />
+                {tmuxMenuState.status === 'loading' ? (
+                  <button type="button" role="menuitem" disabled>
+                    {t('terminal.tmux.loading', settings.language)}
+                  </button>
+                ) : null}
+                {tmuxMenuState.status === 'error' ? (
+                  <button type="button" role="menuitem" className="terminal-titlebar-tmux-message" disabled title={tmuxMenuState.error}>
+                    {tmuxMenuState.error || t('terminal.tmux.notInstalled', settings.language)}
+                  </button>
+                ) : null}
+                {tmuxMenuState.status === 'ready' && tmuxMenuState.sessions.length === 0 ? (
+                  <button type="button" role="menuitem" disabled>
+                    {t('terminal.tmux.empty', settings.language)}
+                  </button>
+                ) : null}
+                {tmuxMenuState.sessions.map((session) => (
+                  <button
+                    key={session.name}
+                    type="button"
+                    role="menuitem"
+                    className="terminal-titlebar-tmux-session-button"
+                    title={t('terminal.tmux.attachSession', settings.language, { name: session.name })}
+                    onClick={() => openTmuxTerminal(session.name, 'attach')}
+                  >
+                    <span className="terminal-titlebar-tmux-session-text">
+                      <strong>{session.name}</strong>
+                      <small>
+                        {t('terminal.tmux.sessionMeta', settings.language, {
+                          windows: String(session.windows),
+                          attached: String(session.attached),
+                        })}
+                      </small>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {(settings.terminalSnippets ?? []).length ? (
             <div className="context-menu-item-has-submenu terminal-titlebar-snippets-menu">
               <button type="button" role="menuitem" aria-haspopup="menu">

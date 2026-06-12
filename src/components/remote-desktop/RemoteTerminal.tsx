@@ -35,6 +35,7 @@ export interface RemoteTerminalLaunchOptions {
   shell?: string;
   initialCommand?: string;
   workingDirectory?: string;
+  mode?: 'tmux';
 }
 
 export interface RemoteTerminalChromePayload {
@@ -124,6 +125,8 @@ interface TerminalSearchResultState {
   index: number;
   count: number;
 }
+
+type TerminalLaunchDraft = Required<Omit<RemoteTerminalLaunchOptions, 'mode'>>;
 
 const outputSummaryLimit = 1200;
 const terminalSearchOptions: ISearchOptions = {
@@ -801,7 +804,7 @@ function RemoteTerminal({
   const [contextMenu, setContextMenu] = useState<TerminalContextMenuState | null>(null);
   const [isLaunchDialogOpen, setIsLaunchDialogOpen] = useState(false);
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
-  const [launchDraft, setLaunchDraft] = useState<Required<RemoteTerminalLaunchOptions>>({
+  const [launchDraft, setLaunchDraft] = useState<TerminalLaunchDraft>({
     title: '',
     shell: '',
     initialCommand: '',
