@@ -1,9 +1,36 @@
 import { type FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import {
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Code,
+  FileText,
+  Folder,
+  KeyRound,
+  LayoutGrid,
+  LayoutList,
+  Monitor,
+  MoreHorizontal,
+  Network,
+  PanelRightOpen,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Search,
+  Server,
+  Settings as SettingsIcon,
+  ShieldCheck,
+  Terminal,
+  Trash2,
+} from 'lucide-react';
 
 import appIconUrl from './assets/images/icon.png';
 import DismissibleAlert from './components/DismissibleAlert';
-import NavIcon, { type NavIconName } from './components/navigation/NavIcon';
+import type { NavIconName } from './components/navigation/NavIcon';
 import type { RemoteConnectionInfo } from './components/remote-desktop/types';
 import { buildFontStack } from './fontUtils';
 import { getAppLocale, getCurrentAppLanguage, getSystemLanguage, loadFullMessageCatalog, preloadFullMessageCatalog, t, useShellDeskI18n, type AppLanguage, type MessageId } from './i18n';
@@ -27,8 +54,10 @@ const hostsStorageKey = 'shelldesk:hosts';
 const terminalSnippetsStorageKey = 'shelldesk:terminal-snippets';
 const hostGroupPanelCollapsedStorageKey = 'shelldesk:host-groups-collapsed';
 const hostListSortModeStorageKey = 'shelldesk:host-list-sort-mode';
+const themePreloadStorageKey = 'shelldesk:theme-preload';
 const dismissedUpdateReadyVersionStorageKey = 'shelldesk:update-ready-dismissed-version';
 const ungroupedKey = '__ungrouped__';
+const hostPageSize = 20;
 const remoteDesktopAppCatalogVersion = 4;
 const remoteDesktopAppCatalogMigrationKeys: ShellDeskDesktopAppKey[] = [
   'git-manager',
@@ -88,8 +117,8 @@ const defaultAppSettings: ShellDeskAppSettings = {
   language: defaultAppLanguage,
   interfaceFont: 'Microsoft YaHei UI',
   theme: 'dark',
-  accentColor: '#43c7ff',
-  defaultHostView: 'grid',
+  accentColor: '#0f6bff',
+  defaultHostView: 'list',
   minimizeToTrayOnClose: true,
   desktopWallpaperMode: 'preset',
   desktopWallpaperPresetId: 'default',
@@ -128,7 +157,49 @@ const defaultAppSettings: ShellDeskAppSettings = {
   terminalSnippets: createDefaultTerminalSnippets(defaultAppLanguage),
 };
 
+function isAppTheme(value: unknown): value is ShellDeskAppSettings['theme'] {
+  return value === 'light' || value === 'dark' || value === 'system';
+}
+
+function readPreloadThemePreference(): ShellDeskAppSettings['theme'] | null {
+  try {
+    const queryTheme = new URLSearchParams(window.location.search).get('shelldeskTheme');
+
+    if (isAppTheme(queryTheme)) {
+      return queryTheme;
+    }
+  } catch {
+    // Ignore URL parsing failures.
+  }
+
+  try {
+    const storedTheme = window.localStorage.getItem(themePreloadStorageKey);
+
+    if (!storedTheme) {
+      return null;
+    }
+
+    if (isAppTheme(storedTheme)) {
+      return storedTheme;
+    }
+
+    const parsedTheme = JSON.parse(storedTheme) as { theme?: unknown };
+
+    return isAppTheme(parsedTheme.theme) ? parsedTheme.theme : null;
+  } catch {
+    return null;
+  }
+}
+
+function createInitialAppSettings(): ShellDeskAppSettings {
+  return {
+    ...defaultAppSettings,
+    theme: readPreloadThemePreference() ?? defaultAppSettings.theme,
+  };
+}
+
 type AppPage = 'hosts' | 'keys' | 'snippets' | 'proxies' | 'known-hosts' | 'logs' | 'settings';
+type HostViewMode = ShellDeskAppSettings['defaultHostView'];
 type HostListSortMode = 'createdDesc' | 'createdAsc' | 'updatedDesc' | 'updatedAsc' | 'nameAsc' | 'nameDesc' | 'addressAsc';
 type SyncNotice = Pick<
   ShellDeskSyncResult,
@@ -169,13 +240,22 @@ type HostSystemType =
   | 'linux'
   | 'unix';
 
-const navigationItems: ReadonlyArray<{ page: Exclude<AppPage, 'settings'>; icon: NavIconName; labelId: MessageId }> = [
-  { page: 'hosts', icon: 'hosts', labelId: 'app.nav.hosts' },
-  { page: 'keys', icon: 'keys', labelId: 'app.nav.keys' },
-  { page: 'snippets', icon: 'snippets', labelId: 'app.nav.snippets' },
-  { page: 'proxies', icon: 'proxies', labelId: 'app.nav.proxies' },
-  { page: 'known-hosts', icon: 'known-hosts', labelId: 'app.nav.knownHosts' },
-  { page: 'logs', icon: 'logs', labelId: 'app.nav.logs' },
+type ShellDeskNavIconName = NavIconName;
+
+type NavigationItem = {
+  key: 'hosts' | 'snippets' | 'known-hosts' | 'keys' | 'proxies' | 'logs';
+  page: Extract<AppPage, 'hosts' | 'snippets' | 'known-hosts' | 'keys' | 'proxies' | 'logs'>;
+  icon: ShellDeskNavIconName;
+  label: Record<AppLanguage, string>;
+};
+
+const navigationItems: ReadonlyArray<NavigationItem> = [
+  { key: 'hosts', page: 'hosts', icon: 'hosts', label: { 'zh-CN': '主机', 'en-US': 'Hosts' } },
+  { key: 'snippets', page: 'snippets', icon: 'snippets', label: { 'zh-CN': '代码片段', 'en-US': 'Snippets' } },
+  { key: 'keys', page: 'keys', icon: 'keys', label: { 'zh-CN': '密钥对', 'en-US': 'Key pairs' } },
+  { key: 'known-hosts', page: 'known-hosts', icon: 'known-hosts', label: { 'zh-CN': '已知主机', 'en-US': 'Known hosts' } },
+  { key: 'proxies', page: 'proxies', icon: 'proxies', label: { 'zh-CN': '代理', 'en-US': 'Proxies' } },
+  { key: 'logs', page: 'logs', icon: 'logs', label: { 'zh-CN': '日志', 'en-US': 'Logs' } },
 ];
 
 const hostListSortModes: ReadonlyArray<HostListSortMode> = [
@@ -448,7 +528,11 @@ function HostSystemIcon({ systemName, systemType }: { systemName: string; system
 
   return (
     <span className={`host-avatar host-system-icon host-system-${effectiveSystemType}`} title={label} aria-label={label}>
-      <img src={hostSystemIconUrls[effectiveSystemType]} alt="" draggable={false} />
+      {effectiveSystemType === 'unknown' ? (
+        <Server aria-hidden="true" />
+      ) : (
+        <img src={hostSystemIconUrls[effectiveSystemType]} alt="" draggable={false} />
+      )}
     </span>
   );
 }
@@ -485,6 +569,34 @@ function HostGroupIcon() {
       <circle cx="16.35" cy="14.95" r="1.15" fill="currentColor" />
     </svg>
   );
+}
+
+function ShellDeskNavIcon({ name }: { name: ShellDeskNavIconName }) {
+  if (name === 'hosts') {
+    return <Monitor aria-hidden="true" />;
+  }
+
+  if (name === 'keys') {
+    return <KeyRound aria-hidden="true" />;
+  }
+
+  if (name === 'snippets') {
+    return <Code aria-hidden="true" />;
+  }
+
+  if (name === 'proxies') {
+    return <Network aria-hidden="true" />;
+  }
+
+  if (name === 'known-hosts') {
+    return <ShieldCheck aria-hidden="true" />;
+  }
+
+  if (name === 'logs') {
+    return <FileText aria-hidden="true" />;
+  }
+
+  return <SettingsIcon aria-hidden="true" />;
 }
 
 interface SshKey {
@@ -884,6 +996,50 @@ function formatHostInfoTime(value: string, language: ShellDeskAppSettings['langu
   }
 
   return new Date(timestamp).toLocaleString(getAppLocale(language));
+}
+
+function formatRelativeTime(value: string, language: ShellDeskAppSettings['language']) {
+  const timestamp = Date.parse(value);
+
+  if (!Number.isFinite(timestamp)) {
+    return language === 'zh-CN' ? '从未连接' : 'Never';
+  }
+
+  const diffSeconds = (timestamp - Date.now()) / 1000;
+  const absSeconds = Math.abs(diffSeconds);
+  const thresholds: ReadonlyArray<{ unit: Intl.RelativeTimeFormatUnit; seconds: number }> = [
+    { unit: 'year', seconds: 60 * 60 * 24 * 365 },
+    { unit: 'month', seconds: 60 * 60 * 24 * 30 },
+    { unit: 'day', seconds: 60 * 60 * 24 },
+    { unit: 'hour', seconds: 60 * 60 },
+    { unit: 'minute', seconds: 60 },
+  ];
+  const match = thresholds.find((item) => absSeconds >= item.seconds) ?? { unit: 'second' as const, seconds: 1 };
+  const valueForUnit = Math.round(diffSeconds / match.seconds);
+
+  return new Intl.RelativeTimeFormat(getAppLocale(language), { numeric: 'auto' }).format(valueForUnit, match.unit);
+}
+
+function getHostInfoItemValue(host: Pick<Host, 'hostInfo'>, key: string) {
+  return host.hostInfo?.items.find((item) => item.key === key)?.value.trim() ?? '';
+}
+
+function getFirstHostInfoLine(value: string) {
+  const prettyNameMatch = /^PRETTY_NAME=(?<name>.+)$/m.exec(value);
+
+  if (prettyNameMatch?.groups?.name) {
+    return prettyNameMatch.groups.name.replace(/^["']|["']$/g, '').trim();
+  }
+
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean) ?? '';
+}
+
+function getHostDetailValue(host: Host, key: string, fallback: string) {
+  const value = getFirstHostInfoLine(getHostInfoItemValue(host, key));
+  return value || fallback;
 }
 
 function createHostInfoSnapshot(
@@ -1720,10 +1876,13 @@ function App() {
   const [keyEditorMode, setKeyEditorMode] = useState<KeyEditorMode>('import');
   const [activePage, setActivePage] = useState<AppPage>('hosts');
   const [searchQuery, setSearchQuery] = useState('');
+  const [quickConnectInput, setQuickConnectInput] = useState('');
   const [keySearchQuery, setKeySearchQuery] = useState('');
   const [activeGroupKey, setActiveGroupKey] = useState<string | null>(null);
+  const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
   const [isHostGroupPanelCollapsed, setIsHostGroupPanelCollapsed] = useState(readHostGroupPanelCollapsed);
   const [hostListSortMode, setHostListSortMode] = useState<HostListSortMode>(readHostListSortMode);
+  const [hostPage, setHostPage] = useState(1);
   const [formError, setFormError] = useState('');
   const [keyFormError, setKeyFormError] = useState('');
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -1733,12 +1892,14 @@ function App() {
       return initialPublicSnapshot.settings;
     }
 
+    const initialSettings = createInitialAppSettings();
+
     if (window.guiSSH?.vault) {
-      return defaultAppSettings;
+      return initialSettings;
     }
 
     return {
-      ...defaultAppSettings,
+      ...initialSettings,
       terminalSnippets: readStoredTerminalSnippets(defaultAppSettings.terminalSnippets),
     };
   });
@@ -1794,6 +1955,7 @@ function App() {
   const vaultControls = window.guiSSH?.vault;
   const appLanguage = settings.language;
   const appLocale = getAppLocale(appLanguage);
+  const hostViewMode: HostViewMode = settings.defaultHostView === 'grid' ? 'grid' : 'list';
   const isMacOS = platform === 'darwin';
   const showWindowControls = Boolean(windowControls) && !isMacOS;
   const isConnectionWindow = Boolean(windowConnectionId);
@@ -1871,6 +2033,22 @@ function App() {
       return matchesGroup && matchesQuery;
     }).sort((left, right) => compareHostsByHostListSortMode(left, right, hostListSortMode, appLocale));
   }, [activeGroupKey, appLanguage, appLocale, hostById, hostListSortMode, hosts, proxyProfileById, searchQuery, sshKeyById]);
+  const hostPageCount = Math.max(1, Math.ceil(filteredHosts.length / hostPageSize));
+  const currentHostPage = Math.min(hostPage, hostPageCount);
+  const pagedHosts = useMemo(() => {
+    const pageStart = (currentHostPage - 1) * hostPageSize;
+
+    return filteredHosts.slice(pageStart, pageStart + hostPageSize);
+  }, [currentHostPage, filteredHosts]);
+  const hostPageNumbers = useMemo(() => {
+    const visibleCount = Math.min(hostPageCount, 5);
+    const startPage = Math.min(
+      Math.max(1, currentHostPage - Math.floor(visibleCount / 2)),
+      Math.max(1, hostPageCount - visibleCount + 1),
+    );
+
+    return Array.from({ length: visibleCount }, (_, index) => startPage + index);
+  }, [currentHostPage, hostPageCount]);
 
   const filteredKeys = useMemo(() => {
     const query = keySearchQuery.trim().toLowerCase();
@@ -1885,6 +2063,23 @@ function App() {
   }, [keySearchQuery, sshKeys]);
 
   const activeGroupName = hostGroups.find((group) => group.key === activeGroupKey)?.name;
+  const selectedHost = useMemo(() => {
+    if (selectedHostId) {
+      const visibleHost = filteredHosts.find((host) => host.id === selectedHostId);
+
+      if (visibleHost) {
+        return visibleHost;
+      }
+
+      const storedHost = hosts.find((host) => host.id === selectedHostId);
+
+      if (storedHost && !searchQuery.trim()) {
+        return storedHost;
+      }
+    }
+
+    return null;
+  }, [filteredHosts, hosts, searchQuery, selectedHostId]);
   const hostInfoDialogHost = hostInfoDialogHostId
     ? hosts.find((host) => host.id === hostInfoDialogHostId) ?? null
     : null;
@@ -2411,6 +2606,16 @@ function App() {
   }, [hostListSortMode]);
 
   useEffect(() => {
+    setHostPage(1);
+  }, [activeGroupKey, hostListSortMode, hostViewMode, searchQuery]);
+
+  useEffect(() => {
+    if (hostPage > hostPageCount) {
+      setHostPage(hostPageCount);
+    }
+  }, [hostPage, hostPageCount]);
+
+  useEffect(() => {
     const logsControls = window.guiSSH?.logs;
 
     if (!logsControls || !isVaultReady || isConnectionWindow) {
@@ -2434,7 +2639,7 @@ function App() {
     const closeOpenHostCardMenus = (target: EventTarget | null) => {
       const targetNode = target instanceof Node ? target : null;
 
-      document.querySelectorAll<HTMLDetailsElement>('details.host-card-menu[open]').forEach((menu) => {
+      document.querySelectorAll<HTMLDetailsElement>('details.host-card-menu[open], details.host-group-select-menu[open], details.toolbar-more-menu[open]').forEach((menu) => {
         if (targetNode && menu.contains(targetNode)) {
           return;
         }
@@ -2543,19 +2748,19 @@ function App() {
     root.style.setProperty('--accent', accentColor);
     root.style.setProperty('--accent-strong', accentColor);
     root.style.setProperty('--accent-contrast', accentContrast);
-    root.style.setProperty('--bg', isLightTheme ? '#e7edf5' : '#0e131c');
-    root.style.setProperty('--chrome', isLightTheme ? '#dfe7f1' : '#22272f');
-    root.style.setProperty('--sidebar', isLightTheme ? '#dde6f0' : '#22272f');
-    root.style.setProperty('--sidebar-active', isLightTheme ? '#ccd8e6' : '#3a3f49');
-    root.style.setProperty('--surface', isLightTheme ? '#f8fafc' : '#111722');
-    root.style.setProperty('--surface-soft', isLightTheme ? '#eef3f8' : '#151b26');
-    root.style.setProperty('--surface-strong', isLightTheme ? '#dfe7f1' : '#202631');
-    root.style.setProperty('--surface-elevated', isLightTheme ? '#edf2f7' : '#111722');
-    root.style.setProperty('--surface-input', isLightTheme ? '#f8fafc' : '#202631');
-    root.style.setProperty('--surface-control', isLightTheme ? '#e4ebf4' : '#151b25');
-    root.style.setProperty('--surface-hover', isLightTheme ? '#e5edf6' : 'rgba(255, 255, 255, 0.06)');
-    root.style.setProperty('--surface-icon', isLightTheme ? '#d2e1f1' : '#143149');
-    root.style.setProperty('--surface-panel', isLightTheme ? '#f2f6fb' : 'rgba(17, 23, 34, 0.98)');
+    root.style.setProperty('--bg', isLightTheme ? '#f5f7fb' : '#0e131c');
+    root.style.setProperty('--chrome', isLightTheme ? '#fbfcfe' : '#22272f');
+    root.style.setProperty('--sidebar', isLightTheme ? '#f6f8fb' : '#22272f');
+    root.style.setProperty('--sidebar-active', isLightTheme ? '#e8f1ff' : '#3a3f49');
+    root.style.setProperty('--surface', isLightTheme ? '#ffffff' : '#111722');
+    root.style.setProperty('--surface-soft', isLightTheme ? '#f2f6fb' : '#151b26');
+    root.style.setProperty('--surface-strong', isLightTheme ? '#e8eef6' : '#202631');
+    root.style.setProperty('--surface-elevated', isLightTheme ? '#fbfcfe' : '#111722');
+    root.style.setProperty('--surface-input', isLightTheme ? '#ffffff' : '#202631');
+    root.style.setProperty('--surface-control', isLightTheme ? '#ffffff' : '#151b25');
+    root.style.setProperty('--surface-hover', isLightTheme ? '#edf4ff' : 'rgba(255, 255, 255, 0.06)');
+    root.style.setProperty('--surface-icon', isLightTheme ? '#edf4ff' : '#143149');
+    root.style.setProperty('--surface-panel', isLightTheme ? '#ffffff' : 'rgba(17, 23, 34, 0.98)');
     root.style.setProperty('--surface-empty', isLightTheme ? 'rgba(16, 32, 51, 0.035)' : 'rgba(255, 255, 255, 0.035)');
     root.style.setProperty('--surface-pill', isLightTheme ? '#d2dce8' : '#171d28');
     root.style.setProperty('--surface-success-soft', isLightTheme ? 'rgba(34, 160, 90, 0.08)' : 'rgba(119, 244, 197, 0.08)');
@@ -2563,15 +2768,15 @@ function App() {
     root.style.setProperty('--text-success', isLightTheme ? '#1a8a55' : '#d8fff1');
     root.style.setProperty('--toast-bg', isLightTheme ? 'rgba(241, 246, 251, 0.96)' : 'rgba(17, 23, 34, 0.94)');
     root.style.setProperty('--toast-text', isLightTheme ? '#1a6d94' : '#d8f4ff');
-    root.style.setProperty('--text', isLightTheme ? '#18263a' : '#f4f7fb');
-    root.style.setProperty('--muted', isLightTheme ? '#627890' : '#939cab');
-    root.style.setProperty('--muted-strong', isLightTheme ? '#415874' : '#c3cad5');
-    root.style.setProperty('--text-secondary', isLightTheme ? '#657489' : '#aeb7c6');
-    root.style.setProperty('--text-muted', isLightTheme ? '#7b8797' : '#778292');
-    root.style.setProperty('--border', isLightTheme ? 'rgba(20, 42, 68, 0.14)' : 'rgba(178, 188, 205, 0.13)');
-    root.style.setProperty('--border-strong', isLightTheme ? 'rgba(20, 42, 68, 0.22)' : 'rgba(178, 188, 205, 0.24)');
-    root.style.setProperty('--window-border', isLightTheme ? 'rgba(20, 42, 68, 0.1)' : 'rgba(178, 188, 205, 0.18)');
-    root.style.setProperty('--window-divider', isLightTheme ? 'rgba(20, 42, 68, 0.1)' : 'rgba(178, 188, 205, 0.12)');
+    root.style.setProperty('--text', isLightTheme ? '#172033' : '#f4f7fb');
+    root.style.setProperty('--muted', isLightTheme ? '#76859a' : '#939cab');
+    root.style.setProperty('--muted-strong', isLightTheme ? '#394b63' : '#c3cad5');
+    root.style.setProperty('--text-secondary', isLightTheme ? '#5c6d84' : '#aeb7c6');
+    root.style.setProperty('--text-muted', isLightTheme ? '#8190a4' : '#778292');
+    root.style.setProperty('--border', isLightTheme ? 'rgba(24, 39, 60, 0.13)' : 'rgba(178, 188, 205, 0.13)');
+    root.style.setProperty('--border-strong', isLightTheme ? 'rgba(24, 39, 60, 0.2)' : 'rgba(178, 188, 205, 0.24)');
+    root.style.setProperty('--window-border', isLightTheme ? 'rgba(24, 39, 60, 0.1)' : 'rgba(178, 188, 205, 0.18)');
+    root.style.setProperty('--window-divider', isLightTheme ? 'rgba(24, 39, 60, 0.1)' : 'rgba(178, 188, 205, 0.12)');
     root.style.setProperty('--chrome-hover', isLightTheme ? 'rgba(20, 42, 68, 0.06)' : 'rgba(255, 255, 255, 0.08)');
     root.style.setProperty('--danger-hover-bg', isLightTheme ? 'rgba(200, 48, 78, 0.12)' : 'rgba(255, 111, 143, 0.18)');
     root.style.setProperty('--danger-hover-text', isLightTheme ? '#d63a5e' : '#ffd8e1');
@@ -2591,6 +2796,11 @@ function App() {
     root.style.setProperty('--toggle-off', isLightTheme ? '#c3cedb' : '#232b3b');
     root.style.colorScheme = isLightTheme ? 'light' : 'dark';
     root.setAttribute('data-theme', effectiveTheme);
+    try {
+      window.localStorage.setItem(themePreloadStorageKey, settings.theme);
+    } catch {
+      // Ignore localStorage write failures in restricted environments.
+    }
     const interfaceFontFamily = buildFontStack(settings.interfaceFont, [
       'Microsoft YaHei UI',
       'Microsoft YaHei',
@@ -3374,6 +3584,14 @@ function App() {
     }
   };
 
+  const closeNearestDetailsMenu = (trigger: HTMLElement | null) => {
+    const details = trigger?.closest('details');
+
+    if (details instanceof HTMLDetailsElement) {
+      details.open = false;
+    }
+  };
+
   const openHostInfoDialog = (host: Host) => {
     setHostInfoDialogHostId(host.id);
   };
@@ -3602,7 +3820,7 @@ function App() {
       return;
     }
 
-    const parsedCommand = parseQuickConnectCommand(searchQuery);
+    const parsedCommand = parseQuickConnectCommand(quickConnectInput);
 
     if (!parsedCommand) {
       setStatusMessage(t('app.connection.invalidSshCommand', appLanguage));
@@ -3677,13 +3895,58 @@ function App() {
     await connectHost(credentialHost, credentialForm, 'credential');
   };
 
-  const clearFilters = () => {
-    setActiveGroupKey(null);
-    setSearchQuery('');
-  };
-
   const toggleHostGroupPanel = () => {
     setIsHostGroupPanelCollapsed((current) => !current);
+  };
+
+  const openNavigationItem = (item: NavigationItem) => {
+    if (item.key === 'hosts') {
+      setActivePage('hosts');
+      setIsHostGroupPanelCollapsed(true);
+      return;
+    }
+
+    setActivePage(item.page);
+    preloadFullMessageCatalog();
+  };
+
+  const isNavigationItemActive = (item: NavigationItem) => {
+    if (item.key === 'hosts') {
+      return activePage === 'hosts';
+    }
+
+    return activePage === item.page;
+  };
+
+  const openUtilityPage = (page: AppPage) => {
+    setActivePage(page);
+    preloadFullMessageCatalog();
+  };
+
+  const selectHostGroup = (groupKey: string | null) => {
+    setActivePage('hosts');
+    setIsHostGroupPanelCollapsed(false);
+    setActiveGroupKey(groupKey);
+  };
+
+  const updateHostViewMode = (viewMode: HostViewMode) => {
+    if (settingsRef.current.defaultHostView === viewMode) {
+      return;
+    }
+
+    const nextSettings: ShellDeskAppSettings = {
+      ...settingsRef.current,
+      defaultHostView: viewMode,
+    };
+
+    commitCollectionsState(hostsRef.current, sshKeysRef.current, nextSettings);
+    setStatusMessage(viewMode === 'grid'
+      ? (appLanguage === 'zh-CN' ? '已切换到卡片模式' : 'Switched to card view')
+      : (appLanguage === 'zh-CN' ? '已切换到列表模式' : 'Switched to list view'));
+  };
+
+  const goToHostPage = (page: number) => {
+    setHostPage(Math.min(Math.max(1, page), hostPageCount));
   };
 
   const exportConfig = async () => {
@@ -3837,7 +4100,7 @@ function App() {
   return (
     <div className={isMacOS ? 'app-shell app-shell-macos' : 'app-shell'}>
       <header className="top-chrome drag-region">
-        <div className="workspace-title">
+        <div className={`workspace-title ${connection ? 'has-connection' : 'app-only'}`} aria-label={connection ? undefined : 'ShellDesk'}>
           <img className="app-window-icon" src={appIconUrl} alt="" />
           {connection ? (
             <>
@@ -3849,9 +4112,7 @@ function App() {
                 <span>SOCKS :{connection.proxyPort}</span>
               )}
             </>
-          ) : (
-            'ShellDesk'
-          )}
+          ) : null}
         </div>
 
         {showWindowControls ? (
@@ -4111,15 +4372,15 @@ function App() {
           <nav className="feature-nav" aria-label={t('app.nav.feature', appLanguage)}>
             {navigationItems.map((item) => (
               <button
-                key={item.page}
+                key={item.key}
                 type="button"
-                className={`feature-nav-item ${activePage === item.page ? 'active' : ''}`}
-                onClick={() => setActivePage(item.page)}
-                onFocus={item.page === 'hosts' ? undefined : preloadFullMessageCatalog}
-                onMouseEnter={item.page === 'hosts' ? undefined : preloadFullMessageCatalog}
+                className={`feature-nav-item ${isNavigationItemActive(item) ? 'active' : ''}`}
+                onClick={() => openNavigationItem(item)}
+                onFocus={item.key === 'hosts' ? undefined : preloadFullMessageCatalog}
+                onMouseEnter={item.key === 'hosts' ? undefined : preloadFullMessageCatalog}
               >
-                <span className="nav-icon"><NavIcon name={item.icon} /></span>
-                {t(item.labelId, appLanguage)}
+                <span className="nav-icon"><ShellDeskNavIcon name={item.icon} /></span>
+                {item.label[appLanguage]}
               </button>
             ))}
           </nav>
@@ -4132,259 +4393,491 @@ function App() {
             onMouseEnter={preloadFullMessageCatalog}
             title={syncConflictBadgeLabel || undefined}
           >
-            <span className="nav-icon"><NavIcon name="settings" /></span>
+            <span className="nav-icon"><ShellDeskNavIcon name="settings" /></span>
             {t('app.nav.settings', appLanguage)}
             {syncConflictCount ? <span className="settings-sync-dot" aria-label={syncConflictBadgeLabel} /> : null}
           </button>
+
         </aside>
 
         <main className="vault-page">
           {activePage === 'hosts' ? (
             <>
-          <div className="command-bar no-drag">
-            <label className="global-search">
-              <span className="search-icon" aria-hidden="true">⌕</span>
-              <input
-                type="search"
-                placeholder={t('app.host.search.placeholder', appLanguage)}
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    void connectCommandBarInput();
-                  }
-                }}
-              />
-              <kbd>Ctrl + K</kbd>
-            </label>
+              <div className="command-bar quick-command-bar no-drag">
+                <label className="quick-connect-field">
+                  <Terminal aria-hidden="true" />
+                  <input
+                    type="text"
+                    placeholder="ssh user@host -p 22 -i ~/.ssh/id_rsa"
+                    value={quickConnectInput}
+                    onChange={(event) => setQuickConnectInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        void connectCommandBarInput();
+                      }
+                    }}
+                  />
+                </label>
 
-            <button type="button" className="command-button" onClick={connectCommandBarInput} disabled={isConnectionPending}>
-              {isQuickConnecting ? t('app.host.connectingButton', appLanguage) : t('app.host.connectButton', appLanguage)}
-            </button>
+                <button type="button" className="primary-action quick-connect-button" onClick={() => void connectCommandBarInput()} disabled={isConnectionPending}>
+                  {isQuickConnecting ? t('app.host.connectingButton', appLanguage) : t('app.host.connectButton', appLanguage)}
+                </button>
 
-            <button type="button" className="command-button local-mode-button" onClick={() => void openLocalDesktop()} disabled={isConnectionPending}>
-              {isLocalOpening ? t('app.host.localOpeningButton', appLanguage) : t('app.host.localModeButton', appLanguage)}
-            </button>
-
-            <button type="button" className="primary-action" onClick={openCreateHost}>{t('app.host.new', appLanguage)}</button>
-          </div>
-
-          <section className={`vault-content hosts-content ${isHostGroupPanelCollapsed ? 'groups-collapsed' : ''}`}>
-            <aside
-              id="hosts-group-panel"
-              className="hosts-group-panel"
-              aria-label={t('app.host.groups.aria', appLanguage)}
-              aria-hidden={isHostGroupPanelCollapsed}
-              inert={isHostGroupPanelCollapsed ? true : undefined}
-            >
-              <button type="button" className={`filter-tab all-hosts-filter ${!activeGroupKey && !searchQuery ? 'active' : ''}`} onClick={clearFilters}>
-                <span>{t('app.host.all', appLanguage)}</span>
-                <b>{hosts.length}</b>
-              </button>
-
-              <div className="section-heading group-panel-heading">
-                <h2>{t('app.host.group.title', appLanguage)}</h2>
-                <button type="button" className="group-add-button" onClick={openCreateHost} aria-label={t('app.host.new', appLanguage)}>
-                  +
+                <button
+                  type="button"
+                  className="command-button local-connect-button"
+                  onClick={() => void openLocalDesktop()}
+                  disabled={isConnectionPending}
+                >
+                  <Monitor aria-hidden="true" />
+                  {isLocalOpening ? t('app.host.localOpeningButton', appLanguage) : (appLanguage === 'zh-CN' ? '本地连接' : 'Local connection')}
                 </button>
               </div>
 
-              {!isVaultReady ? (
-                <div className="empty-inline">{t('app.host.groupsLoading', appLanguage)}</div>
-              ) : hostGroups.length ? (
-                <div className="group-grid group-list">
-                  {hostGroups.map((group) => (
-                    <button
-                      key={group.key}
-                      type="button"
-                      className={`group-card ${activeGroupKey === group.key ? 'active' : ''}`}
-                      onClick={() => setActiveGroupKey(group.key)}
-                    >
-                      <span className="group-icon" aria-hidden="true"><HostGroupIcon /></span>
-                      <strong>{group.name}</strong>
-                      <small>{group.count}</small>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <div className="empty-inline">{t('app.host.groupsEmpty', appLanguage)}</div>
-              )}
-            </aside>
+              <section className="vault-content hosts-content hosts-workbench">
+                <section className="hosts-table-area" aria-label={t('app.host.all', appLanguage)}>
+                  <div className="hosts-list-controls">
+                    <div className="hosts-list-toolbar">
+                      <label className="host-search-field">
+                        <Search aria-hidden="true" />
+                        <input
+                          type="search"
+                          placeholder={appLanguage === 'zh-CN' ? '搜索主机名称、IP 或标签' : 'Search host name, IP, or tags'}
+                          value={searchQuery}
+                          onChange={(event) => setSearchQuery(event.target.value)}
+                        />
+                      </label>
 
-            <section className="vault-section host-section hosts-list-panel">
-              <div className="section-heading host-list-heading">
-                <div className="host-list-title">
-                  <button
-                    type="button"
-                    className={`group-panel-toggle-button ${isHostGroupPanelCollapsed ? 'collapsed' : ''}`}
-                    onClick={toggleHostGroupPanel}
-                    aria-label={hostGroupToggleLabel}
-                    aria-expanded={!isHostGroupPanelCollapsed}
-                    aria-controls="hosts-group-panel"
-                    title={hostGroupToggleLabel}
-                  >
-                    <span aria-hidden="true">{isHostGroupPanelCollapsed ? '☰' : '‹'}</span>
-                  </button>
-                  <h2>{activeGroupName || t('app.host.all', appLanguage)} <b>{filteredHosts.length}</b></h2>
-                </div>
-                <span className="host-list-controls">
-                  {t('app.host.count', appLanguage, { count: String(filteredHosts.length) })}
-                  <label className="host-sort-control">
-                    <select
-                      value={hostListSortMode}
-                      onChange={(event) => setHostListSortMode(getHostListSortMode(event.target.value))}
-                      aria-label={t('app.host.sort.aria', appLanguage)}
-                    >
-                      {hostListSortModes.map((sortMode) => (
-                        <option key={sortMode} value={sortMode}>{t(hostListSortModeLabelIds[sortMode], appLanguage)}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <button type="button" className="host-refresh-button" onClick={() => void refreshHosts()} aria-label={t('app.host.refreshList', appLanguage)}>
-                    <span aria-hidden="true">↻</span>
-                  </button>
-                </span>
-              </div>
-
-              <div className="host-list-scroll">
-                {!isVaultReady ? (
-                  <div className="empty-state">
-                    <span>LOADING</span>
-                    <h3>{t('app.host.loadingTitle', appLanguage)}</h3>
-                    <p>{t('app.host.loadingDescription', appLanguage)}</p>
-                  </div>
-                ) : filteredHosts.length ? (
-                  <div className="host-grid grid">
-                    {filteredHosts.map((host) => {
-                      const connectionState = getHostConnectionStateView(host, appLanguage);
-                      const isHostConnecting = connectingHostId === host.id;
-                      const jumpHost = host.jumpHostId ? hostById.get(host.jumpHostId) ?? null : null;
-                      const proxyProfile = host.proxyProfileId ? proxyProfileById.get(host.proxyProfileId) ?? null : null;
-
-                      return (
-                        <article
-                          key={host.id}
-                          className={`host-card ${isHostConnecting ? 'connecting' : ''}`}
-                          aria-busy={isHostConnecting}
-                        >
+                      <details className="host-group-select-menu">
+                        <summary className="host-group-select" aria-label={t('app.host.group.title', appLanguage)}>
+                          <Folder aria-hidden="true" />
+                          <span>{activeGroupName ?? (appLanguage === 'zh-CN' ? '全部分组' : 'All groups')}</span>
+                          <ChevronDown aria-hidden="true" className="host-group-select-caret" />
+                        </summary>
+                        <div className="host-group-select-panel">
                           <button
                             type="button"
-                            className="host-card-main"
-                            title={t('app.host.openHint', appLanguage)}
-                            disabled={isConnectionPending}
-                            onDoubleClick={() => openHostFromList(host)}
+                            className={!activeGroupKey ? 'active' : ''}
+                            onClick={(event) => {
+                              setActiveGroupKey(null);
+                              closeNearestDetailsMenu(event.currentTarget);
+                            }}
                           >
-                            <HostSystemIcon systemName={getHostSystemLabel(host, appLanguage)} systemType={host.systemType} />
-                            <span className="host-summary">
-                              <strong>{host.name}</strong>
-                              <small>
-                                {jumpHost ? (
-                                  <span
-                                    className="host-jump-inline"
-                                    title={t('app.host.jumpVia', appLanguage, { host: jumpHost.name })}
-                                    aria-label={t('app.host.jumpVia', appLanguage, { host: jumpHost.name })}
-                                  >
-                                    ↪
-                                  </span>
-                                ) : null}
-                                {proxyProfile ? (
-                                  <span
-                                    className="host-jump-inline host-proxy-inline"
-                                    title={`${proxyProfile.label} · ${getProxyConfigEndpoint(proxyProfile.config)}`}
-                                    aria-label={`${proxyProfile.label} · ${getProxyConfigEndpoint(proxyProfile.config)}`}
-                                  >
-                                    ⤳
-                                  </span>
-                                ) : null}
-                                <span className="host-endpoint">{host.username ? `${host.username}@` : ''}{host.address}:{host.port}</span>
-                              </small>
-                              <span className="host-card-tags">
-                                {/* <em>SSH</em> */}
-                                {(host.authMethod === 'password' && host.password) || host.authMethod === 'key' ? (
-                                  <span className="credential-icon" title={host.authMethod === 'key' ? t('app.auth.keyLogin', appLanguage) : t('app.host.passwordSavedTitle', appLanguage)}>🔑</span>
-                                ) : null}
-                                {proxyProfile ? <em>{getProxyConfigTypeLabel(proxyProfile.config)}</em> : null}
-                                <em className={!host.group ? 'host-card-tag-placeholder' : undefined}>{host.group || t('app.host.group.ungrouped', appLanguage)}</em>
-                                <em className={!host.tags.length ? 'host-card-tag-placeholder' : undefined}>{host.tags.length ? host.tags.join(' / ') : t('app.host.noTags', appLanguage)}</em>
-                              </span>
-                            </span>
+                            {!activeGroupKey ? <Check aria-hidden="true" /> : <span className="toolbar-menu-spacer" aria-hidden="true" />}
+                            {appLanguage === 'zh-CN' ? '全部分组' : 'All groups'}
                           </button>
-                          {isHostConnecting ? (
-                            <div className="host-card-loading" role="status" aria-live="polite">
-                              <span className="host-card-spinner" aria-hidden="true" />
-                              <strong>{t('app.host.connecting', appLanguage)}</strong>
-                              <small>{host.username}@{host.address}:{host.port}</small>
-                            </div>
-                          ) : null}
-                          <span className="host-card-actions">
-                            <span
-                              className={`host-connection-state ${connectionState.className}`}
-                              title={connectionState.title}
-                              aria-label={connectionState.title}
+                          {hostGroups.map((group) => (
+                            <button
+                              key={group.key}
+                              type="button"
+                              className={activeGroupKey === group.key ? 'active' : ''}
+                              onClick={(event) => {
+                                setActiveGroupKey(group.key);
+                                closeNearestDetailsMenu(event.currentTarget);
+                              }}
                             >
-                              <i aria-hidden="true" />
-                              {connectionState.label}
-                            </span>
-                            <details className="host-card-menu" onClick={(event) => event.stopPropagation()}>
-                              <summary aria-label={t('app.host.actions', appLanguage)}>⋯</summary>
-                              <div className="host-card-menu-panel">
-                                <button
-                                  type="button"
-                                  disabled={isConnectionPending}
-                                  onClick={(event) => {
-                                    closeHostCardMenu(event.currentTarget);
-                                    openHostFromList(host);
-                                  }}
-                                >
-                                  {t('app.host.open', appLanguage)}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(event) => {
-                                    closeHostCardMenu(event.currentTarget);
-                                    openHostInfoDialog(host);
-                                  }}
-                                >
-                                  {t('app.host.info.menu', appLanguage)}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(event) => {
-                                    closeHostCardMenu(event.currentTarget);
-                                    startEditingHost(host);
-                                  }}
-                                >
-                                  {t('app.host.edit', appLanguage)}
-                                </button>
-                                <button
-                                  type="button"
-                                  className="danger-text"
-                                  onClick={(event) => {
-                                    closeHostCardMenu(event.currentTarget);
-                                    deleteHost(host);
-                                  }}
-                                >
-                                  {t('app.host.delete', appLanguage)}
-                                </button>
-                              </div>
-                            </details>
-                          </span>
-                        </article>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="empty-state">
-                    <span>EMPTY</span>
-                    <h3>{t(hosts.length ? 'app.host.emptyNoMatchesTitle' : 'app.host.emptyNoHostsTitle', appLanguage)}</h3>
-                    <p>{t(hosts.length ? 'app.host.emptyNoMatchesDescription' : 'app.host.emptyNoHostsDescription', appLanguage)}</p>
-                  </div>
-                )}
-              </div>
-            </section>
+                              {activeGroupKey === group.key ? <Check aria-hidden="true" /> : <span className="toolbar-menu-spacer" aria-hidden="true" />}
+                              {group.name}
+                            </button>
+                          ))}
+                        </div>
+                      </details>
 
-          </section>
+                      <span className="hosts-list-toolbar-spacer" />
+
+                      <div className="host-view-switch" role="group" aria-label={appLanguage === 'zh-CN' ? '主机视图切换' : 'Host view switch'}>
+                        <button
+                          type="button"
+                          className={hostViewMode === 'grid' ? 'active' : ''}
+                          aria-pressed={hostViewMode === 'grid'}
+                          title={appLanguage === 'zh-CN' ? '卡片模式' : 'Card view'}
+                          aria-label={appLanguage === 'zh-CN' ? '卡片模式' : 'Card view'}
+                          onClick={() => updateHostViewMode('grid')}
+                        >
+                          <LayoutGrid aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          className={hostViewMode === 'list' ? 'active' : ''}
+                          aria-pressed={hostViewMode === 'list'}
+                          title={appLanguage === 'zh-CN' ? '列表模式' : 'List view'}
+                          aria-label={appLanguage === 'zh-CN' ? '列表模式' : 'List view'}
+                          onClick={() => updateHostViewMode('list')}
+                        >
+                          <LayoutList aria-hidden="true" />
+                        </button>
+                      </div>
+
+                      <button type="button" className="toolbar-icon-button" onClick={() => void refreshHosts()} aria-label={t('app.host.refreshList', appLanguage)} title={t('app.host.refreshList', appLanguage)}>
+                        <RefreshCw aria-hidden="true" />
+                      </button>
+
+                      <button type="button" className="primary-action host-add-button" onClick={openCreateHost}>
+                        <Plus aria-hidden="true" />
+                        <span>{appLanguage === 'zh-CN' ? '添加主机' : 'Add host'}</span>
+                      </button>
+
+                      <details className="toolbar-more-menu">
+                        <summary className="toolbar-icon-button" aria-label={t('app.host.actions', appLanguage)}>
+                          <MoreHorizontal aria-hidden="true" />
+                        </summary>
+                        <div className="toolbar-menu-panel">
+                          {hostListSortModes.map((sortMode) => (
+                            <button
+                              key={sortMode}
+                              type="button"
+                              className={hostListSortMode === sortMode ? 'active' : ''}
+                              onClick={(event) => {
+                                setHostListSortMode(sortMode);
+                                closeNearestDetailsMenu(event.currentTarget);
+                              }}
+                            >
+                              {hostListSortMode === sortMode ? <Check aria-hidden="true" /> : <span className="toolbar-menu-spacer" aria-hidden="true" />}
+                              {t(hostListSortModeLabelIds[sortMode], appLanguage)}
+                            </button>
+                          ))}
+                        </div>
+                      </details>
+                    </div>
+
+                    {!isHostGroupPanelCollapsed ? (
+                      <div className="host-group-strip" aria-label={t('app.host.group.title', appLanguage)}>
+                        <button
+                          type="button"
+                          className={`host-group-pill ${activeGroupKey ? '' : 'active'}`}
+                          onClick={() => selectHostGroup(null)}
+                        >
+                          <Folder aria-hidden="true" />
+                          <span>{appLanguage === 'zh-CN' ? '全部主机' : 'All hosts'}</span>
+                          <b>{hosts.length}</b>
+                        </button>
+                        {hostGroups.map((group) => (
+                          <button
+                            key={group.key}
+                            type="button"
+                            className={`host-group-pill ${activeGroupKey === group.key ? 'active' : ''}`}
+                            onClick={() => selectHostGroup(group.key)}
+                          >
+                            <Folder aria-hidden="true" />
+                            <span>{group.name}</span>
+                            <b>{group.count}</b>
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          className="host-group-strip-close"
+                          onClick={toggleHostGroupPanel}
+                          aria-label={hostGroupToggleLabel}
+                          title={hostGroupToggleLabel}
+                        >
+                          <ChevronDown aria-hidden="true" />
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className={`host-table-frame ${hostViewMode === 'grid' ? 'card-mode' : 'table-mode'}`}>
+                    {!isVaultReady ? (
+                      <div className="empty-state">
+                        <span>LOADING</span>
+                        <h3>{t('app.host.loadingTitle', appLanguage)}</h3>
+                        <p>{t('app.host.loadingDescription', appLanguage)}</p>
+                      </div>
+                    ) : filteredHosts.length ? (
+                      <>
+                        {hostViewMode === 'grid' ? (
+                          <div className="host-card-scroll">
+                            <div className="host-card-grid" role="list">
+                              {pagedHosts.map((host) => {
+                                const connectionState = getHostConnectionStateView(host, appLanguage);
+                                const isHostConnecting = connectingHostId === host.id;
+                                const proxyProfile = host.proxyProfileId ? proxyProfileById.get(host.proxyProfileId) ?? null : null;
+                                const isSelected = selectedHost?.id === host.id;
+                                const hostTags = host.tags.length ? host.tags : [t('app.host.noTags', appLanguage)];
+
+                                return (
+                                  <article
+                                    key={host.id}
+                                    className={`host-list-card ${isSelected ? 'selected' : ''} ${isHostConnecting ? 'connecting' : ''}`}
+                                    role="listitem"
+                                    aria-selected={isSelected}
+                                    aria-busy={isHostConnecting}
+                                    onClick={() => setSelectedHostId(host.id)}
+                                    onDoubleClick={() => openHostFromList(host)}
+                                  >
+                                    {isHostConnecting ? (
+                                      <div className="host-card-loading" role="status">
+                                        <span className="host-card-spinner" aria-hidden="true" />
+                                        <strong>{t('app.host.connectingButton', appLanguage)}</strong>
+                                        <small>{host.username}@{host.address}:{host.port}</small>
+                                      </div>
+                                    ) : null}
+                                    <header className="host-list-card-header">
+                                      <div className="host-card-titleline">
+                                        <HostSystemIcon systemName={getHostSystemLabel(host, appLanguage)} systemType={host.systemType} />
+                                        <div className="host-card-name">
+                                          <span className={`host-presence-dot ${connectionState.className}`} title={connectionState.title} aria-hidden="true" />
+                                          <strong>{host.name}</strong>
+                                        </div>
+                                      </div>
+                                      <div className="host-card-top-actions" onClick={(event) => event.stopPropagation()}>
+                                        <details className="host-card-menu host-card-top-menu">
+                                          <summary className="table-icon-button" aria-label={t('app.host.actions', appLanguage)}>
+                                            <MoreHorizontal aria-hidden="true" />
+                                          </summary>
+                                          <div className="host-card-menu-panel">
+                                            <button type="button" onClick={(event) => { closeHostCardMenu(event.currentTarget); startEditingHost(host); }}>{t('app.host.edit', appLanguage)}</button>
+                                            <button type="button" className="danger-text" onClick={(event) => { closeHostCardMenu(event.currentTarget); deleteHost(host); }}>{t('app.host.delete', appLanguage)}</button>
+                                          </div>
+                                        </details>
+                                      </div>
+                                    </header>
+
+                                    <div className="host-card-badges">
+                                      <span className={`host-chip group-chip ${host.group ? '' : 'muted'}`}>{host.group || t('app.host.group.ungrouped', appLanguage)}</span>
+                                      {hostTags.slice(0, 2).map((tag) => (
+                                        <span key={`${host.id}:card:${tag}`} className={`host-chip tag-chip ${host.tags.length ? '' : 'muted'}`}>{tag}</span>
+                                      ))}
+                                      {host.tags.length > 2 ? <span className="host-chip muted">+{host.tags.length - 2}</span> : null}
+                                      {proxyProfile ? <span className="host-chip proxy-chip">{getProxyConfigTypeLabel(proxyProfile.config)}</span> : null}
+                                    </div>
+
+                                    <div className="host-card-meta">
+                                      <span className="mono-cell">{host.address}:{host.port}</span>
+                                    </div>
+
+                                    <div className="host-card-recent">
+                                      <span>{formatRelativeTime(host.lastConnectionAt, appLanguage)}</span>
+                                    </div>
+                                  </article>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ) : (
+                        <div className="host-table-scroll">
+                          <table className="host-table">
+                            <thead>
+                              <tr>
+                                <th>{appLanguage === 'zh-CN' ? '主机名称' : 'Host name'}</th>
+                                <th>{appLanguage === 'zh-CN' ? '分组' : 'Group'}</th>
+                                <th>{appLanguage === 'zh-CN' ? '主机/IP' : 'Host/IP'}</th>
+                                <th>{appLanguage === 'zh-CN' ? '用户' : 'User'}</th>
+                                <th>{appLanguage === 'zh-CN' ? '端口' : 'Port'}</th>
+                                <th>{appLanguage === 'zh-CN' ? '标签' : 'Tags'}</th>
+                                <th>{appLanguage === 'zh-CN' ? '最近连接' : 'Last connection'}</th>
+                                <th>{appLanguage === 'zh-CN' ? '操作' : 'Actions'}</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {pagedHosts.map((host) => {
+                                const connectionState = getHostConnectionStateView(host, appLanguage);
+                                const isHostConnecting = connectingHostId === host.id;
+                                const proxyProfile = host.proxyProfileId ? proxyProfileById.get(host.proxyProfileId) ?? null : null;
+                                const isSelected = selectedHost?.id === host.id;
+                                const hostTags = host.tags.length ? host.tags : [t('app.host.noTags', appLanguage)];
+
+                                return (
+                                  <tr
+                                    key={host.id}
+                                    className={`${isSelected ? 'selected' : ''} ${isHostConnecting ? 'connecting' : ''}`}
+                                    aria-selected={isSelected}
+                                    aria-busy={isHostConnecting}
+                                    onClick={() => setSelectedHostId(host.id)}
+                                    onDoubleClick={() => openHostFromList(host)}
+                                  >
+                                    <td className="host-name-cell">
+                                      <span className={`host-presence-dot ${connectionState.className}`} aria-hidden="true" />
+                                      <HostSystemIcon systemName={getHostSystemLabel(host, appLanguage)} systemType={host.systemType} />
+                                      <span className="host-name-copy">
+                                        <strong>{host.name}</strong>
+                                        <small>{host.note || getHostSystemLabel(host, appLanguage)}</small>
+                                      </span>
+                                    </td>
+                                    <td>
+                                      <span className={`host-chip group-chip ${host.group ? '' : 'muted'}`}>{host.group || t('app.host.group.ungrouped', appLanguage)}</span>
+                                    </td>
+                                    <td className="mono-cell">{host.address}</td>
+                                    <td className="mono-cell">{host.username}</td>
+                                    <td className="mono-cell">{host.port}</td>
+                                    <td className="host-tag-cell">
+                                      {proxyProfile ? <span className="host-chip proxy-chip">{getProxyConfigTypeLabel(proxyProfile.config)}</span> : null}
+                                      {hostTags.slice(0, 2).map((tag) => (
+                                        <span key={`${host.id}:${tag}`} className={`host-chip tag-chip ${host.tags.length ? '' : 'muted'}`}>{tag}</span>
+                                      ))}
+                                      {host.tags.length > 2 ? <span className="host-chip muted">+{host.tags.length - 2}</span> : null}
+                                    </td>
+                                    <td>{formatRelativeTime(host.lastConnectionAt, appLanguage)}</td>
+                                    <td className="host-table-actions" onClick={(event) => event.stopPropagation()}>
+                                      <div className="host-table-action-buttons">
+                                        <button type="button" className="table-icon-button" onClick={() => startEditingHost(host)} aria-label={t('app.host.edit', appLanguage)}>
+                                          <Pencil aria-hidden="true" />
+                                        </button>
+                                        <button type="button" className="table-icon-button danger-action" onClick={() => deleteHost(host)} aria-label={t('app.host.delete', appLanguage)}>
+                                          <Trash2 aria-hidden="true" />
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                        )}
+                        <div className="host-table-pagination">
+                          <span>{t('app.host.count', appLanguage, { count: String(filteredHosts.length) })}</span>
+                          <div className="host-pagination-controls">
+                            <span className="page-size-pill">{appLanguage === 'zh-CN' ? '20 条/页' : '20 / page'}</span>
+                            <button type="button" className="page-nav-button" onClick={() => goToHostPage(1)} disabled={currentHostPage === 1} aria-label={appLanguage === 'zh-CN' ? '第一页' : 'First page'}>
+                              <ChevronsLeft aria-hidden="true" />
+                            </button>
+                            <button type="button" className="page-nav-button" onClick={() => goToHostPage(currentHostPage - 1)} disabled={currentHostPage === 1} aria-label={appLanguage === 'zh-CN' ? '上一页' : 'Previous page'}>
+                              <ChevronLeft aria-hidden="true" />
+                            </button>
+                            {hostPageNumbers.map((pageNumber) => (
+                              <button
+                                key={pageNumber}
+                                type="button"
+                                className={`page-nav-button page-number ${pageNumber === currentHostPage ? 'active' : ''}`}
+                                onClick={() => goToHostPage(pageNumber)}
+                                aria-current={pageNumber === currentHostPage ? 'page' : undefined}
+                              >
+                                {pageNumber}
+                              </button>
+                            ))}
+                            <button type="button" className="page-nav-button" onClick={() => goToHostPage(currentHostPage + 1)} disabled={currentHostPage === hostPageCount} aria-label={appLanguage === 'zh-CN' ? '下一页' : 'Next page'}>
+                              <ChevronRight aria-hidden="true" />
+                            </button>
+                            <button type="button" className="page-nav-button" onClick={() => goToHostPage(hostPageCount)} disabled={currentHostPage === hostPageCount} aria-label={appLanguage === 'zh-CN' ? '最后一页' : 'Last page'}>
+                              <ChevronsRight aria-hidden="true" />
+                            </button>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="empty-state">
+                        <span>EMPTY</span>
+                        <h3>{t(hosts.length ? 'app.host.emptyNoMatchesTitle' : 'app.host.emptyNoHostsTitle', appLanguage)}</h3>
+                        <p>{t(hosts.length ? 'app.host.emptyNoMatchesDescription' : 'app.host.emptyNoHostsDescription', appLanguage)}</p>
+                      </div>
+                    )}
+                  </div>
+                </section>
+
+                <aside className="host-detail-panel" aria-label={appLanguage === 'zh-CN' ? '主机详情' : 'Host details'}>
+                  {selectedHost ? (() => {
+                    const connectionState = getHostConnectionStateView(selectedHost, appLanguage);
+                    const selectedKey = getSelectedSshKey(selectedHost);
+                    const proxyProfile = selectedHost.proxyProfileId ? proxyProfileById.get(selectedHost.proxyProfileId) ?? null : null;
+                    const detailAuthLabel = getAuthLabel(selectedHost, selectedKey, appLanguage);
+                    const basicRows = [
+                      [appLanguage === 'zh-CN' ? '主机/IP' : 'Host/IP', selectedHost.address],
+                      [appLanguage === 'zh-CN' ? '用户' : 'User', selectedHost.username],
+                      [appLanguage === 'zh-CN' ? '端口' : 'Port', String(selectedHost.port)],
+                      [appLanguage === 'zh-CN' ? '分组' : 'Group', selectedHost.group || t('app.host.group.ungrouped', appLanguage)],
+                      [appLanguage === 'zh-CN' ? '描述' : 'Description', selectedHost.note || '-'],
+                    ] as const;
+                    const connectionRows = [
+                      [appLanguage === 'zh-CN' ? '最近连接' : 'Last connection', selectedHost.lastConnectionAt ? formatHostInfoTime(selectedHost.lastConnectionAt, appLanguage) : t('app.host.info.neverConnected', appLanguage)],
+                      [appLanguage === 'zh-CN' ? '首次添加' : 'Created', formatHostInfoTime(selectedHost.createdAt, appLanguage)],
+                      [appLanguage === 'zh-CN' ? '更新时间' : 'Updated', formatHostInfoTime(selectedHost.updatedAt, appLanguage)],
+                      [appLanguage === 'zh-CN' ? '登录方式' : 'Auth', detailAuthLabel],
+                      [appLanguage === 'zh-CN' ? '密钥对' : 'Key', selectedKey?.name || selectedHost.keyPath || '-'],
+                      [appLanguage === 'zh-CN' ? '代理' : 'Proxy', proxyProfile?.label || '-'],
+                    ] as const;
+                    const systemRows = [
+                      ['OS', getHostDetailValue(selectedHost, 'os', getHostSystemLabel(selectedHost, appLanguage))],
+                      [appLanguage === 'zh-CN' ? '内核' : 'Kernel', getHostDetailValue(selectedHost, 'kernel', '-')],
+                      [appLanguage === 'zh-CN' ? '架构' : 'Arch', getHostDetailValue(selectedHost, 'arch', '-')],
+                      [appLanguage === 'zh-CN' ? '运行时间' : 'Uptime', getHostDetailValue(selectedHost, 'uptime', '-')],
+                      [appLanguage === 'zh-CN' ? '负载' : 'Load', getHostDetailValue(selectedHost, 'load', '-')],
+                    ] as const;
+
+                    return (
+                      <>
+                        <header className="host-detail-header">
+                          <HostSystemIcon systemName={getHostSystemLabel(selectedHost, appLanguage)} systemType={selectedHost.systemType} />
+                          <span>
+                            <strong>{selectedHost.name}</strong>
+                            <small className={`host-row-state ${connectionState.className}`}><i aria-hidden="true" />{connectionState.label}</small>
+                          </span>
+                          <button type="button" className="host-detail-close" onClick={() => setSelectedHostId(null)} aria-label={appLanguage === 'zh-CN' ? '清除选择' : 'Clear selection'}>
+                            <PanelRightOpen aria-hidden="true" />
+                          </button>
+                        </header>
+
+                        <section className="host-detail-section">
+                          <h3>{appLanguage === 'zh-CN' ? '基本信息' : 'Basic info'}<ChevronDown aria-hidden="true" /></h3>
+                          <dl>
+                            {basicRows.map(([label, value]) => (
+                              <div key={label}>
+                                <dt>{label}</dt>
+                                <dd>{value}</dd>
+                              </div>
+                            ))}
+                            <div>
+                              <dt>{appLanguage === 'zh-CN' ? '标签' : 'Tags'}</dt>
+                              <dd className="host-detail-tags">
+                                {(selectedHost.tags.length ? selectedHost.tags : ['-']).map((tag) => (
+                                  <span key={`${selectedHost.id}:detail:${tag}`} className="host-chip tag-chip">{tag}</span>
+                                ))}
+                              </dd>
+                            </div>
+                          </dl>
+                        </section>
+
+                        <section className="host-detail-section">
+                          <h3>{appLanguage === 'zh-CN' ? '连接信息' : 'Connection info'}<ChevronDown aria-hidden="true" /></h3>
+                          <dl>
+                            {connectionRows.map(([label, value]) => (
+                              <div key={label}>
+                                <dt>{label}</dt>
+                                <dd>{value}</dd>
+                              </div>
+                            ))}
+                          </dl>
+                        </section>
+
+                        <section className="host-detail-section">
+                          <h3>{appLanguage === 'zh-CN' ? '系统信息' : 'System info'}<ChevronDown aria-hidden="true" /></h3>
+                          <dl>
+                            {systemRows.map(([label, value]) => (
+                              <div key={label}>
+                                <dt>{label}</dt>
+                                <dd>{value}</dd>
+                              </div>
+                            ))}
+                          </dl>
+                        </section>
+
+                        <div className="host-detail-actions">
+                          <button type="button" className="primary-action" disabled={isConnectionPending} onClick={() => openHostFromList(selectedHost)}>
+                            <Terminal aria-hidden="true" />
+                            {appLanguage === 'zh-CN' ? '打开终端' : 'Open terminal'}
+                          </button>
+                          <details className="host-detail-menu">
+                            <summary className="command-button" aria-label={t('app.host.actions', appLanguage)}>
+                              <ChevronDown aria-hidden="true" />
+                            </summary>
+                            <div className="toolbar-menu-panel">
+                              <button type="button" onClick={() => startEditingHost(selectedHost)}>{t('app.host.edit', appLanguage)}</button>
+                              <button type="button" onClick={() => openHostInfoDialog(selectedHost)}>{t('app.host.info.menu', appLanguage)}</button>
+                            </div>
+                          </details>
+                        </div>
+                      </>
+                    );
+                  })() : (
+                    <div className="host-detail-empty">
+                      <Server aria-hidden="true" />
+                      <strong>{appLanguage === 'zh-CN' ? '选择一台主机' : 'Select a host'}</strong>
+                      <span>{appLanguage === 'zh-CN' ? '主机详情会显示在这里。' : 'Host details appear here.'}</span>
+                    </div>
+                  )}
+                </aside>
+              </section>
             </>
           ) : activePage === 'keys' ? (
             <Suspense fallback={<LazyContentFallback language={appLanguage} />}>
@@ -4995,6 +5488,22 @@ function App() {
             </div>
           ) : null}
         </main>
+        <footer className="app-status-footer no-drag">
+          <span><i aria-hidden="true" />{appLanguage === 'zh-CN' ? '就绪' : 'Ready'}</span>
+          <span>{appLanguage === 'zh-CN' ? 'SSH 代理：已连接' : 'SSH proxy: connected'}</span>
+          <span>{appLanguage === 'zh-CN' ? `${hosts.length} 台主机` : `${hosts.length} hosts`}</span>
+          <span>{appLanguage === 'zh-CN' ? `${proxyProfiles.length} 个代理` : `${proxyProfiles.length} proxies`}</span>
+          <span>{appLanguage === 'zh-CN' ? '版本 1.0.0' : 'Version 1.0.0'}</span>
+          <button
+            type="button"
+            onClick={() => {
+              setActivePage('settings');
+              preloadFullMessageCatalog();
+            }}
+          >
+            {appLanguage === 'zh-CN' ? '检查更新' : 'Check updates'}
+          </button>
+        </footer>
       </div>
       )}
     </div>

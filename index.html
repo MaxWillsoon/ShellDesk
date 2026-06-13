@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta
@@ -8,6 +8,35 @@
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
+    <script src="/theme-preload.js"></script>
+    <style>
+      html,
+      body,
+      #root {
+        min-height: 100%;
+        background: #0e131c;
+        color: #f4f7fb;
+      }
+
+      html {
+        color-scheme: dark;
+      }
+
+      body {
+        margin: 0;
+      }
+
+      html[data-theme="light"],
+      html[data-theme="light"] body,
+      html[data-theme="light"] #root {
+        background: #f5f7fb;
+        color: #172033;
+      }
+
+      html[data-theme="light"] {
+        color-scheme: light;
+      }
+    </style>
     <link rel="icon" type="image/png" href="/src/assets/images/icon.png" />
     <title> ShellDesk </title>
   </head>

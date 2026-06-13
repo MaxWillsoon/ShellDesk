@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, shell, Tray } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, nativeTheme, shell, Tray } = require('electron');
 const path = require('node:path');
 const { activeConnections, closeActiveConnection } = require('./connectionManager.cjs');
 const { getVault } = require('./vaultStore.cjs');
@@ -21,6 +21,24 @@ function getCurrentSettings() {
   } catch {
     return {};
   }
+}
+
+function getEffectiveWindowTheme() {
+  const theme = getCurrentSettings().theme;
+
+  if (theme === 'dark' || theme === 'light') {
+    return theme;
+  }
+
+  if (theme === 'system') {
+    return nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+  }
+
+  return 'dark';
+}
+
+function getWindowBackgroundColor() {
+  return getEffectiveWindowTheme() === 'light' ? '#fbfcfe' : '#0e131c';
 }
 
 function shouldMinimizeMainWindowToTray() {
@@ -129,17 +147,22 @@ function configureAppWindow(appWindow, options = {}) {
 }
 
 function loadAppWindow(appWindow, query = {}) {
+  const windowQuery = {
+    shelldeskTheme: getEffectiveWindowTheme(),
+    ...query,
+  };
+
   if (devServerUrl) {
     const appUrl = new URL(devServerUrl);
 
-    for (const [key, value] of Object.entries(query)) {
+    for (const [key, value] of Object.entries(windowQuery)) {
       appUrl.searchParams.set(key, value);
     }
 
     void appWindow.loadURL(appUrl.toString());
     appWindow.webContents.openDevTools();
   } else {
-    void appWindow.loadFile(path.join(__dirname, '..', '..', 'dist', 'index.html'), { query });
+    void appWindow.loadFile(path.join(__dirname, '..', '..', 'dist', 'index.html'), { query: windowQuery });
   }
 }
 
@@ -149,14 +172,14 @@ function createMainWindow() {
   }
 
   mainWindow = new BrowserWindow({
-    width: 1180,
-    height: 760,
+    width: 1260,
+    height: 800,
     minWidth: 940,
     minHeight: 620,
     show: false,
     title: 'ShellDesk',
     icon: appIconPath,
-    backgroundColor: '#0b1017',
+    backgroundColor: getWindowBackgroundColor(),
     autoHideMenuBar: true,
     frame: process.platform === 'darwin',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
@@ -210,7 +233,7 @@ function createConnectionWindow(activeConnection) {
       ? `ShellDesk - ${connectionTitle}`
       : `ShellDesk - ${connectionTitle} - SOCKS :${activeConnection.proxyPort}`,
     icon: appIconPath,
-    backgroundColor: '#0b1017',
+    backgroundColor: getWindowBackgroundColor(),
     autoHideMenuBar: true,
     frame: process.platform === 'darwin',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
