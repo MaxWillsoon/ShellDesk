@@ -926,6 +926,28 @@ function formatTags(tags: string[]) {
   return tags.join(', ');
 }
 
+const hostChipToneCount = 12;
+
+function getHostChipToneClass(value: string, kind: 'group' | 'tag') {
+  const normalized = value.trim().toLowerCase();
+
+  if (!normalized) {
+    return '';
+  }
+
+  let hash = kind === 'group' ? 17 : 53;
+
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash = (hash * 31 + normalized.charCodeAt(index)) >>> 0;
+  }
+
+  return `tone-${hash % hostChipToneCount}`;
+}
+
+function getHostChipClassName(kind: 'group' | 'tag', value: string, active: boolean) {
+  return `host-chip ${kind}-chip ${active ? getHostChipToneClass(value, kind) : 'muted'}`;
+}
+
 function getAuthMethod(value: unknown): AuthMethod {
   return value === 'key' ? 'key' : 'password';
 }
@@ -4866,9 +4888,9 @@ function App() {
                                     </header>
 
                                     <div className="host-card-badges">
-                                      <span className={`host-chip group-chip ${host.group ? '' : 'muted'}`}>{host.group || t('app.host.group.ungrouped', appLanguage)}</span>
+                                      <span className={getHostChipClassName('group', host.group, Boolean(host.group))}>{host.group || t('app.host.group.ungrouped', appLanguage)}</span>
                                       {hostTags.slice(0, 2).map((tag) => (
-                                        <span key={`${host.id}:card:${tag}`} className={`host-chip tag-chip ${host.tags.length ? '' : 'muted'}`}>{tag}</span>
+                                        <span key={`${host.id}:card:${tag}`} className={getHostChipClassName('tag', tag, Boolean(host.tags.length))}>{tag}</span>
                                       ))}
                                       {host.tags.length > 2 ? <span className="host-chip muted">+{host.tags.length - 2}</span> : null}
                                       {proxyProfile ? <span className="host-chip proxy-chip">{getProxyConfigTypeLabel(proxyProfile.config)}</span> : null}
@@ -4927,7 +4949,7 @@ function App() {
                                       </span>
                                     </td>
                                     <td>
-                                      <span className={`host-chip group-chip ${host.group ? '' : 'muted'}`}>{host.group || t('app.host.group.ungrouped', appLanguage)}</span>
+                                      <span className={getHostChipClassName('group', host.group, Boolean(host.group))}>{host.group || t('app.host.group.ungrouped', appLanguage)}</span>
                                     </td>
                                     <td className="mono-cell">{host.address}</td>
                                     <td className="mono-cell">{host.username}</td>
@@ -4935,7 +4957,7 @@ function App() {
                                     <td className="host-tag-cell">
                                       {proxyProfile ? <span className="host-chip proxy-chip">{getProxyConfigTypeLabel(proxyProfile.config)}</span> : null}
                                       {hostTags.slice(0, 2).map((tag) => (
-                                        <span key={`${host.id}:${tag}`} className={`host-chip tag-chip ${host.tags.length ? '' : 'muted'}`}>{tag}</span>
+                                        <span key={`${host.id}:${tag}`} className={getHostChipClassName('tag', tag, Boolean(host.tags.length))}>{tag}</span>
                                       ))}
                                       {host.tags.length > 2 ? <span className="host-chip muted">+{host.tags.length - 2}</span> : null}
                                     </td>
@@ -5055,7 +5077,7 @@ function App() {
                               <dt>{appLanguage === 'zh-CN' ? '标签' : 'Tags'}</dt>
                               <dd className="host-detail-tags">
                                 {(selectedHost.tags.length ? selectedHost.tags : ['-']).map((tag) => (
-                                  <span key={`${selectedHost.id}:detail:${tag}`} className="host-chip tag-chip">{tag}</span>
+                                  <span key={`${selectedHost.id}:detail:${tag}`} className={getHostChipClassName('tag', tag, Boolean(selectedHost.tags.length))}>{tag}</span>
                                 ))}
                               </dd>
                             </div>

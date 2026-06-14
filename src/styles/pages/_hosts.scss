@@ -3104,38 +3104,85 @@
 }
 
 .host-chip {
+  --host-chip-color: var(--accent);
+  --host-chip-border: color-mix(in srgb, var(--host-chip-color) 24%, var(--border));
+  --host-chip-bg: color-mix(in srgb, var(--host-chip-color) 10%, transparent);
+
   display: inline-flex;
   min-height: 22px;
   max-width: 100%;
   align-items: center;
-  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+  border: 1px solid var(--host-chip-border);
   border-radius: 5px;
   padding: 0 7px;
   overflow: hidden;
-  color: var(--accent);
+  color: var(--host-chip-color);
   font-size: 12px;
   font-weight: 720;
   text-overflow: ellipsis;
   white-space: nowrap;
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  background: var(--host-chip-bg);
 }
 
-.group-chip {
-  color: #126fce;
-  border-color: rgba(18, 111, 206, 0.22);
-  background: rgba(18, 111, 206, 0.08);
+.group-chip,
+.tag-chip {
+  color: var(--host-chip-color);
+  border-color: var(--host-chip-border);
+  background: var(--host-chip-bg);
+}
+
+.host-chip.tone-0 {
+  --host-chip-color: #2563eb;
+}
+
+.host-chip.tone-1 {
+  --host-chip-color: #059669;
+}
+
+.host-chip.tone-2 {
+  --host-chip-color: #d97706;
+}
+
+.host-chip.tone-3 {
+  --host-chip-color: #dc2626;
+}
+
+.host-chip.tone-4 {
+  --host-chip-color: #7c3aed;
+}
+
+.host-chip.tone-5 {
+  --host-chip-color: #0891b2;
+}
+
+.host-chip.tone-6 {
+  --host-chip-color: #db2777;
+}
+
+.host-chip.tone-7 {
+  --host-chip-color: #65a30d;
+}
+
+.host-chip.tone-8 {
+  --host-chip-color: #ea580c;
+}
+
+.host-chip.tone-9 {
+  --host-chip-color: #0d9488;
+}
+
+.host-chip.tone-10 {
+  --host-chip-color: #4f46e5;
+}
+
+.host-chip.tone-11 {
+  --host-chip-color: #9333ea;
 }
 
 .proxy-chip {
   color: #be6800;
   border-color: rgba(190, 104, 0, 0.22);
   background: rgba(190, 104, 0, 0.08);
-}
-
-.tag-chip {
-  color: var(--muted-strong);
-  border-color: var(--border);
-  background: var(--surface-soft);
 }
 
 .host-chip.muted {
