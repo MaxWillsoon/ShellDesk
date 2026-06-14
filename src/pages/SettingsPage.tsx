@@ -1205,6 +1205,7 @@ function SettingsPage({
                       <small>{fontListStatus}</small>
                     </span>
                     <select
+                      className="settings-font-select"
                       value={settings.interfaceFont}
                       onChange={(event) => updateSetting('interfaceFont', event.target.value as ShellDeskAppSettings['interfaceFont'])}
                     >
@@ -1420,6 +1421,7 @@ function SettingsPage({
                       <small>{fontListStatus}</small>
                     </span>
                     <select
+                      className="settings-font-select"
                       value={settings.terminalFontFamily}
                       onChange={(event) => updateSetting('terminalFontFamily', event.target.value as ShellDeskAppSettings['terminalFontFamily'])}
                     >

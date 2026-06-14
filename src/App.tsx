@@ -1043,6 +1043,210 @@ function getHostDetailValue(host: Host, key: string, fallback: string) {
   return value || fallback;
 }
 
+function parseColonSeparatedHostInfo(raw: string) {
+  const values = new Map<string, string>();
+
+  for (const line of raw.split(/\r?\n/)) {
+    const separatorIndex = line.indexOf(':');
+
+    if (separatorIndex < 0) {
+      continue;
+    }
+
+    const key = line.slice(0, separatorIndex).trim();
+    const value = line.slice(separatorIndex + 1).trim();
+
+    if (key && value) {
+      values.set(key, value);
+    }
+  }
+
+  return values;
+}
+
+function parsePositiveInteger(value: string) {
+  const parsed = Number.parseInt(value.trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function multiplyPositiveIntegers(left: string, right: string) {
+  const leftValue = parsePositiveInteger(left);
+  const rightValue = parsePositiveInteger(right);
+  return leftValue && rightValue ? leftValue * rightValue : null;
+}
+
+function formatHostCpuCores(value: number, language: ShellDeskAppSettings['language']) {
+  return language === 'zh-CN' ? `${value} 核` : `${value} cores`;
+}
+
+function getHostCpuCoreValue(host: Host, language: ShellDeskAppSettings['language']) {
+  const dedicatedValue = parsePositiveInteger(getHostInfoItemValue(host, 'cpuCores'));
+
+  if (dedicatedValue) {
+    return formatHostCpuCores(dedicatedValue, language);
+  }
+
+  const rawCpu = getHostInfoItemValue(host, 'cpu');
+
+  if (!rawCpu) {
+    return '-';
+  }
+
+  const windowsCores = rawCpu.match(/\bCores:\s*(\d+)/i)?.[1];
+  const localLogicalCores = rawCpu.match(/逻辑核心\s*(\d+)/)?.[1];
+  const values = parseColonSeparatedHostInfo(rawCpu);
+  const physicalCores = multiplyPositiveIntegers(
+    values.get('Socket(s)') ?? '',
+    values.get('Core(s) per socket') ?? '',
+  );
+  const fallbackCores = parsePositiveInteger(windowsCores ?? localLogicalCores ?? values.get('CPU(s)') ?? '');
+  const cores = physicalCores ?? fallbackCores;
+
+  return cores ? formatHostCpuCores(cores, language) : '-';
+}
+
+function parseHostCapacityBytes(rawValue: string) {
+  const match = rawValue.trim().match(/^([\d.]+)\s*([kmgtp]?i?)?b?$/i);
+
+  if (!match) {
+    return null;
+  }
+
+  const value = Number.parseFloat(match[1]);
+
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  const unit = (match[2] || '').toLowerCase();
+  const multipliers: Record<string, number> = {
+    '': 1,
+    k: 1024,
+    ki: 1024,
+    m: 1024 ** 2,
+    mi: 1024 ** 2,
+    g: 1024 ** 3,
+    gi: 1024 ** 3,
+    t: 1024 ** 4,
+    ti: 1024 ** 4,
+    p: 1024 ** 5,
+    pi: 1024 ** 5,
+  };
+
+  return value * (multipliers[unit] ?? 1);
+}
+
+function formatHostCapacity(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return '';
+  }
+
+  const gib = bytes / 1024 / 1024 / 1024;
+
+  if (gib >= 1024) {
+    return `${Number((gib / 1024).toFixed(1))} TB`;
+  }
+
+  return `${Number(gib.toFixed(gib >= 10 ? 0 : 1))} GB`;
+}
+
+function getFirstCapacityValue(rawValue: string) {
+  const match = rawValue.match(/([\d.]+)\s*([kmgtp](?:i)?b?|[kmgtp]b)\b/i);
+  return match ? `${match[1]} ${match[2]}` : '';
+}
+
+function formatHostCapacityValue(rawValue: string) {
+  const value = getFirstCapacityValue(rawValue);
+
+  if (!value) {
+    return '';
+  }
+
+  const bytes = parseHostCapacityBytes(value);
+  return bytes ? formatHostCapacity(bytes) : value.toUpperCase();
+}
+
+function getHostMemoryTotalValue(host: Host) {
+  const dedicatedValue = formatHostCapacityValue(getHostInfoItemValue(host, 'memoryTotal'));
+
+  if (dedicatedValue) {
+    return dedicatedValue;
+  }
+
+  const rawMemory = getHostInfoItemValue(host, 'memory');
+
+  if (!rawMemory) {
+    return '-';
+  }
+
+  const labeledTotal = rawMemory.match(/(?:Total|总计)\s*:?\s*([\d.]+\s*(?:[kmgtp]?i?b?|[kmgtp]b))/i)?.[1];
+
+  if (labeledTotal) {
+    return formatHostCapacityValue(labeledTotal) || labeledTotal;
+  }
+
+  const memLine = rawMemory.split(/\r?\n/).find((line) => /^Mem:\s+/i.test(line.trim()));
+  const totalFromFree = memLine?.trim().split(/\s+/)[1] ?? '';
+
+  return formatHostCapacityValue(totalFromFree) || '-';
+}
+
+function getHostDiskTotalValue(host: Host) {
+  const dedicatedValue = formatHostCapacityValue(getHostInfoItemValue(host, 'diskTotal'));
+
+  if (dedicatedValue) {
+    return dedicatedValue;
+  }
+
+  const rawDisk = getHostInfoItemValue(host, 'disk');
+
+  if (!rawDisk) {
+    return '-';
+  }
+
+  let totalBytes = 0;
+  const seenFilesystems = new Set<string>();
+
+  for (const line of rawDisk.split(/\r?\n/)) {
+    const parts = line.trim().split(/\s+/);
+
+    if (parts.length < 6 || /^filesystem$/i.test(parts[0])) {
+      continue;
+    }
+
+    if (seenFilesystems.has(parts[0])) {
+      continue;
+    }
+
+    const bytes = parseHostCapacityBytes(parts[1]);
+
+    if (bytes) {
+      seenFilesystems.add(parts[0]);
+      totalBytes += bytes;
+    }
+  }
+
+  if (totalBytes > 0) {
+    return formatHostCapacity(totalBytes);
+  }
+
+  let totalSizeGb = 0;
+
+  for (const line of rawDisk.split(/\r?\n/)) {
+    if (/^(DeviceID|[-\s]+$)/i.test(line.trim())) {
+      continue;
+    }
+
+    const sizeMatch = line.match(/\s(\d+(?:\.\d+)?)\s+\d+(?:\.\d+)?\s*$/);
+
+    if (sizeMatch) {
+      totalSizeGb += Number.parseFloat(sizeMatch[1]);
+    }
+  }
+
+  return totalSizeGb > 0 ? formatHostCapacity(totalSizeGb * 1024 ** 3) : '-';
+}
+
 function createHostInfoSnapshot(
   host: Pick<Host, 'address' | 'systemName' | 'systemType'>,
   report: ShellDeskRemoteSystemInfoReport,
@@ -4816,6 +5020,9 @@ function App() {
                     ] as const;
                     const systemRows = [
                       ['OS', getHostDetailValue(selectedHost, 'os', getHostSystemLabel(selectedHost, appLanguage))],
+                      [appLanguage === 'zh-CN' ? 'CPU 核心' : 'CPU cores', getHostCpuCoreValue(selectedHost, appLanguage)],
+                      [appLanguage === 'zh-CN' ? '内存' : 'Memory', getHostMemoryTotalValue(selectedHost)],
+                      [appLanguage === 'zh-CN' ? '硬盘' : 'Disk', getHostDiskTotalValue(selectedHost)],
                       [appLanguage === 'zh-CN' ? '内核' : 'Kernel', getHostDetailValue(selectedHost, 'kernel', '-')],
                       [appLanguage === 'zh-CN' ? '架构' : 'Arch', getHostDetailValue(selectedHost, 'arch', '-')],
                       [appLanguage === 'zh-CN' ? '运行时间' : 'Uptime', getHostDetailValue(selectedHost, 'uptime', '-')],
@@ -4882,17 +5089,8 @@ function App() {
                         <div className="host-detail-actions">
                           <button type="button" className="primary-action" disabled={isConnectionPending} onClick={() => openHostFromList(selectedHost)}>
                             <Terminal aria-hidden="true" />
-                            {appLanguage === 'zh-CN' ? '打开终端' : 'Open terminal'}
+                            {appLanguage === 'zh-CN' ? '打开工作台' : 'Open workbench'}
                           </button>
-                          <details className="host-detail-menu">
-                            <summary className="command-button" aria-label={t('app.host.actions', appLanguage)}>
-                              <ChevronDown aria-hidden="true" />
-                            </summary>
-                            <div className="toolbar-menu-panel">
-                              <button type="button" onClick={() => startEditingHost(selectedHost)}>{t('app.host.edit', appLanguage)}</button>
-                              <button type="button" onClick={() => openHostInfoDialog(selectedHost)}>{t('app.host.info.menu', appLanguage)}</button>
-                            </div>
-                          </details>
                         </div>
                       </>
                     );
@@ -5518,7 +5716,7 @@ function App() {
         </main>
         <footer className="app-status-footer no-drag">
           <span><i aria-hidden="true" />{appLanguage === 'zh-CN' ? '就绪' : 'Ready'}</span>
-          <span>{appLanguage === 'zh-CN' ? 'SSH 代理：已连接' : 'SSH proxy: connected'}</span>
+          <span></span>
           <span>{appLanguage === 'zh-CN' ? `${hosts.length} 台主机` : `${hosts.length} hosts`}</span>
           <span>{appLanguage === 'zh-CN' ? `${proxyProfiles.length} 个代理` : `${proxyProfiles.length} proxies`}</span>
           <span>{footerVersionText}</span>

@@ -1222,6 +1222,25 @@ function getLocalDiskInfo() {
   }
 }
 
+function getLocalDiskTotalInfo() {
+  try {
+    if (typeof fs.statfsSync !== 'function') {
+      return '未检测到';
+    }
+
+    const stats = fs.statfsSync(process.cwd());
+    const total = Number(stats.blocks) * Number(stats.bsize);
+
+    if (!Number.isFinite(total) || total <= 0) {
+      return '未检测到';
+    }
+
+    return formatBytes(total);
+  } catch {
+    return '未检测到';
+  }
+}
+
 async function getLocalStatus() {
   const totalMemory = os.totalmem();
   const freeMemory = os.freemem();
@@ -1250,6 +1269,9 @@ async function getLocalSystemInfo() {
       { key: 'kernel', label: '内核版本', icon: '\u2699\uFE0F', value: os.release() },
       { key: 'hostname', label: '主机名', icon: '\u{1F3E0}', value: os.hostname() || 'localhost' },
       { key: 'arch', label: '系统架构', icon: '\u{1F9E9}', value: `${os.platform()} ${os.arch()}` },
+      { key: 'cpuCores', label: 'CPU 核心', icon: '\u{1F9EE}', value: String(cpus.length || 0) },
+      { key: 'memoryTotal', label: '内存总量', icon: '\u{1F9E0}', value: formatBytes(totalMemory) },
+      { key: 'diskTotal', label: '硬盘总量', icon: '\u{1F4BD}', value: getLocalDiskTotalInfo() },
       { key: 'cpu', label: 'CPU', icon: '\u{1F4BB}', value: `${cpus[0]?.model || '未检测到'}；逻辑核心 ${cpus.length || 0}` },
       { key: 'memory', label: '内存', icon: '\u{1F9E0}', value: `已用 ${formatBytes(totalMemory - freeMemory)} / 总计 ${formatBytes(totalMemory)}，空闲 ${formatBytes(freeMemory)}` },
       { key: 'disk', label: '磁盘', icon: '\u{1F4BD}', value: getLocalDiskInfo() },

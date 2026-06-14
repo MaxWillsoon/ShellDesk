@@ -991,11 +991,65 @@ else
 fi
 `.trim();
 
+const unixCpuCoresCommand = `
+if command -v lscpu >/dev/null 2>&1; then
+  sockets="$(LC_ALL=C lscpu 2>/dev/null | awk -F: '/^Socket\\(s\\):/ { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit }')"
+  cores_per_socket="$(LC_ALL=C lscpu 2>/dev/null | awk -F: '/^Core\\(s\\) per socket:/ { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit }')"
+  logical_cpus="$(LC_ALL=C lscpu 2>/dev/null | awk -F: '/^CPU\\(s\\):/ { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit }')"
+  if [ -n "$sockets" ] && [ -n "$cores_per_socket" ] && [ "$sockets" -gt 0 ] 2>/dev/null && [ "$cores_per_socket" -gt 0 ] 2>/dev/null; then
+    echo "$((sockets * cores_per_socket))"
+  elif [ -n "$logical_cpus" ]; then
+    echo "$logical_cpus"
+  else
+    getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo "未检测到"
+  fi
+elif command -v sysctl >/dev/null 2>&1; then
+  sysctl -n hw.physicalcpu 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo "未检测到"
+else
+  getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo "未检测到"
+fi
+`.trim();
+
+const unixMemoryTotalCommand = `
+if command -v free >/dev/null 2>&1; then
+  memory_total="$(free -b 2>/dev/null | awk '/^Mem:/ { printf "%.1f GB\\n", $2 / 1024 / 1024 / 1024; found=1 } END { if (!found) exit 1 }')"
+  if [ -n "$memory_total" ]; then
+    echo "$memory_total"
+  elif [ -r /proc/meminfo ]; then
+    awk '/^MemTotal:/ { printf "%.1f GB\\n", $2 * 1024 / 1024 / 1024 / 1024; found=1 } END { if (!found) exit 1 }' /proc/meminfo
+  else
+    echo "未检测到"
+  fi
+elif [ -r /proc/meminfo ]; then
+  awk '/^MemTotal:/ { printf "%.1f GB\\n", $2 * 1024 / 1024 / 1024 / 1024; found=1 } END { if (!found) exit 1 }' /proc/meminfo
+elif command -v sysctl >/dev/null 2>&1; then
+  sysctl -n hw.memsize 2>/dev/null | awk '{ if ($1 > 0) printf "%.1f GB\\n", $1 / 1024 / 1024 / 1024; else print "未检测到" }'
+else
+  echo "未检测到"
+fi
+`.trim();
+
+const unixDiskTotalCommand = `
+if command -v lsblk >/dev/null 2>&1; then
+  disk_total="$(lsblk -b -dn -o SIZE,TYPE 2>/dev/null | awk '$2 == "disk" { total += $1 } END { if (total > 0) printf "%.1f GB\\n", total / 1024 / 1024 / 1024; else exit 1 }')"
+  if [ -n "$disk_total" ]; then
+    echo "$disk_total"
+  else
+    df -Pk -x tmpfs -x devtmpfs 2>/dev/null | awk 'NR > 1 && !seen[$1]++ { total += $2 } END { if (total > 0) printf "%.1f GB\\n", total / 1024 / 1024; else print "未检测到" }'
+  fi
+else
+  df -Pk -x tmpfs -x devtmpfs 2>/dev/null | awk 'NR > 1 && !seen[$1]++ { total += $2 } END { if (total > 0) printf "%.1f GB\\n", total / 1024 / 1024; else print "未检测到" }'
+fi
+`.trim();
+
 const unixSystemInfoItems = [
   { key: 'os', label: '操作系统', icon: '\u{1F5A5}\uFE0F', command: 'cat /etc/os-release 2>/dev/null | grep -E "^PRETTY_NAME|^NAME|^VERSION" | head -5 || uname -s' },
   { key: 'kernel', label: '内核版本', icon: '\u2699\uFE0F', command: 'uname -r' },
   { key: 'hostname', label: '主机名', icon: '\u{1F3E0}', command: 'hostname -f 2>/dev/null || hostname' },
   { key: 'arch', label: '系统架构', icon: '\u{1F9E9}', command: 'uname -m' },
+  { key: 'cpuCores', label: 'CPU 核心', icon: '\u{1F9EE}', command: unixCpuCoresCommand },
+  { key: 'memoryTotal', label: '内存总量', icon: '\u{1F9E0}', command: unixMemoryTotalCommand },
+  { key: 'diskTotal', label: '硬盘总量', icon: '\u{1F4BD}', command: unixDiskTotalCommand },
   { key: 'cpu', label: 'CPU', icon: '\u{1F4BB}', command: unixCpuInfoCommand },
   { key: 'memory', label: '内存', icon: '\u{1F9E0}', command: 'free -h 2>/dev/null | grep "^Mem:" || vm_stat 2>/dev/null | head -5' },
   { key: 'disk', label: '磁盘', icon: '\u{1F4BD}', command: 'df -h -x tmpfs -x devtmpfs 2>/dev/null | head -12 || df -h 2>/dev/null | head -12 || echo "未检测到"' },
@@ -1015,6 +1069,9 @@ const windowsSystemInfoItems = [
   { key: 'kernel', label: '系统版本', icon: '\u2699\uFE0F', command: '[Environment]::OSVersion.VersionString' },
   { key: 'hostname', label: '主机名', icon: '\u{1F3E0}', command: '[System.Net.Dns]::GetHostName()' },
   { key: 'arch', label: '系统架构', icon: '\u{1F9E9}', command: '(Get-CimInstance Win32_OperatingSystem).OSArchitecture' },
+  { key: 'cpuCores', label: 'CPU 核心', icon: '\u{1F9EE}', command: '$cores = (Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Sum; if ($null -eq $cores) { "未检测到" } else { [string][int]$cores }' },
+  { key: 'memoryTotal', label: '内存总量', icon: '\u{1F9E0}', command: "$os = Get-CimInstance Win32_OperatingSystem; if ($os.TotalVisibleMemorySize) { '{0} GB' -f [math]::Round($os.TotalVisibleMemorySize / 1MB, 1) } else { '未检测到' }" },
+  { key: 'diskTotal', label: '硬盘总量', icon: '\u{1F4BD}', command: "$total = (Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | Measure-Object -Property Size -Sum).Sum; if ($null -eq $total) { '未检测到' } else { '{0} GB' -f [math]::Round($total / 1GB, 1) }" },
   { key: 'cpu', label: 'CPU', icon: '\u{1F4BB}', command: "$cpu = Get-CimInstance Win32_Processor | Select-Object -First 1; '{0}; Cores: {1}; Logical: {2}' -f $cpu.Name, $cpu.NumberOfCores, $cpu.NumberOfLogicalProcessors" },
   { key: 'memory', label: '内存', icon: '\u{1F9E0}', command: "$os = Get-CimInstance Win32_OperatingSystem; $total = [math]::Round($os.TotalVisibleMemorySize / 1MB, 2); $free = [math]::Round($os.FreePhysicalMemory / 1MB, 2); $used = [math]::Round($total - $free, 2); '已用 {0} GB / 总计 {1} GB，空闲 {2} GB' -f $used, $total, $free" },
   { key: 'disk', label: '磁盘', icon: '\u{1F4BD}', command: "Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | Select-Object DeviceID, VolumeName, FileSystem, @{Name='SizeGB'; Expression={[math]::Round($_.Size / 1GB, 2)}}, @{Name='FreeGB'; Expression={[math]::Round($_.FreeSpace / 1GB, 2)}} | Format-Table -AutoSize | Out-String -Width 220" },

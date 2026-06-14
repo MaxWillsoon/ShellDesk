@@ -3416,8 +3416,7 @@
 
 .host-detail-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 40px;
-  gap: 0;
+  grid-template-columns: minmax(0, 1fr);
   margin-top: auto;
   padding-top: 12px;
 }
@@ -3427,15 +3426,6 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-}
-
-.host-detail-actions .command-button {
-  width: 40px;
-  padding: 0;
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
 }
 
 .host-detail-empty {

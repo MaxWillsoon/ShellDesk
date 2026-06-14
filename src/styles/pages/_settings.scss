@@ -230,6 +230,12 @@
   font-size: 13px;
 }
 
+.settings-row select.settings-font-select {
+  width: fit-content;
+  min-width: min(220px, 100%);
+  max-width: min(320px, 100%);
+}
+
 .settings-row .settings-text-input {
   width: min(360px, 100%);
   min-width: min(220px, 100%);
