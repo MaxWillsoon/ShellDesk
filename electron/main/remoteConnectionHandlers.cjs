@@ -4699,6 +4699,10 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
   registerIpcHandler('connection:compress', async (_event, connectionId, rawSourcePaths, rawFormat, rawDestPath) => {
     const activeConnection = getActiveConnection(connectionId);
 
+    if (isLocalConnection(activeConnection)) {
+      throw new Error('本地连接不支持远程压缩操作。');
+    }
+
     if (!Array.isArray(rawSourcePaths) || rawSourcePaths.length === 0) {
       throw new Error('请选择要压缩的文件。');
     }
@@ -4749,6 +4753,11 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
 
   registerIpcHandler('connection:decompress', async (_event, connectionId, rawArchivePath, rawDestDir) => {
     const activeConnection = getActiveConnection(connectionId);
+
+    if (isLocalConnection(activeConnection)) {
+      throw new Error('本地连接不支持远程解压操作。');
+    }
+
     const archivePath = validateRemotePath(rawArchivePath);
     const archiveName = getRemoteFileName(archivePath, '');
     const escapedArchive = `'${archivePath.replace(/'/g, "'\\''")}'`;

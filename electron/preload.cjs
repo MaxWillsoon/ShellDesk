@@ -149,26 +149,14 @@ contextBridge.exposeInMainWorld('guiSSH', {
     getIpcCapabilities: () => ipcRenderer.invoke('connection:get-ipc-capabilities').catch(() => ({ terminalSessions: false })),
     trustBrowserCertificate: (partition, url) => ipcRenderer.invoke('connection:trust-browser-certificate', partition, url),
     startTerminal: (connectionId, terminalId, columns, rows, options) => {
-      if (options?.legacy) {
-        return ipcRenderer.invoke('connection:start-terminal', connectionId);
-      }
-
       return ipcRenderer.invoke('connection:start-terminal', connectionId, terminalId, columns, rows, options);
     },
     writeTerminal: (connectionId, terminalId, data, options) => {
-      if (options?.legacy) {
-        return ipcRenderer.invoke('connection:write-terminal', connectionId, data);
-      }
-
       return ipcRenderer.invoke('connection:write-terminal', connectionId, terminalId, data);
     },
     writeTerminalBytes: (connectionId, terminalId, data) =>
       ipcRenderer.invoke('connection:write-terminal-binary', connectionId, terminalId, data),
     resizeTerminal: (connectionId, terminalId, columns, rows, options) => {
-      if (options?.legacy) {
-        return ipcRenderer.invoke('connection:resize-terminal', connectionId, columns, rows);
-      }
-
       return ipcRenderer.invoke('connection:resize-terminal', connectionId, terminalId, columns, rows);
     },
     closeTerminal: (connectionId, terminalId) =>
