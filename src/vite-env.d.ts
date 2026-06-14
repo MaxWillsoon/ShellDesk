@@ -277,6 +277,7 @@ interface ShellDeskAppSettings {
   accentColor: string;
   defaultHostView: 'grid' | 'list';
   minimizeToTrayOnClose: boolean;
+  autoUpdateEnabled: boolean;
   desktopWallpaperMode: 'preset' | 'custom';
   desktopWallpaperPresetId: string;
   desktopWallpaperDataUrl: string;

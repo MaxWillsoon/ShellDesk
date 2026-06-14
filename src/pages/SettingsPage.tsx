@@ -122,7 +122,6 @@ const aiProviderChoices: Array<{
 ];
 const shellDeskRepositoryUrl = 'https://github.com/liubaicai/ShellDesk';
 const shellDeskReleasesUrl = `${shellDeskRepositoryUrl}/releases`;
-const shellDeskContactEmail = 'liushuai.baicai@hotmail.com';
 const defaultSyncRemotePath = '/ShellDesk/shelldesk-sync.json';
 const syncIntervalChoices = [5, 15, 30, 60, 120, 360];
 
@@ -339,6 +338,7 @@ interface SettingsPageProps {
   settings: ShellDeskAppSettings;
   storageInfo: ShellDeskStorageInfo | null;
   isConfigTransferPending: boolean;
+  updateCheckRequestId: number;
   onSettingsChange: (settings: ShellDeskAppSettings) => void;
   onImportConfig: () => void;
   onExportConfig: () => void;
@@ -363,6 +363,7 @@ function SettingsPage({
   settings,
   storageInfo,
   isConfigTransferPending,
+  updateCheckRequestId,
   onSettingsChange,
   onImportConfig,
   onExportConfig,
@@ -618,7 +619,7 @@ function SettingsPage({
       const result = await checkUpdates();
       setUpdateCheckResult(result);
 
-      if (result.updateAvailable) {
+      if (result.updateAvailable && settings.autoUpdateEnabled) {
         const checkForUpdateDownload = window.guiSSH?.app?.checkForUpdateDownload;
 
         if (checkForUpdateDownload) {
@@ -764,6 +765,14 @@ function SettingsPage({
       }));
     }
   };
+
+  useEffect(() => {
+    if (updateCheckRequestId <= 0) {
+      return;
+    }
+
+    void checkForUpdates();
+  }, [updateCheckRequestId]);
 
   const applySyncConfig = useCallback((config: ShellDeskSyncPublicConfig) => {
     setSyncConfig(config);
@@ -2282,7 +2291,7 @@ function SettingsPage({
           ) : null}
 
           {activeSection === 'about' ? (
-            <>
+            <div className="settings-about-grid">
               <section className="settings-section settings-about-section">
                 <div className="settings-about-hero">
                   <img src={appIconUrl} alt="" draggable={false} />
@@ -2293,7 +2302,7 @@ function SettingsPage({
                 </div>
               </section>
 
-              <section className="settings-section">
+              <section className="settings-section settings-about-info-section">
                 <h2>{t('settings.about.appInfo.title', settings.language)}</h2>
                 <div className="settings-card">
                   <div className="settings-row">
@@ -2302,20 +2311,6 @@ function SettingsPage({
                       <small>{appPlatform}</small>
                     </span>
                     <code className="settings-inline-code">v{appVersion}</code>
-                  </div>
-
-                  <div className="settings-row">
-                    <span>
-                      <strong>{t('settings.about.contact.label', settings.language)}</strong>
-                      <small>{t('settings.about.contact.summary', settings.language)}</small>
-                    </span>
-                    <button
-                      type="button"
-                      className="settings-link-button"
-                      onClick={() => openExternalLink(`mailto:${shellDeskContactEmail}`)}
-                    >
-                      {shellDeskContactEmail}
-                    </button>
                   </div>
 
                   <div className="settings-row">
@@ -2334,9 +2329,23 @@ function SettingsPage({
                 </div>
               </section>
 
-              <section className="settings-section">
+              <section className="settings-section settings-update-section">
                 <h2>{t('settings.update.title', settings.language)}</h2>
                 <div className="settings-card">
+                  <div className="settings-row">
+                    <span>
+                      <strong>{t('settings.update.auto.label', settings.language)}</strong>
+                      <small>{t('settings.update.auto.summary', settings.language)}</small>
+                    </span>
+                    <input
+                      type="checkbox"
+                      className="settings-toggle"
+                      checked={settings.autoUpdateEnabled}
+                      onChange={(event) => updateSetting('autoUpdateEnabled', event.target.checked)}
+                      aria-label={t('settings.update.auto.label', settings.language)}
+                    />
+                  </div>
+
                   <div className="settings-row">
                     <span>
                       <strong>{t('settings.update.status.label', settings.language)}</strong>
@@ -2385,7 +2394,9 @@ function SettingsPage({
                     <div className="settings-row settings-update-progress-row">
                       <span>
                         <strong>{t('settings.update.download.progress', settings.language)}</strong>
-                        <small>{t('settings.update.download.auto', settings.language)}</small>
+                        <small>{settings.autoUpdateEnabled
+                          ? t('settings.update.download.auto', settings.language)
+                          : t('settings.update.download.manualOnly', settings.language)}</small>
                       </span>
                       <div className="settings-update-progress" aria-label={t('settings.update.download.progress', settings.language)}>
                         <span style={{ width: `${updateProgressPercent}%` }} />
@@ -2398,7 +2409,9 @@ function SettingsPage({
                       <span>
                         <strong>{t('settings.update.download.title', settings.language)}</strong>
                         <small>
-                          {updateStatus.supported === false
+                          {!settings.autoUpdateEnabled
+                            ? t('settings.update.download.manualOnly', settings.language)
+                            : updateStatus.supported === false
                             ? updateStatus.unsupportedReason || t('settings.update.download.manual', settings.language)
                             : [updateCheckResult?.downloadName || t('settings.update.download.defaultName', settings.language), formatFileSize(updateCheckResult?.downloadSize ?? 0)].filter(Boolean).join(' · ')}
                         </small>
@@ -2427,7 +2440,7 @@ function SettingsPage({
                   ) : null}
                 </div>
               </section>
-            </>
+            </div>
           ) : null}
         </div>
       </section>

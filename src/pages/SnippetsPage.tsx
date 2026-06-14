@@ -1,4 +1,5 @@
 import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useMemo, useRef, useState } from 'react';
+import { Code2, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
 
 import { isMacClient, keyEventToShortcut } from '../components/remote-desktop/terminalSnippetShortcuts';
 import { t, useCurrentAppLanguage, type AppLanguage } from '../i18n';
@@ -654,7 +655,9 @@ function SnippetsPage({ settings, onSettingsChange }: SnippetsPageProps) {
                     className={`host-card snippet-card ${isSnippetEditorOpen && editingSnippetId === snippet.id ? 'active' : ''}`}
                   >
                     <div className="host-card-main snippet-card-main">
-                      <span className="host-avatar snippet-avatar" aria-hidden="true">{'{}'}</span>
+                      <span className="host-avatar snippet-avatar" aria-hidden="true">
+                        <Code2 />
+                      </span>
                       <span className="host-summary snippet-summary">
                         <strong>{snippet.label}</strong>
                         <small>{snippet.group || t('terminal.snippets.ungrouped', language)}</small>
@@ -666,7 +669,9 @@ function SnippetsPage({ settings, onSettingsChange }: SnippetsPageProps) {
                     </div>
                     <span className="host-card-actions snippet-card-actions">
                       <details className="host-card-menu snippet-card-menu" onClick={(event) => event.stopPropagation()}>
-                        <summary aria-label={t('snippets.page.actions', language)}>⋯</summary>
+                        <summary aria-label={t('snippets.page.actions', language)}>
+                          <MoreHorizontal aria-hidden="true" />
+                        </summary>
                         <div className="host-card-menu-panel">
                           <button
                             type="button"
@@ -675,6 +680,7 @@ function SnippetsPage({ settings, onSettingsChange }: SnippetsPageProps) {
                               startEditSnippet(snippet);
                             }}
                           >
+                            <Pencil aria-hidden="true" />
                             {t('app.host.edit', language)}
                           </button>
                           <button
@@ -685,6 +691,7 @@ function SnippetsPage({ settings, onSettingsChange }: SnippetsPageProps) {
                               void deleteSnippet(snippet.id);
                             }}
                           >
+                            <Trash2 aria-hidden="true" />
                             {t('terminal.snippets.delete', language)}
                           </button>
                         </div>

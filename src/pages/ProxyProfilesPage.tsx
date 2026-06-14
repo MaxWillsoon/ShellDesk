@@ -1,4 +1,5 @@
 import { type FormEvent, useMemo, useRef, useState } from 'react';
+import { Copy, MoreHorizontal, Pencil, Route, TerminalSquare, Trash2, Wifi } from 'lucide-react';
 
 import { useCurrentAppLanguage } from '../i18n';
 
@@ -184,6 +185,18 @@ function getEndpoint(config: ShellDeskProxyConfig) {
   return config.type === 'command'
     ? (config.command || 'ProxyCommand')
     : `${config.host}:${config.port}`;
+}
+
+function getProxyIcon(type: ShellDeskProxyType) {
+  if (type === 'command') {
+    return <TerminalSquare aria-hidden="true" />;
+  }
+
+  if (type === 'socks5') {
+    return <Route aria-hidden="true" />;
+  }
+
+  return <Wifi aria-hidden="true" />;
 }
 
 function formatCount(template: string, count: number) {
@@ -642,7 +655,7 @@ function ProxyProfilesPage({ hosts, proxyProfiles, onProxyProfilesChange }: Prox
                     <article key={profile.id} className={`host-card network-card ${draft?.id === profile.id ? 'active' : ''}`}>
                       <button type="button" className="host-card-main network-card-main" onClick={() => openEdit(profile)}>
                         <span className={`host-avatar network-avatar ${profile.config.type}`} aria-hidden="true">
-                          {profile.config.type === 'command' ? '$' : '↔'}
+                          {getProxyIcon(profile.config.type)}
                         </span>
                         <span className="host-summary network-summary">
                           <strong>{profile.label}</strong>
@@ -661,7 +674,9 @@ function ProxyProfilesPage({ hosts, proxyProfiles, onProxyProfilesChange }: Prox
                       </button>
                       <span className="host-card-actions network-card-actions">
                         <details className="host-card-menu" onClick={(event) => event.stopPropagation()}>
-                          <summary aria-label={copy.actions}>⋯</summary>
+                          <summary aria-label={copy.actions}>
+                            <MoreHorizontal aria-hidden="true" />
+                          </summary>
                           <div className="host-card-menu-panel">
                             <button
                               type="button"
@@ -671,6 +686,7 @@ function ProxyProfilesPage({ hosts, proxyProfiles, onProxyProfilesChange }: Prox
                                 void testProxy(profile);
                               }}
                             >
+                              <Wifi aria-hidden="true" />
                               {testState?.status === 'testing' ? copy.testing : copy.test}
                             </button>
                             <button
@@ -680,6 +696,7 @@ function ProxyProfilesPage({ hosts, proxyProfiles, onProxyProfilesChange }: Prox
                                 openEdit(profile);
                               }}
                             >
+                              <Pencil aria-hidden="true" />
                               {copy.edit}
                             </button>
                             <button
@@ -689,6 +706,7 @@ function ProxyProfilesPage({ hosts, proxyProfiles, onProxyProfilesChange }: Prox
                                 duplicateProfile(profile);
                               }}
                             >
+                              <Copy aria-hidden="true" />
                               {copy.duplicate}
                             </button>
                             <button
@@ -699,6 +717,7 @@ function ProxyProfilesPage({ hosts, proxyProfiles, onProxyProfilesChange }: Prox
                                 setDeleteTarget(profile);
                               }}
                             >
+                              <Trash2 aria-hidden="true" />
                               {copy.delete}
                             </button>
                           </div>

@@ -120,6 +120,7 @@ const defaultAppSettings: ShellDeskAppSettings = {
   accentColor: '#0f6bff',
   defaultHostView: 'list',
   minimizeToTrayOnClose: true,
+  autoUpdateEnabled: true,
   desktopWallpaperMode: 'preset',
   desktopWallpaperPresetId: 'default',
   desktopWallpaperDataUrl: '',
@@ -1932,6 +1933,8 @@ function App() {
   const [updateReadyNotice, setUpdateReadyNotice] = useState<UpdateReadyNotice | null>(null);
   const [updateInstallPending, setUpdateInstallPending] = useState(false);
   const [updateInstallError, setUpdateInstallError] = useState('');
+  const [appInfo, setAppInfo] = useState<ShellDeskAppInfo | null>(null);
+  const [settingsUpdateCheckRequestId, setSettingsUpdateCheckRequestId] = useState(0);
   const [credentialHost, setCredentialHost] = useState<ConnectionHost | null>(null);
   const [credentialForm, setCredentialForm] = useState<CredentialFormState>(emptyCredentialForm);
   const [credentialError, setCredentialError] = useState('');
@@ -2567,6 +2570,27 @@ function App() {
       removeSyncChanged?.();
     };
   }, [isConnectionWindow, updateSyncConflictNotice]);
+
+  useEffect(() => {
+    if (isConnectionWindow) {
+      return undefined;
+    }
+
+    const getInfo = window.guiSSH?.app?.getInfo;
+    let disposed = false;
+
+    void getInfo?.()
+      .then((info) => {
+        if (!disposed) {
+          setAppInfo(info);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      disposed = true;
+    };
+  }, [isConnectionWindow]);
 
   useEffect(() => {
     if (isConnectionWindow) {
@@ -4089,6 +4113,9 @@ function App() {
     ? formattedUpdateReadyVersion
     : t('app.update.ready.versionUnknown', appLanguage);
   const shouldShowUpdateReadyNotice = Boolean(updateReadyNotice) && !shouldShowSyncConflictNotice && !connection && !isConnectionWindow && activePage !== 'settings';
+  const footerVersionText = appInfo?.version
+    ? (appLanguage === 'zh-CN' ? `版本 ${appInfo.version}` : `Version ${appInfo.version}`)
+    : (appLanguage === 'zh-CN' ? '版本 --' : 'Version --');
   const hostKeyFingerprintLabel = hostKeyVerificationRequest?.fingerprint
     ? `SHA256:${hostKeyVerificationRequest.fingerprint.replace(/^SHA256:/i, '')}`
     : '';
@@ -4930,6 +4957,7 @@ function App() {
                 settings={settings}
                 storageInfo={storageInfo}
                 isConfigTransferPending={isConfigTransferPending}
+                updateCheckRequestId={settingsUpdateCheckRequestId}
                 onSettingsChange={updateSettings}
                 onImportConfig={importConfig}
                 onExportConfig={exportConfig}
@@ -5493,12 +5521,13 @@ function App() {
           <span>{appLanguage === 'zh-CN' ? 'SSH 代理：已连接' : 'SSH proxy: connected'}</span>
           <span>{appLanguage === 'zh-CN' ? `${hosts.length} 台主机` : `${hosts.length} hosts`}</span>
           <span>{appLanguage === 'zh-CN' ? `${proxyProfiles.length} 个代理` : `${proxyProfiles.length} proxies`}</span>
-          <span>{appLanguage === 'zh-CN' ? '版本 1.0.0' : 'Version 1.0.0'}</span>
+          <span>{footerVersionText}</span>
           <button
             type="button"
             onClick={() => {
               setActivePage('settings');
               preloadFullMessageCatalog();
+              setSettingsUpdateCheckRequestId((currentRequestId) => currentRequestId + 1);
             }}
           >
             {appLanguage === 'zh-CN' ? '检查更新' : 'Check updates'}

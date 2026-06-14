@@ -1,5 +1,6 @@
 const { app, BrowserWindow } = require('electron');
 const { toErrorMessage } = require('./validation.cjs');
+const { getVault } = require('./vaultStore.cjs');
 
 const updateChannels = {
   available: 'app:update:available',
@@ -63,6 +64,14 @@ function isAutoUpdateSupported() {
   }
 
   return process.platform === 'linux' && Boolean(process.env.APPIMAGE);
+}
+
+function isAutoUpdateEnabled() {
+  try {
+    return getVault().settings?.autoUpdateEnabled !== false;
+  } catch {
+    return true;
+  }
 }
 
 function getStatusSnapshot() {
@@ -213,6 +222,13 @@ async function checkForUpdateDownload(options = {}) {
     cancelAutoUpdateCheck();
   }
 
+  if (automatic && !isAutoUpdateEnabled()) {
+    return {
+      available: false,
+      supported: isAutoUpdateSupported(),
+    };
+  }
+
   if (!isAutoUpdateSupported()) {
     return {
       available: false,
@@ -294,7 +310,8 @@ async function checkForUpdateDownload(options = {}) {
 }
 
 function startAutoUpdateCheck(delayMs = 5000) {
-  if (!isAutoUpdateSupported()) {
+  if (!isAutoUpdateSupported() || !isAutoUpdateEnabled()) {
+    cancelAutoUpdateCheck();
     return;
   }
 
