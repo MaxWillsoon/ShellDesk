@@ -593,148 +593,55 @@
   flex-shrink: 0;
 }
 
-.notepad-line-numbers {
-  display: flex;
-  flex-direction: column;
-  padding: 8px 0;
-  min-width: 48px;
-  background: var(--surface-soft);
-  border-right: 1px solid var(--border);
-  overflow: hidden;
-  user-select: none;
-  flex-shrink: 0;
-  scrollbar-width: none;
-}
-
-.notepad-line-numbers span {
-  display: block;
-  height: 20px;
-  line-height: 20px;
-  min-height: 20px;
-  padding: 0 10px 0 6px;
-  text-align: right;
-  color: var(--muted);
-  font-family: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
-  font-size: 12px;
-}
-
-.notepad-line-numbers span.active {
-  color: var(--accent);
-}
-
-.notepad-line-numbers.compact {
-  justify-content: flex-start;
-}
-
-.notepad-line-numbers.compact span {
-  color: var(--muted);
-}
-
-.notepad-line-numbers.compact span.active {
-  color: var(--accent);
-  font-weight: 700;
-}
-
-.notepad-editor-container {
-  position: relative;
+.notepad-codemirror {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-}
-
-.notepad-line-height-measure {
-  position: absolute;
-  top: 0;
-  left: 0;
-  height: 0;
   min-height: 0;
-  margin: 0;
-  border: 0;
-  box-sizing: border-box;
-  resize: none;
-  visibility: hidden;
-  overflow: hidden;
-  pointer-events: none;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  word-wrap: break-word;
-  tab-size: 2;
-  -moz-tab-size: 2;
 }
 
-.notepad-highlight-layer {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  margin: 0;
-  padding: 8px 12px;
-  overflow: auto;
-  pointer-events: none;
-  white-space: pre;
-  word-wrap: normal;
-  font-family: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--text);
-  background: transparent;
-}
-
-.notepad-highlight-layer code {
-  font-family: inherit;
-  font-size: inherit;
-  line-height: inherit;
-}
-
-.notepad-textarea {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  width: 100%;
+.notepad-codemirror .cm-editor {
   height: 100%;
-  margin: 0;
-  padding: 8px 12px;
-  border: 0;
-  background: transparent;
-  color: transparent;
-  caret-color: var(--text);
-  font-family: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
-  font-size: 13px;
-  line-height: 20px;
-  white-space: pre;
-  word-wrap: normal;
-  resize: none;
-  outline: none;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.notepad-codemirror .cm-scroller {
+  background: var(--surface);
   overflow: auto;
-  tab-size: 2;
-  -moz-tab-size: 2;
 }
 
-.notepad-textarea:read-only {
-  cursor: default;
-}
-
-.notepad-editor-wrap.wrapped .notepad-highlight-layer,
-.notepad-editor-wrap.wrapped .notepad-textarea {
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-}
-
-.notepad-textarea::selection {
-  background: rgba(67, 199, 255, 0.25);
-  color: transparent;
-}
-
-.notepad-editor-wrap.lightweight .notepad-textarea {
+.notepad-codemirror .cm-content {
   color: var(--text);
 }
 
-.notepad-editor-wrap.lightweight .notepad-textarea::selection {
+.notepad-codemirror .cm-cursor {
+  border-left-color: var(--text);
+}
+
+.notepad-codemirror .cm-lineNumbers .cm-gutterElement {
+  min-width: 36px;
+  padding: 0 10px 0 6px;
+}
+
+.notepad-codemirror .cm-foldGutter .cm-gutterElement {
+  padding: 0 6px;
+}
+
+.notepad-codemirror .cm-searchMatch {
+  background: color-mix(in srgb, var(--warning) 34%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--warning) 60%, transparent);
+}
+
+.notepad-codemirror .cm-searchMatch-selected {
+  background: color-mix(in srgb, var(--accent) 36%, transparent);
+}
+
+.notepad-codemirror .cm-tooltip-autocomplete {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-panel);
   color: var(--text);
+  box-shadow: var(--shadow-panel);
 }
 
 .notepad-statusbar {
@@ -763,40 +670,6 @@
   direction: rtl;
   text-align: left;
 }
-
-/* highlight.js theme overrides (GitHub Dark style) */
-.notepad-highlight-layer .hljs-keyword { color: #ff7b72; }
-.notepad-highlight-layer .hljs-built_in { color: #d2a8ff; }
-.notepad-highlight-layer .hljs-type { color: #d2a8ff; }
-.notepad-highlight-layer .hljs-literal { color: #79c0ff; }
-.notepad-highlight-layer .hljs-number { color: #79c0ff; }
-.notepad-highlight-layer .hljs-string { color: #a5d6ff; }
-.notepad-highlight-layer .hljs-template-variable { color: #a5d6ff; }
-.notepad-highlight-layer .hljs-regexp { color: #a5d6ff; }
-.notepad-highlight-layer .hljs-symbol { color: #a5d6ff; }
-.notepad-highlight-layer .hljs-variable { color: #ffa657; }
-.notepad-highlight-layer .hljs-title { color: #d2a8ff; }
-.notepad-highlight-layer .hljs-title.class_ { color: #d2a8ff; }
-.notepad-highlight-layer .hljs-title.function_ { color: #d2a8ff; }
-.notepad-highlight-layer .hljs-params { color: #c9d1d9; }
-.notepad-highlight-layer .hljs-comment { color: #8b949e; font-style: italic; }
-.notepad-highlight-layer .hljs-doctag { color: #ff7b72; }
-.notepad-highlight-layer .hljs-meta { color: #8b949e; }
-.notepad-highlight-layer .hljs-section { color: #79c0ff; font-weight: bold; }
-.notepad-highlight-layer .hljs-selector-tag { color: #7ee787; }
-.notepad-highlight-layer .hljs-selector-id { color: #79c0ff; }
-.notepad-highlight-layer .hljs-selector-class { color: #d2a8ff; }
-.notepad-highlight-layer .hljs-selector-attr { color: #d2a8ff; }
-.notepad-highlight-layer .hljs-selector-pseudo { color: #d2a8ff; }
-.notepad-highlight-layer .hljs-attr { color: #79c0ff; }
-.notepad-highlight-layer .hljs-attribute { color: #a5d6ff; }
-.notepad-highlight-layer .hljs-name { color: #7ee787; }
-.notepad-highlight-layer .hljs-tag { color: #7ee787; }
-.notepad-highlight-layer .hljs-addition { color: #aff5b4; background: rgba(46, 160, 67, 0.15); }
-.notepad-highlight-layer .hljs-deletion { color: #ffdcd7; background: rgba(248, 81, 73, 0.15); }
-.notepad-highlight-layer .hljs-link { color: #a5d6ff; text-decoration: underline; }
-.notepad-highlight-layer .hljs-emphasis { font-style: italic; }
-.notepad-highlight-layer .hljs-strong { font-weight: bold; }
 
 [data-theme="light"] .notepad-root {
   background: #fff;
@@ -884,27 +757,6 @@
   color: #1f2328;
 }
 
-[data-theme="light"] .notepad-line-numbers {
-  background: #f6f8fa;
-  border-right-color: rgba(16, 32, 51, 0.1);
-}
-
-[data-theme="light"] .notepad-line-numbers span {
-  color: #8b949e;
-}
-
-[data-theme="light"] .notepad-line-numbers span.active {
-  color: var(--accent);
-}
-
-[data-theme="light"] .notepad-textarea {
-  caret-color: #1f2328;
-}
-
-[data-theme="light"] .notepad-textarea::selection {
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
-}
-
 [data-theme="light"] .notepad-statusbar {
   background: #f6f8fa;
   border-top-color: rgba(16, 32, 51, 0.1);
@@ -954,32 +806,6 @@
 [data-theme="light"] .notepad-ai-action span {
   color: #344054;
 }
-
-/* light theme highlight.js overrides */
-[data-theme="light"] .notepad-highlight-layer .hljs-keyword { color: #cf222e; }
-[data-theme="light"] .notepad-highlight-layer .hljs-built_in { color: #8250df; }
-[data-theme="light"] .notepad-highlight-layer .hljs-type { color: #8250df; }
-[data-theme="light"] .notepad-highlight-layer .hljs-literal { color: #0550ae; }
-[data-theme="light"] .notepad-highlight-layer .hljs-number { color: #0550ae; }
-[data-theme="light"] .notepad-highlight-layer .hljs-string { color: #0a3069; }
-[data-theme="light"] .notepad-highlight-layer .hljs-template-variable { color: #0a3069; }
-[data-theme="light"] .notepad-highlight-layer .hljs-regexp { color: #0a3069; }
-[data-theme="light"] .notepad-highlight-layer .hljs-variable { color: #953800; }
-[data-theme="light"] .notepad-highlight-layer .hljs-title { color: #8250df; }
-[data-theme="light"] .notepad-highlight-layer .hljs-title.class_ { color: #8250df; }
-[data-theme="light"] .notepad-highlight-layer .hljs-title.function_ { color: #8250df; }
-[data-theme="light"] .notepad-highlight-layer .hljs-comment { color: #6e7781; font-style: italic; }
-[data-theme="light"] .notepad-highlight-layer .hljs-doctag { color: #cf222e; }
-[data-theme="light"] .notepad-highlight-layer .hljs-meta { color: #6e7781; }
-[data-theme="light"] .notepad-highlight-layer .hljs-section { color: #0550ae; font-weight: bold; }
-[data-theme="light"] .notepad-highlight-layer .hljs-selector-tag { color: #116329; }
-[data-theme="light"] .notepad-highlight-layer .hljs-attr { color: #0550ae; }
-[data-theme="light"] .notepad-highlight-layer .hljs-attribute { color: #0a3069; }
-[data-theme="light"] .notepad-highlight-layer .hljs-name { color: #116329; }
-[data-theme="light"] .notepad-highlight-layer .hljs-tag { color: #116329; }
-[data-theme="light"] .notepad-highlight-layer .hljs-addition { color: #116329; background: rgba(46, 160, 67, 0.1); }
-[data-theme="light"] .notepad-highlight-layer .hljs-deletion { color: #82071e; background: rgba(248, 81, 73, 0.1); }
-[data-theme="light"] .notepad-highlight-layer .hljs-link { color: #0a3069; }
 
 /* notepad modal dialogs */
 .notepad-modal-overlay {

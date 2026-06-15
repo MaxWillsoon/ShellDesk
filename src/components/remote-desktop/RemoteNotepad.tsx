@@ -1,69 +1,26 @@
 import {
-  type ChangeEvent,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
 
-import hljs from 'highlight.js/lib/core';
-import javascript from 'highlight.js/lib/languages/javascript';
-import typescript from 'highlight.js/lib/languages/typescript';
-import python from 'highlight.js/lib/languages/python';
-import xml from 'highlight.js/lib/languages/xml';
-import css from 'highlight.js/lib/languages/css';
-import json from 'highlight.js/lib/languages/json';
-import bash from 'highlight.js/lib/languages/bash';
-import yaml from 'highlight.js/lib/languages/yaml';
-import markdown from 'highlight.js/lib/languages/markdown';
-import sql from 'highlight.js/lib/languages/sql';
-import go from 'highlight.js/lib/languages/go';
-import rust from 'highlight.js/lib/languages/rust';
-import java from 'highlight.js/lib/languages/java';
-import cpp from 'highlight.js/lib/languages/cpp';
-import php from 'highlight.js/lib/languages/php';
-import ruby from 'highlight.js/lib/languages/ruby';
-import ini from 'highlight.js/lib/languages/ini';
-import nginx from 'highlight.js/lib/languages/nginx';
-import dockerfile from 'highlight.js/lib/languages/dockerfile';
-import diff from 'highlight.js/lib/languages/diff';
-import plaintext from 'highlight.js/lib/languages/plaintext';
+import { indentWithTab } from '@codemirror/commands';
+import { openSearchPanel } from '@codemirror/search';
+import type { Extension } from '@codemirror/state';
+import { EditorSelection } from '@codemirror/state';
+import { EditorView, keymap } from '@codemirror/view';
+import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
 
 import { t, translateStructuredText, type AppLanguage, type MessageId } from '../../i18n';
 import { getErrorMessage } from './desktopUtils';
 import RemoteFilePicker from './RemoteFilePicker';
 import { clearCachedSudoPassword, getCachedSudoOptions, setCachedSudoPassword } from './sudoPrompt';
 import type { RemoteSystemType } from './types';
-
-hljs.registerLanguage('javascript', javascript);
-hljs.registerLanguage('typescript', typescript);
-hljs.registerLanguage('python', python);
-hljs.registerLanguage('xml', xml);
-hljs.registerLanguage('html', xml);
-hljs.registerLanguage('css', css);
-hljs.registerLanguage('json', json);
-hljs.registerLanguage('bash', bash);
-hljs.registerLanguage('shell', bash);
-hljs.registerLanguage('yaml', yaml);
-hljs.registerLanguage('markdown', markdown);
-hljs.registerLanguage('sql', sql);
-hljs.registerLanguage('go', go);
-hljs.registerLanguage('rust', rust);
-hljs.registerLanguage('java', java);
-hljs.registerLanguage('cpp', cpp);
-hljs.registerLanguage('c', cpp);
-hljs.registerLanguage('php', php);
-hljs.registerLanguage('ruby', ruby);
-hljs.registerLanguage('ini', ini);
-hljs.registerLanguage('nginx', nginx);
-hljs.registerLanguage('dockerfile', dockerfile);
-hljs.registerLanguage('diff', diff);
-hljs.registerLanguage('plaintext', plaintext);
 
 interface NotepadTab {
   id: string;
@@ -269,16 +226,72 @@ const LANGUAGE_OPTIONS: Array<{ value: string; label?: string; labelId?: Message
 ];
 
 const LANGUAGE_OPTION_VALUES = new Set(LANGUAGE_OPTIONS.map((language) => language.value));
-const AUTO_DETECT_LANGUAGE_VALUES = LANGUAGE_OPTIONS
-  .map((language) => language.value)
-  .filter((language) => language !== 'plaintext');
+type CodeMirrorLanguageLoader = () => Promise<Extension>;
+
+const CODEMIRROR_LANGUAGE_LOADERS: Partial<Record<string, CodeMirrorLanguageLoader>> = {
+  javascript: async () => (await import('@codemirror/lang-javascript')).javascript({ jsx: true }),
+  typescript: async () => (await import('@codemirror/lang-javascript')).javascript({ jsx: true, typescript: true }),
+  html: async () => (await import('@codemirror/lang-html')).html(),
+  xml: async () => (await import('@codemirror/lang-xml')).xml(),
+  css: async () => (await import('@codemirror/lang-css')).css(),
+  json: async () => (await import('@codemirror/lang-json')).json(),
+  yaml: async () => (await import('@codemirror/lang-yaml')).yaml(),
+  bash: async () => {
+    const [{ StreamLanguage }, { shell }] = await Promise.all([
+      import('@codemirror/language'),
+      import('@codemirror/legacy-modes/mode/shell'),
+    ]);
+    return StreamLanguage.define(shell);
+  },
+  markdown: async () => (await import('@codemirror/lang-markdown')).markdown(),
+  sql: async () => (await import('@codemirror/lang-sql')).sql(),
+  python: async () => (await import('@codemirror/lang-python')).python(),
+  go: async () => (await import('@codemirror/lang-go')).go(),
+  rust: async () => (await import('@codemirror/lang-rust')).rust(),
+  java: async () => (await import('@codemirror/lang-java')).java(),
+  c: async () => (await import('@codemirror/lang-cpp')).cpp(),
+  cpp: async () => (await import('@codemirror/lang-cpp')).cpp(),
+  php: async () => (await import('@codemirror/lang-php')).php(),
+  ruby: async () => {
+    const [{ StreamLanguage }, { ruby }] = await Promise.all([
+      import('@codemirror/language'),
+      import('@codemirror/legacy-modes/mode/ruby'),
+    ]);
+    return StreamLanguage.define(ruby);
+  },
+  ini: async () => {
+    const [{ StreamLanguage }, { properties }] = await Promise.all([
+      import('@codemirror/language'),
+      import('@codemirror/legacy-modes/mode/properties'),
+    ]);
+    return StreamLanguage.define(properties);
+  },
+  nginx: async () => {
+    const [{ StreamLanguage }, { nginx }] = await Promise.all([
+      import('@codemirror/language'),
+      import('@codemirror/legacy-modes/mode/nginx'),
+    ]);
+    return StreamLanguage.define(nginx);
+  },
+  dockerfile: async () => {
+    const [{ StreamLanguage }, { dockerFile }] = await Promise.all([
+      import('@codemirror/language'),
+      import('@codemirror/legacy-modes/mode/dockerfile'),
+    ]);
+    return StreamLanguage.define(dockerFile);
+  },
+  diff: async () => {
+    const [{ StreamLanguage }, { diff }] = await Promise.all([
+      import('@codemirror/language'),
+      import('@codemirror/legacy-modes/mode/diff'),
+    ]);
+    return StreamLanguage.define(diff);
+  },
+};
 const MAX_DIFF_INPUT_LINES = 180;
 const MAX_DIFF_OUTPUT_LINES = 280;
-const MAX_HIGHLIGHT_CHARACTERS = 320000;
 const MAX_LANGUAGE_DETECTION_CHARACTERS = 24000;
 const MAX_INTERACTIVE_LANGUAGE_DETECTION_CHARACTERS = 12000;
-const MAX_RENDERED_LINE_NUMBERS = 12000;
-const EDITOR_LINE_HEIGHT = 20;
 const MAX_AI_FILE_CONTEXT_CHARACTERS = 480000;
 const MAX_AI_FILE_CONTEXT_CHUNK_CHARACTERS = 60000;
 const MAX_AI_SELECTION_CHARACTERS = 6000;
@@ -295,11 +308,17 @@ function getFileExtension(name: string): string {
 }
 
 function normalizeLanguage(language?: string): string {
-  if (language && LANGUAGE_OPTION_VALUES.has(language) && hljs.getLanguage(language)) {
+  if (language && LANGUAGE_OPTION_VALUES.has(language)) {
     return language;
   }
 
   return 'plaintext';
+}
+
+function getPreferredLightTheme() {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-color-scheme: light)').matches;
 }
 
 function getFileNameLanguage(fileName: string): string {
@@ -375,15 +394,6 @@ function detectLanguageFromContent(content: string): string {
   if (/(^|\n)\s*[@.#a-z][^{\n;]+\{[\s\S]*?:[\s\S]*?\}/iu.test(trimmed)) return 'css';
   if (/^\s*[\w.-]+:\s+\S/mu.test(trimmed) && /^\s*-\s+\S/mu.test(trimmed)) return 'yaml';
 
-  try {
-    const detected = hljs.highlightAuto(sample, AUTO_DETECT_LANGUAGE_VALUES);
-    if (detected.language && detected.relevance >= 8) {
-      return normalizeLanguage(detected.language);
-    }
-  } catch {
-    return 'plaintext';
-  }
-
   return 'plaintext';
 }
 
@@ -424,13 +434,6 @@ function getPrivilegeErrorMessage(error: unknown) {
 function shouldPromptForSudoPassword(error: unknown) {
   const message = getErrorMessage(error);
   return message.startsWith(elevationRequiredPrefix) || message.startsWith(elevationAuthFailedPrefix);
-}
-
-function escapeHtml(content: string): string {
-  return content
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
 }
 
 function getRevisionHint(content: string): string {
@@ -509,25 +512,6 @@ function getLineStartOffset(content: string, targetLine: number) {
   }
 
   return offset >= 0 ? offset + 1 : content.length;
-}
-
-function countOccurrences(content: string, searchText: string): number {
-  if (!searchText) return 0;
-
-  let count = 0;
-  let start = 0;
-  while (start <= content.length) {
-    const matchIndex = content.indexOf(searchText, start);
-    if (matchIndex < 0) return count;
-    count += 1;
-    start = matchIndex + searchText.length;
-  }
-  return count;
-}
-
-function areLineHeightsEqual(firstHeights: number[], secondHeights: number[]) {
-  return firstHeights.length === secondHeights.length
-    && firstHeights.every((height, index) => height === secondHeights[index]);
 }
 
 function normalizeDiffLines(content: string): string[] {
@@ -801,10 +785,6 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
   const [goToLineValue, setGoToLineValue] = useState('');
   const [cursorLine, setCursorLine] = useState(1);
   const [cursorCol, setCursorCol] = useState(1);
-  const [findText, setFindText] = useState('');
-  const [replaceText, setReplaceText] = useState('');
-  const [findFeedback, setFindFeedback] = useState('');
-  const [showFind, setShowFind] = useState(false);
   const [wrapEnabled, setWrapEnabled] = useState(false);
   const [pendingCloseTab, setPendingCloseTab] = useState<{ id: string; title: string } | null>(null);
   const [conflictDialog, setConflictDialog] = useState<NotepadConflictDialog | null>(null);
@@ -818,7 +798,8 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
   const [remoteEnvironment, setRemoteEnvironment] = useState('');
   const [includeAiFileContext, setIncludeAiFileContext] = useState(true);
   const [lastAiSelection, setLastAiSelection] = useState<EditorSelectionSnapshot | null>(null);
-  const [lineNumberHeights, setLineNumberHeights] = useState<number[]>([EDITOR_LINE_HEIGHT]);
+  const [codeMirrorLanguageExtensions, setCodeMirrorLanguageExtensions] = useState<Extension[]>([]);
+  const [prefersLightTheme, setPrefersLightTheme] = useState(() => getPreferredLightTheme());
   const [sudoPrompt, setSudoPrompt] = useState<NotepadSudoPrompt | null>(null);
 
   const [filePickerVisible, setFilePickerVisible] = useState(false);
@@ -826,12 +807,8 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
   const [filePickerTitle, setFilePickerTitle] = useState('');
   const [filePickerOnConfirm, setFilePickerOnConfirm] = useState<((path: string) => void) | null>(null);
 
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const highlightRef = useRef<HTMLPreElement>(null);
-  const lineNumbersRef = useRef<HTMLDivElement>(null);
-  const lineHeightMeasureRef = useRef<HTMLTextAreaElement>(null);
+  const codeMirrorRef = useRef<ReactCodeMirrorRef>(null);
   const goToLineInputRef = useRef<HTMLInputElement>(null);
-  const findInputRef = useRef<HTMLInputElement>(null);
   const aiInputRef = useRef<HTMLTextAreaElement>(null);
   const aiMessagesEndRef = useRef<HTMLDivElement>(null);
   const sudoPasswordInputRef = useRef<HTMLInputElement>(null);
@@ -860,6 +837,46 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
   const updateTab = useCallback((tabId: string, update: (tab: NotepadTab) => NotepadTab) => {
     setTabs((currentTabs) => currentTabs.map((tab) => tab.id === tabId ? update(tab) : tab));
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return undefined;
+    }
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: light)');
+    const handleThemeChange = () => setPrefersLightTheme(mediaQuery.matches);
+    handleThemeChange();
+    mediaQuery.addEventListener('change', handleThemeChange);
+
+    return () => mediaQuery.removeEventListener('change', handleThemeChange);
+  }, []);
+
+  useEffect(() => {
+    const normalizedLanguage = normalizeLanguage(activeTab.language);
+    const languageLoader = CODEMIRROR_LANGUAGE_LOADERS[normalizedLanguage];
+    let cancelled = false;
+
+    if (!languageLoader) {
+      setCodeMirrorLanguageExtensions([]);
+      return undefined;
+    }
+
+    languageLoader()
+      .then((extension) => {
+        if (!cancelled) {
+          setCodeMirrorLanguageExtensions([extension]);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCodeMirrorLanguageExtensions([]);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab.language]);
 
   useEffect(() => {
     if (sudoPrompt) {
@@ -1103,119 +1120,79 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
 
   const activeContent = activeTab.content;
   const lineCount = useMemo(() => countLogicalLines(activeContent), [activeContent]);
-  const isLightweightEditor = activeContent.length > MAX_HIGHLIGHT_CHARACTERS || lineCount > MAX_RENDERED_LINE_NUMBERS;
-  const lightweightModeLabel = activeContent.length > MAX_HIGHLIGHT_CHARACTERS
-    ? t('notepad.lightweight.characters', language, { count: Math.round(MAX_HIGHLIGHT_CHARACTERS / 1000) })
-    : lineCount > MAX_RENDERED_LINE_NUMBERS
-      ? t('notepad.lightweight.lines', language, { count: MAX_RENDERED_LINE_NUMBERS.toLocaleString() })
-      : '';
-  const effectiveWrapEnabled = wrapEnabled && !isLightweightEditor;
+  const effectiveWrapEnabled = wrapEnabled;
+  const codeMirrorTheme = settings.theme === 'system' ? (prefersLightTheme ? 'light' : 'dark') : settings.theme;
   const lineEndingLabel = useMemo(() => getLineEndingLabel(activeContent, language), [activeContent, language]);
-  const highlightedHtml = useMemo(() => {
-    if (!activeContent) return '';
-    if (isLightweightEditor) {
-      return '';
-    }
-    if (!hljs.getLanguage(activeTab.language)) {
-      return escapeHtml(activeContent);
-    }
-
-    try {
-      return hljs.highlight(activeContent, { language: activeTab.language, ignoreIllegals: true }).value;
-    } catch {
-      return escapeHtml(activeContent);
-    }
-  }, [activeContent, activeTab.language, isLightweightEditor]);
-
-  const logicalLines = useMemo(() => (
-    isLightweightEditor ? [] : activeContent.split('\n')
-  ), [activeContent, isLightweightEditor]);
-  const syncLineNumberHeights = useCallback(() => {
-    const textarea = textareaRef.current;
-    const measure = lineHeightMeasureRef.current;
-
-    if (!effectiveWrapEnabled || isLightweightEditor) {
-      setLineNumberHeights((currentHeights) => (
-        areLineHeightsEqual(currentHeights, [EDITOR_LINE_HEIGHT]) ? currentHeights : [EDITOR_LINE_HEIGHT]
-      ));
-      return;
-    }
-
-    if (!textarea || !measure) {
-      const defaultHeights = Array.from({ length: lineCount }, () => EDITOR_LINE_HEIGHT);
-      setLineNumberHeights((currentHeights) => (
-        areLineHeightsEqual(currentHeights, defaultHeights) ? currentHeights : defaultHeights
-      ));
-      return;
-    }
-
-    const computedStyle = window.getComputedStyle(textarea);
-    const lineHeight = Number.parseFloat(computedStyle.lineHeight) || EDITOR_LINE_HEIGHT;
-    const paddingTop = Number.parseFloat(computedStyle.paddingTop) || 0;
-    const paddingBottom = Number.parseFloat(computedStyle.paddingBottom) || 0;
-    measure.style.width = `${textarea.clientWidth}px`;
-    measure.style.boxSizing = 'border-box';
-    measure.style.paddingLeft = computedStyle.paddingLeft;
-    measure.style.paddingRight = computedStyle.paddingRight;
-    measure.style.paddingTop = computedStyle.paddingTop;
-    measure.style.paddingBottom = computedStyle.paddingBottom;
-    measure.style.fontFamily = computedStyle.fontFamily;
-    measure.style.fontSize = computedStyle.fontSize;
-    measure.style.fontWeight = computedStyle.fontWeight;
-    measure.style.fontStyle = computedStyle.fontStyle;
-    measure.style.letterSpacing = computedStyle.letterSpacing;
-    measure.style.lineHeight = computedStyle.lineHeight;
-    measure.style.setProperty('tab-size', computedStyle.getPropertyValue('tab-size') || '2');
-
-    const nextHeights = logicalLines.map((line) => {
-      measure.value = line || ' ';
-      const contentHeight = Math.max(0, measure.scrollHeight - paddingTop - paddingBottom);
-      return Math.max(lineHeight, Math.ceil(contentHeight / lineHeight) * lineHeight);
-    });
-
-    setLineNumberHeights((currentHeights) => (
-      areLineHeightsEqual(currentHeights, nextHeights) ? currentHeights : nextHeights
-    ));
-  }, [effectiveWrapEnabled, isLightweightEditor, lineCount, logicalLines]);
-
-  useLayoutEffect(() => {
-    syncLineNumberHeights();
-  }, [syncLineNumberHeights]);
-
-  useEffect(() => {
-    const textarea = textareaRef.current;
-
-    if (!effectiveWrapEnabled || !textarea || typeof ResizeObserver === 'undefined') {
-      return undefined;
-    }
-
-    const resizeObserver = new ResizeObserver(() => syncLineNumberHeights());
-    resizeObserver.observe(textarea);
-
-    return () => resizeObserver.disconnect();
-  }, [effectiveWrapEnabled, syncLineNumberHeights]);
-
-  const lineNumberRows = useMemo(() => {
-    if (isLightweightEditor) {
-      return [
-        { key: 'current', lineNumber: cursorLine, active: true },
-        { key: 'ellipsis', lineNumber: '...', active: false },
-        { key: 'total', lineNumber: lineCount, active: false },
-      ];
-    }
-
-    return logicalLines.flatMap((_, index) => {
-      const visualLineCount = effectiveWrapEnabled
-      ? Math.max(1, Math.round((lineNumberHeights[index] ?? EDITOR_LINE_HEIGHT) / EDITOR_LINE_HEIGHT))
-      : 1;
-
-      return Array.from({ length: visualLineCount }, (__, visualIndex) => ({
-        key: `${index + 1}-${visualIndex}`,
-        lineNumber: visualIndex === 0 ? index + 1 : '',
-        active: visualIndex === 0 && cursorLine === index + 1,
-      }));
-    });
-  }, [cursorLine, effectiveWrapEnabled, isLightweightEditor, lineCount, lineNumberHeights, logicalLines]);
+  const codeMirrorExtensions = useMemo<Extension[]>(() => [
+    keymap.of([indentWithTab]),
+    ...codeMirrorLanguageExtensions,
+    ...(effectiveWrapEnabled ? [EditorView.lineWrapping] : []),
+    EditorView.theme({
+      '&': {
+        height: '100%',
+        minHeight: '0',
+        backgroundColor: 'var(--surface)',
+        color: 'var(--text)',
+        fontSize: '13px',
+      },
+      '.cm-scroller': {
+        backgroundColor: 'var(--surface)',
+        fontFamily: '"Cascadia Mono", "JetBrains Mono", Consolas, monospace',
+        lineHeight: '20px',
+      },
+      '.cm-content': {
+        padding: '8px 0',
+        caretColor: 'var(--text)',
+      },
+      '.cm-line': {
+        padding: '0 12px',
+      },
+      '.cm-gutters': {
+        borderRight: '1px solid var(--border)',
+        backgroundColor: 'var(--surface-soft)',
+        color: 'var(--muted)',
+      },
+      '.cm-activeLineGutter': {
+        backgroundColor: 'transparent',
+        color: 'var(--accent)',
+      },
+      '.cm-activeLine': {
+        backgroundColor: 'color-mix(in srgb, var(--accent) 8%, transparent)',
+      },
+      '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
+        backgroundColor: 'rgba(67, 199, 255, 0.25)',
+      },
+      '&.cm-focused': {
+        outline: 'none',
+      },
+      '.cm-panels': {
+        borderColor: 'var(--border)',
+        backgroundColor: 'var(--surface-panel)',
+        color: 'var(--text)',
+      },
+      '.cm-panel input': {
+        border: '1px solid var(--border)',
+        borderRadius: '6px',
+        padding: '4px 7px',
+        backgroundColor: 'var(--surface-input)',
+        color: 'var(--text)',
+      },
+      '.cm-panel button': {
+        border: '1px solid var(--border)',
+        borderRadius: '6px',
+        padding: '4px 8px',
+        backgroundColor: 'var(--surface-control)',
+        color: 'var(--muted-strong)',
+      },
+      '.cm-panel button:hover': {
+        borderColor: 'var(--border-strong)',
+        backgroundColor: 'var(--surface-hover)',
+        color: 'var(--text)',
+      },
+    }, {
+      dark: codeMirrorTheme === 'dark',
+    }),
+  ], [codeMirrorLanguageExtensions, codeMirrorTheme, effectiveWrapEnabled]);
 
   const saveTabToPath = useCallback(async (tabId: string, filePath: string, options: SaveOptions = {}) => {
     const tabToSave = tabsRef.current.find((tab) => tab.id === tabId);
@@ -1351,8 +1328,16 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
     closeTabNow(tabId);
   }, [closeTabNow]);
 
-  const handleContentChange = useCallback((event: ChangeEvent<HTMLTextAreaElement>) => {
-    const nextContent = event.target.value;
+  const updateCursorPosition = useCallback((view = codeMirrorRef.current?.view) => {
+    if (!view) return;
+
+    const position = view.state.selection.main.head;
+    const cursorPosition = getLineColumnAtPosition(view.state.doc.toString(), position);
+    setCursorLine(cursorPosition.line);
+    setCursorCol(cursorPosition.column);
+  }, []);
+
+  const handleEditorChange = useCallback((nextContent: string) => {
     updateTab(activeTabId, (tab) => tab.readOnly ? tab : {
       ...tab,
       content: nextContent,
@@ -1363,29 +1348,20 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
     });
   }, [activeTabId, updateTab]);
 
-  const updateCursorPosition = useCallback(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-
-    const position = textarea.selectionStart;
-    const cursorPosition = getLineColumnAtPosition(textarea.value, position);
-    setCursorLine(cursorPosition.line);
-    setCursorCol(cursorPosition.column);
-  }, []);
-
   const selectEditorRange = useCallback((start: number, end: number) => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
+    const view = codeMirrorRef.current?.view;
+    if (!view) return;
 
-    textarea.focus();
-    textarea.setSelectionRange(start, end);
-    const targetLine = getLineColumnAtPosition(textarea.value, start).line;
-    const previousLinesHeight = effectiveWrapEnabled
-      ? lineNumberHeights.slice(0, Math.max(0, targetLine - 1)).reduce((total, height) => total + height, 0)
-      : (targetLine - 1) * EDITOR_LINE_HEIGHT;
-    textarea.scrollTop = Math.max(0, previousLinesHeight - EDITOR_LINE_HEIGHT * 4);
-    updateCursorPosition();
-  }, [effectiveWrapEnabled, lineNumberHeights, updateCursorPosition]);
+    const docLength = view.state.doc.length;
+    const selectionStart = Math.max(0, Math.min(start, docLength));
+    const selectionEnd = Math.max(0, Math.min(end, docLength));
+    view.focus();
+    view.dispatch({
+      selection: EditorSelection.range(selectionStart, selectionEnd),
+      scrollIntoView: true,
+    });
+    updateCursorPosition(view);
+  }, [updateCursorPosition]);
 
   const replaceActiveContent = useCallback((nextContent: string, nextSelectionStart: number, nextSelectionEnd: number) => {
     updateTab(activeTabId, (tab) => tab.readOnly ? tab : {
@@ -1401,18 +1377,19 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
   }, [activeTabId, selectEditorRange, updateTab]);
 
   const getCurrentEditorSelection = useCallback((): EditorSelectionSnapshot => {
-    const textarea = textareaRef.current;
+    const view = codeMirrorRef.current?.view;
 
-    if (!textarea) {
+    if (!view) {
       return { start: 0, end: 0, text: '' };
     }
 
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
+    const selection = view.state.selection.main;
+    const start = selection.from;
+    const end = selection.to;
     return {
       start,
       end,
-      text: textarea.value.slice(start, end),
+      text: view.state.doc.sliceString(start, end),
     };
   }, []);
 
@@ -1788,23 +1765,9 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
     }
   }, [aiMessages, connectionId, getCurrentEditorSelection, isAiBusy, language, requestAiAssistant]);
 
-  const handleTextareaScroll = useCallback(() => {
-    const textarea = textareaRef.current;
-    const highlight = highlightRef.current;
-    const lineNumbers = lineNumbersRef.current;
-    if (textarea && highlight) {
-      highlight.scrollTop = textarea.scrollTop;
-      highlight.scrollLeft = textarea.scrollLeft;
-    }
-    if (textarea && lineNumbers) {
-      lineNumbers.scrollTop = textarea.scrollTop;
-    }
-  }, []);
-
   const handleGoToLine = useCallback(() => {
     const lineNumber = parseInt(goToLineValue, 10);
-    const textarea = textareaRef.current;
-    if (!textarea || Number.isNaN(lineNumber) || lineNumber < 1) {
+    if (Number.isNaN(lineNumber) || lineNumber < 1) {
       setShowGoToLine(false);
       return;
     }
@@ -1818,61 +1781,12 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
   }, [activeTab.content, goToLineValue, lineCount, selectEditorRange]);
 
   const openFindBar = useCallback(() => {
-    setShowFind(true);
-    setTimeout(() => findInputRef.current?.focus(), 0);
+    const view = codeMirrorRef.current?.view;
+    if (!view) return;
+
+    view.focus();
+    openSearchPanel(view);
   }, []);
-
-  const handleFindNext = useCallback((reverse = false) => {
-    const textarea = textareaRef.current;
-    if (!textarea || !findText) return;
-
-    const editorValue = textarea.value;
-    const nextIndex = reverse
-      ? editorValue.lastIndexOf(findText, Math.max(0, textarea.selectionStart - 1))
-      : editorValue.indexOf(findText, textarea.selectionEnd);
-    const wrappedIndex = reverse
-      ? editorValue.lastIndexOf(findText)
-      : editorValue.indexOf(findText);
-    const matchIndex = nextIndex >= 0 ? nextIndex : wrappedIndex;
-
-    if (matchIndex < 0) {
-      setFindFeedback(t('notepad.find.noMatch', language));
-      return;
-    }
-
-    selectEditorRange(matchIndex, matchIndex + findText.length);
-    setFindFeedback(nextIndex >= 0 ? '' : t('notepad.find.wrapped', language));
-  }, [findText, language, selectEditorRange]);
-
-  const handleReplaceCurrent = useCallback(() => {
-    const textarea = textareaRef.current;
-    if (!textarea || !findText || activeTab.readOnly) return;
-
-    const selectedContent = textarea.value.slice(textarea.selectionStart, textarea.selectionEnd);
-    if (selectedContent !== findText) {
-      handleFindNext();
-      return;
-    }
-
-    const nextContent = `${textarea.value.slice(0, textarea.selectionStart)}${replaceText}${textarea.value.slice(textarea.selectionEnd)}`;
-    const nextPosition = textarea.selectionStart + replaceText.length;
-    replaceActiveContent(nextContent, nextPosition, nextPosition);
-    setFindFeedback(t('notepad.find.replacedOne', language));
-  }, [activeTab.readOnly, findText, handleFindNext, language, replaceActiveContent, replaceText]);
-
-  const handleReplaceAll = useCallback(() => {
-    if (!findText || activeTab.readOnly) return;
-
-    const matchCount = countOccurrences(activeTab.content, findText);
-    if (matchCount === 0) {
-      setFindFeedback(t('notepad.find.noReplace', language));
-      return;
-    }
-
-    const nextContent = activeTab.content.split(findText).join(replaceText);
-    replaceActiveContent(nextContent, 0, 0);
-    setFindFeedback(t('notepad.find.replacedMany', language, { count: matchCount }));
-  }, [activeTab.content, activeTab.readOnly, findText, language, replaceActiveContent, replaceText]);
 
   const handleKeyDown = useCallback((event: ReactKeyboardEvent) => {
     const isMod = event.ctrlKey || event.metaKey;
@@ -1914,28 +1828,14 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
 
     if (event.key === 'Escape') {
       setShowGoToLine(false);
-      setShowFind(false);
-    }
-
-    if (event.key === 'Tab' && event.target === textareaRef.current && !activeTab.readOnly) {
-      event.preventDefault();
-      const textarea = textareaRef.current;
-      if (!textarea) return;
-
-      const start = textarea.selectionStart;
-      const end = textarea.selectionEnd;
-      const nextContent = `${textarea.value.slice(0, start)}  ${textarea.value.slice(end)}`;
-      replaceActiveContent(nextContent, start + 2, start + 2);
     }
   }, [
-    activeTab.readOnly,
     activeTabId,
     handleNewFile,
     language,
     openFilePicker,
     openFindBar,
     openSavePicker,
-    replaceActiveContent,
     saveTab,
   ]);
 
@@ -2069,8 +1969,7 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
             className={`notepad-tool-btn ${effectiveWrapEnabled ? 'active' : ''}`}
             onClick={() => setWrapEnabled((currentWrapEnabled) => !currentWrapEnabled)}
             aria-pressed={effectiveWrapEnabled}
-            disabled={isLightweightEditor}
-            title={isLightweightEditor ? t('notepad.toolbar.wrapDisabledTitle', language) : t('notepad.toolbar.wrapTitle', language)}
+            title={t('notepad.toolbar.wrapTitle', language)}
           >
             {t('notepad.status.wrap', language)}
           </button>
@@ -2086,7 +1985,7 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
             <span>{t('notepad.toolbar.syntax', language)}</span>
             <select
               className="notepad-toolbar-select"
-              value={hljs.getLanguage(activeTab.language) ? activeTab.language : 'plaintext'}
+              value={normalizeLanguage(activeTab.language)}
               onChange={(event) => updateTab(activeTabId, (tab) => ({
                 ...tab,
                 language: event.target.value,
@@ -2118,44 +2017,6 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
         </div>
       </div>
 
-      {showFind ? (
-        <div className="notepad-find-bar">
-          <input
-            ref={findInputRef}
-            type="text"
-            className="notepad-find-input"
-            placeholder={t('notepad.find.placeholder', language)}
-            value={findText}
-            onChange={(event) => {
-              setFindText(event.target.value);
-              setFindFeedback('');
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') handleFindNext(event.shiftKey);
-              if (event.key === 'Escape') setShowFind(false);
-            }}
-          />
-          <input
-            type="text"
-            className="notepad-find-input"
-            placeholder={t('notepad.find.replacePlaceholder', language)}
-            value={replaceText}
-            onChange={(event) => setReplaceText(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') handleReplaceCurrent();
-              if (event.key === 'Escape') setShowFind(false);
-            }}
-            disabled={activeTab.readOnly}
-          />
-          <button type="button" className="notepad-tool-btn" onClick={() => handleFindNext(true)}>{t('notepad.find.previous', language)}</button>
-          <button type="button" className="notepad-tool-btn" onClick={() => handleFindNext()}>{t('notepad.find.next', language)}</button>
-          <button type="button" className="notepad-tool-btn" onClick={handleReplaceCurrent} disabled={activeTab.readOnly}>{t('notepad.find.replace', language)}</button>
-          <button type="button" className="notepad-tool-btn" onClick={handleReplaceAll} disabled={activeTab.readOnly}>{t('notepad.find.replaceAll', language)}</button>
-          {findFeedback ? <span className="notepad-find-hint">{findFeedback}</span> : null}
-          <button type="button" className="notepad-tool-btn" onClick={() => setShowFind(false)}>{t('common.close', language)}</button>
-        </div>
-      ) : null}
-
       {showGoToLine ? (
         <div className="notepad-find-bar">
           <span className="notepad-find-label">{t('notepad.goTo.label', language)}</span>
@@ -2186,44 +2047,36 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
         {activeTab.isLoading ? (
           <div className="notepad-loading">{t('notepad.loading', language)}</div>
         ) : (
-          <div className={`notepad-editor-wrap ${effectiveWrapEnabled ? 'wrapped' : ''} ${isLightweightEditor ? 'lightweight' : ''}`}>
-            <div ref={lineNumbersRef} className={`notepad-line-numbers ${isLightweightEditor ? 'compact' : ''}`} aria-hidden="true">
-              {lineNumberRows.map((row) => (
-                <span key={row.key} className={row.active ? 'active' : ''}>
-                  {row.lineNumber}
-                </span>
-              ))}
-            </div>
-            <div className="notepad-editor-container">
-              <textarea
-                ref={lineHeightMeasureRef}
-                className="notepad-line-height-measure"
-                tabIndex={-1}
-                readOnly
-                aria-hidden="true"
-                wrap="soft"
-              />
-              {!isLightweightEditor ? (
-                <pre ref={highlightRef} className="notepad-highlight-layer" aria-hidden="true">
-                  <code dangerouslySetInnerHTML={{ __html: `${highlightedHtml}\n` }} />
-                </pre>
-              ) : null}
-              <textarea
-                ref={textareaRef}
-                className="notepad-textarea"
-                value={activeTab.content}
-                onChange={handleContentChange}
-                onKeyUp={updateCursorPosition}
-                onMouseUp={updateCursorPosition}
-                onScroll={handleTextareaScroll}
-                spellCheck={false}
-                autoComplete="off"
-                autoCapitalize="off"
-                wrap={wrapEnabled ? 'soft' : 'off'}
-                readOnly={activeTab.readOnly}
-                aria-label={t('notepad.editor.aria', language, { title: activeTab.title })}
-              />
-            </div>
+          <div className={`notepad-editor-wrap ${effectiveWrapEnabled ? 'wrapped' : ''}`}>
+            <CodeMirror
+              ref={codeMirrorRef}
+              className="notepad-codemirror"
+              value={activeTab.content}
+              height="100%"
+              basicSetup={{
+                lineNumbers: true,
+                foldGutter: true,
+                highlightActiveLine: true,
+                highlightActiveLineGutter: true,
+                bracketMatching: true,
+                closeBrackets: true,
+                autocompletion: true,
+                searchKeymap: true,
+                defaultKeymap: true,
+                history: true,
+              }}
+              theme={codeMirrorTheme}
+              extensions={codeMirrorExtensions}
+              editable={!activeTab.readOnly}
+              readOnly={activeTab.readOnly}
+              onChange={handleEditorChange}
+              onUpdate={(viewUpdate) => {
+                if (viewUpdate.docChanged || viewUpdate.selectionSet) {
+                  updateCursorPosition(viewUpdate.view);
+                }
+              }}
+              aria-label={t('notepad.editor.aria', language, { title: activeTab.title })}
+            />
           </div>
         )}
 
@@ -2345,7 +2198,6 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
         <span>{lineEndingLabel}</span>
         <span>{t('notepad.status.indentSpaces', language)}</span>
         <span>{effectiveWrapEnabled ? t('notepad.status.wrap', language) : t('notepad.status.noWrap', language)}</span>
-        {isLightweightEditor ? <span title={lightweightModeLabel}>{t('notepad.status.lightweight', language)}</span> : null}
         <span>{activeRevisionHint}</span>
         <span>{activeTab.readOnly ? t('notepad.status.readOnly', language) : activeTab.dirty ? t('notepad.status.modified', language) : t('notepad.status.synced', language)}</span>
         {activeTab.filePath ? <span className="notepad-statusbar-path" title={activeTab.filePath}>{activeTab.filePath}</span> : null}
