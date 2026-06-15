@@ -68,6 +68,20 @@ export interface CertScanResult {
   rawOutput: string;
 }
 
+export type CertbotRenewalScheduleState = 'enabled' | 'disabled' | 'not-configured' | 'unknown';
+export type CertbotRenewalScheduleBackend = 'systemd' | 'cron' | 'none' | 'unknown';
+
+export interface CertbotRenewalScheduleStatus {
+  state: CertbotRenewalScheduleState;
+  backend: CertbotRenewalScheduleBackend;
+  timerName: string;
+  serviceName: string;
+  cronPath: string;
+  nextRun: string;
+  lastResult: string;
+  rawOutput: string;
+}
+
 export function shellSingleQuote(value: string) {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
@@ -364,6 +378,217 @@ export function createCertbotRenewCommand(dryRun: boolean): RemoteCommandInput {
   };
 }
 
+export function createCertbotRenewalStatusCommand(isWindowsHost: boolean): RemoteCommandInput {
+  if (isWindowsHost) {
+    return powershellStdinCommand(`[Console]::Out.WriteLine("__SHELLDESK_CERT_RENEWAL_ERROR__|${tCurrent('auto.certManagerProviders.windowsUnsupported')}")`);
+  }
+
+  return {
+    command: `
+set -u
+emit() {
+  printf '__SHELLDESK_CERT_RENEWAL__|%s|%s\\n' "$1" "$2"
+}
+emit configured false
+emit state not-configured
+emit backend none
+emit timerName ''
+emit serviceName ''
+emit cronPath ''
+emit nextRun ''
+
+timer_name=""
+service_name=""
+if command -v systemctl >/dev/null 2>&1; then
+  for candidate in shelldesk-certbot-renew.timer certbot.timer snap.certbot.renew.timer; do
+    if systemctl list-unit-files "$candidate" --no-legend 2>/dev/null | awk '{print $1}' | grep -qx "$candidate" || [ -f "/etc/systemd/system/$candidate" ] || [ -f "/lib/systemd/system/$candidate" ] || [ -f "/usr/lib/systemd/system/$candidate" ]; then
+      timer_name="$candidate"
+      break
+    fi
+  done
+
+  if [ -n "$timer_name" ]; then
+    service_name="$(systemctl show "$timer_name" -p Unit --value 2>/dev/null || true)"
+    [ -n "$service_name" ] || service_name="\${timer_name%.timer}.service"
+    enabled_text="$(systemctl is-enabled "$timer_name" 2>/dev/null || true)"
+    active_text="$(systemctl is-active "$timer_name" 2>/dev/null || true)"
+    next_run="$(systemctl show "$timer_name" -p NextElapseUSecRealtime --value 2>/dev/null | sed -n '1p')"
+    [ -n "$next_run" ] || next_run="$(systemctl list-timers --all "$timer_name" --no-legend 2>/dev/null | awk '{$1=$1; print}' | sed -n '1p')"
+    emit configured true
+    emit backend systemd
+    case "$enabled_text:$active_text" in
+      enabled:active|enabled:activating|static:active) emit state enabled ;;
+      *:active) emit state enabled ;;
+      disabled:*|*:inactive|*:failed) emit state disabled ;;
+      *) emit state unknown ;;
+    esac
+    emit timerName "$timer_name"
+    emit serviceName "$service_name"
+    emit nextRun "$next_run"
+    if command -v journalctl >/dev/null 2>&1; then
+      log_text="$(journalctl -u "$service_name" -u certbot.service -n 8 --no-pager 2>/dev/null || true)"
+      [ -n "$log_text" ] || log_text="-- No entries --"
+      printf '__SHELLDESK_CERT_RENEWAL_LOG_BEGIN__\\n%s\\n__SHELLDESK_CERT_RENEWAL_LOG_END__\\n' "$log_text"
+    else
+      printf '__SHELLDESK_CERT_RENEWAL_LOG_BEGIN__\\n-- No entries --\\n__SHELLDESK_CERT_RENEWAL_LOG_END__\\n'
+    fi
+    exit 0
+  fi
+fi
+
+cron_path=""
+for candidate in /etc/cron.d/shelldesk-certbot-renew /etc/cron.d/shelldesk-certbot-renew.disabled /etc/cron.d/certbot /etc/cron.daily/certbot /etc/cron.weekly/certbot; do
+  if [ -e "$candidate" ]; then
+    if grep -aEq 'certbot[[:space:]]+renew|certbot.*renew' "$candidate" 2>/dev/null; then
+      cron_path="$candidate"
+      break
+    fi
+  fi
+done
+if [ -z "$cron_path" ] && [ -f /etc/crontab ] && grep -aEq 'certbot[[:space:]]+renew|certbot.*renew' /etc/crontab 2>/dev/null; then
+  cron_path="/etc/crontab"
+fi
+
+if [ -n "$cron_path" ]; then
+  emit configured true
+  emit backend cron
+  emit cronPath "$cron_path"
+  case "$cron_path" in
+    *.disabled) emit state disabled ;;
+    *) emit state enabled ;;
+  esac
+  emit nextRun "cron"
+  printf '__SHELLDESK_CERT_RENEWAL_LOG_BEGIN__\\n-- No entries --\\n__SHELLDESK_CERT_RENEWAL_LOG_END__\\n'
+fi
+`.trim(),
+  };
+}
+
+export function createEnableCertbotRenewalCommand(isWindowsHost: boolean): RemoteCommandInput {
+  if (isWindowsHost) {
+    return powershellStdinCommand(`[Console]::Out.WriteLine("${tCurrent('auto.certManagerProviders.windowsUnsupported')}")`);
+  }
+
+  return {
+    command: `
+set -eu
+timer_path=/etc/systemd/system/shelldesk-certbot-renew.timer
+service_path=/etc/systemd/system/shelldesk-certbot-renew.service
+cron_path=/etc/cron.d/shelldesk-certbot-renew
+cron_disabled_path=/etc/cron.d/shelldesk-certbot-renew.disabled
+
+if command -v systemctl >/dev/null 2>&1 && systemctl list-timers --all >/dev/null 2>&1; then
+  cat <<'EOF' | sudo -n tee "$service_path" >/dev/null
+[Unit]
+Description=ShellDesk Certbot renewal
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env certbot renew --quiet --non-interactive
+EOF
+  cat <<'EOF' | sudo -n tee "$timer_path" >/dev/null
+[Unit]
+Description=ShellDesk Certbot renewal timer
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+RandomizedDelaySec=1h
+Persistent=true
+Unit=shelldesk-certbot-renew.service
+
+[Install]
+WantedBy=timers.target
+EOF
+  sudo -n chmod 0644 "$service_path" "$timer_path"
+  sudo -n systemctl daemon-reload
+  sudo -n systemctl enable --now shelldesk-certbot-renew.timer
+  printf 'SHELLDESK_CERTBOT_RENEWAL|systemd|enabled\\n'
+else
+  if [ -f "$cron_disabled_path" ]; then
+    sudo -n mv "$cron_disabled_path" "$cron_path"
+  else
+    cat <<'EOF' | sudo -n tee "$cron_path" >/dev/null
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+17 3 * * * root certbot renew --quiet --non-interactive
+EOF
+  fi
+  sudo -n chmod 0644 "$cron_path"
+  printf 'SHELLDESK_CERTBOT_RENEWAL|cron|enabled\\n'
+fi
+`.trim(),
+  };
+}
+
+export function createSetCertbotRenewalEnabledCommand(enabled: boolean, isWindowsHost: boolean): RemoteCommandInput {
+  if (isWindowsHost) {
+    return powershellStdinCommand(`[Console]::Out.WriteLine("${tCurrent('auto.certManagerProviders.windowsUnsupported')}")`);
+  }
+
+  const systemdAction = enabled ? 'enable --now' : 'disable --now';
+  const cronAction = enabled
+    ? 'if [ -f /etc/cron.d/shelldesk-certbot-renew.disabled ]; then sudo -n mv /etc/cron.d/shelldesk-certbot-renew.disabled /etc/cron.d/shelldesk-certbot-renew; fi'
+    : 'if [ -f /etc/cron.d/shelldesk-certbot-renew ]; then sudo -n mv /etc/cron.d/shelldesk-certbot-renew /etc/cron.d/shelldesk-certbot-renew.disabled; fi';
+
+  return {
+    command: `
+set -eu
+if command -v systemctl >/dev/null 2>&1; then
+  for candidate in shelldesk-certbot-renew.timer certbot.timer snap.certbot.renew.timer; do
+    if systemctl list-unit-files "$candidate" --no-legend 2>/dev/null | awk '{print $1}' | grep -qx "$candidate" || [ -f "/etc/systemd/system/$candidate" ] || [ -f "/lib/systemd/system/$candidate" ] || [ -f "/usr/lib/systemd/system/$candidate" ]; then
+      sudo -n systemctl ${systemdAction} "$candidate"
+      printf 'SHELLDESK_CERTBOT_RENEWAL|systemd|%s|%s\\n' ${shellSingleQuote(enabled ? 'enabled' : 'disabled')} "$candidate"
+      exit 0
+    fi
+  done
+fi
+${cronAction}
+printf 'SHELLDESK_CERTBOT_RENEWAL|cron|%s\\n' ${shellSingleQuote(enabled ? 'enabled' : 'disabled')}
+`.trim(),
+  };
+}
+
+export function createDeleteCertbotRenewalCommand(isWindowsHost: boolean): RemoteCommandInput {
+  if (isWindowsHost) {
+    return powershellStdinCommand(`[Console]::Out.WriteLine("${tCurrent('auto.certManagerProviders.windowsUnsupported')}")`);
+  }
+
+  return {
+    command: `
+set -eu
+if command -v systemctl >/dev/null 2>&1 && { [ -f /etc/systemd/system/shelldesk-certbot-renew.timer ] || [ -f /etc/systemd/system/shelldesk-certbot-renew.service ]; }; then
+  sudo -n systemctl disable --now shelldesk-certbot-renew.timer 2>/dev/null || true
+  sudo -n rm -f /etc/systemd/system/shelldesk-certbot-renew.timer /etc/systemd/system/shelldesk-certbot-renew.service
+  sudo -n systemctl daemon-reload
+fi
+sudo -n rm -f /etc/cron.d/shelldesk-certbot-renew /etc/cron.d/shelldesk-certbot-renew.disabled
+printf 'SHELLDESK_CERTBOT_RENEWAL|deleted\\n'
+`.trim(),
+  };
+}
+
+export function createCertbotRenewalLogCommand(isWindowsHost: boolean): RemoteCommandInput {
+  if (isWindowsHost) {
+    return powershellStdinCommand(`[Console]::Out.WriteLine("${tCurrent('auto.certManagerProviders.windowsUnsupported')}")`);
+  }
+
+  return {
+    command: `
+if command -v journalctl >/dev/null 2>&1; then
+  service_name=shelldesk-certbot-renew.service
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files certbot.timer --no-legend 2>/dev/null | awk '{print $1}' | grep -qx certbot.timer; then
+    service_name=certbot.service
+  fi
+  journalctl -u "$service_name" -u certbot.service -n 120 --no-pager 2>/dev/null || printf '%s\\n' '-- No entries --'
+else
+  printf '%s\\n' '-- No entries --'
+fi
+`.trim(),
+  };
+}
+
 export function createTrustedRootScanCommand(isWindowsHost: boolean): RemoteCommandInput {
   if (isWindowsHost) {
     return powershellStdinCommand(`[Console]::Out.WriteLine("__SHELLDESK_ROOT_CERT_ERROR__|${tCurrent('auto.certManagerProviders.windowsUnsupported')}")`);
@@ -600,6 +825,41 @@ export function parseCertDetail(stdout: string): RemoteCertificateDetail {
     throw new Error(errorLine.slice('__SHELLDESK_CERT_ERROR__|'.length));
   }
   return parseCertFields(stdout);
+}
+
+export function parseCertbotRenewalStatus(stdout: string): CertbotRenewalScheduleStatus {
+  const errorLine = stdout.split(/\r?\n/).find((line) => line.startsWith('__SHELLDESK_CERT_RENEWAL_ERROR__|'));
+  if (errorLine) {
+    throw new Error(errorLine.slice('__SHELLDESK_CERT_RENEWAL_ERROR__|'.length));
+  }
+
+  const fields = new Map<string, string>();
+  for (const line of stdout.split(/\r?\n/)) {
+    const match = line.match(/^__SHELLDESK_CERT_RENEWAL__\|([^|]+)\|(.*)$/);
+    if (match) fields.set(match[1], match[2]);
+  }
+
+  const logMatch = stdout.match(/__SHELLDESK_CERT_RENEWAL_LOG_BEGIN__\n([\s\S]*?)\n__SHELLDESK_CERT_RENEWAL_LOG_END__/);
+  const configured = fields.get('configured') === 'true';
+  const parsedState = fields.get('state');
+  const state: CertbotRenewalScheduleState = parsedState === 'enabled' || parsedState === 'disabled' || parsedState === 'unknown'
+    ? parsedState
+    : configured ? 'unknown' : 'not-configured';
+  const parsedBackend = fields.get('backend');
+  const backend: CertbotRenewalScheduleBackend = parsedBackend === 'systemd' || parsedBackend === 'cron' || parsedBackend === 'unknown'
+    ? parsedBackend
+    : 'none';
+
+  return {
+    state,
+    backend,
+    timerName: fields.get('timerName') ?? '',
+    serviceName: fields.get('serviceName') ?? '',
+    cronPath: fields.get('cronPath') ?? '',
+    nextRun: fields.get('nextRun') ?? '',
+    lastResult: logMatch?.[1]?.trim() || '-- No entries --',
+    rawOutput: stdout,
+  };
 }
 
 export function parseTrustedRootDetail(stdout: string): TrustedRootCertificateDetail {

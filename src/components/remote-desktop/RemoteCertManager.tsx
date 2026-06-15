@@ -7,6 +7,11 @@ import { isWindowsSystem } from './remoteSystem';
 import { useSudoCommand } from './sudoPrompt';
 import type { RemoteSystemType } from './types';
 import {
+  createCertbotRenewalLogCommand,
+  createCertbotRenewalStatusCommand,
+  createDeleteCertbotRenewalCommand,
+  createEnableCertbotRenewalCommand,
+  createSetCertbotRenewalEnabledCommand,
   createCertbotListCommand,
   createCertbotRenewCommand,
   createAddTrustedRootCommand,
@@ -16,11 +21,13 @@ import {
   createTrustedRootDetailCommand,
   createTrustedRootScanCommand,
   parseCertbotList,
+  parseCertbotRenewalStatus,
   parseCertDetail,
   parseCertScanOutput,
   parseTrustedRootDetail,
   parseTrustedRootScanOutput,
   type CertbotCertificate,
+  type CertbotRenewalScheduleStatus,
   type CertExpiryStatus,
   type RemoteCertificateDetail,
   type RemoteCertificateSummary,
@@ -35,6 +42,7 @@ interface RemoteCertManagerProps {
 }
 
 type PendingAction = 'renew' | 'dry-run';
+type PendingRenewalAction = 'create' | 'enable' | 'disable' | 'delete';
 type CertManagerTab = 'site' | 'roots';
 
 function getStatusLabel(status: CertExpiryStatus, daysRemaining: number | null) {
@@ -61,6 +69,42 @@ function getTrustedRootTitle(cert: TrustedRootCertificate | TrustedRootCertifica
   return cert.subjectCommonName || cert.filePath.split('/').pop() || cert.filePath;
 }
 
+function getRenewalStateLabel(status: CertbotRenewalScheduleStatus | null) {
+  if (!status) return tCurrent('auto.remoteCertManager.renewal.status.unknown');
+  if (status.state === 'enabled') return tCurrent('auto.remoteCertManager.renewal.status.enabled');
+  if (status.state === 'disabled') return tCurrent('auto.remoteCertManager.renewal.status.disabled');
+  if (status.state === 'not-configured') return tCurrent('auto.remoteCertManager.renewal.status.notConfigured');
+  return tCurrent('auto.remoteCertManager.renewal.status.unknown');
+}
+
+function getRenewalBackendLabel(status: CertbotRenewalScheduleStatus | null) {
+  if (!status || status.backend === 'none') return '-';
+  if (status.backend === 'systemd') return status.timerName || 'systemd';
+  if (status.backend === 'cron') return status.cronPath || 'cron';
+  return tCurrent('auto.remoteCertManager.renewal.backend.unknown');
+}
+
+function getRenewalActionLabel(action: PendingRenewalAction) {
+  if (action === 'create') return tCurrent('auto.remoteCertManager.renewal.create');
+  if (action === 'enable') return tCurrent('auto.remoteCertManager.renewal.enable');
+  if (action === 'disable') return tCurrent('auto.remoteCertManager.renewal.disable');
+  return tCurrent('auto.remoteCertManager.renewal.delete');
+}
+
+function getRenewalActionBody(action: PendingRenewalAction) {
+  if (action === 'create') return tCurrent('auto.remoteCertManager.renewal.confirm.create');
+  if (action === 'enable') return tCurrent('auto.remoteCertManager.renewal.confirm.enable');
+  if (action === 'disable') return tCurrent('auto.remoteCertManager.renewal.confirm.disable');
+  return tCurrent('auto.remoteCertManager.renewal.confirm.delete');
+}
+
+function getRenewalNotice(action: PendingRenewalAction) {
+  if (action === 'create') return tCurrent('auto.remoteCertManager.renewal.notice.create');
+  if (action === 'enable') return tCurrent('auto.remoteCertManager.renewal.notice.enable');
+  if (action === 'disable') return tCurrent('auto.remoteCertManager.renewal.notice.disable');
+  return tCurrent('auto.remoteCertManager.renewal.notice.delete');
+}
+
 function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps) {
   const isWindowsHost = isWindowsSystem(systemType);
   const { runCommand, sudoPrompt } = useSudoCommand(connectionId, systemType);
@@ -82,6 +126,9 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
   const [rootDetailLoading, setRootDetailLoading] = useState(false);
   const [actionRunning, setActionRunning] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const [renewalStatus, setRenewalStatus] = useState<CertbotRenewalScheduleStatus | null>(null);
+  const [renewalLoading, setRenewalLoading] = useState(false);
+  const [pendingRenewalAction, setPendingRenewalAction] = useState<PendingRenewalAction | null>(null);
   const [rawOutput, setRawOutput] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -135,6 +182,33 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
     setCertbotCertificates(parseCertbotList([result.stdout, result.stderr].filter(Boolean).join('\n')));
   }, [isWindowsHost, runCommand]);
 
+  const refreshRenewalStatus = useCallback(async () => {
+    if (isWindowsHost) {
+      setRenewalStatus(null);
+      return;
+    }
+
+    setRenewalLoading(true);
+    try {
+      const result = await runCommand(createCertbotRenewalStatusCommand(isWindowsHost));
+      const parsed = parseCertbotRenewalStatus([result.stdout, result.stderr].filter(Boolean).join('\n'));
+      setRenewalStatus(parsed);
+    } catch (error) {
+      setRenewalStatus({
+        state: 'unknown',
+        backend: 'unknown',
+        timerName: '',
+        serviceName: '',
+        cronPath: '',
+        nextRun: '',
+        lastResult: getErrorMessage(error),
+        rawOutput: '',
+      });
+    } finally {
+      setRenewalLoading(false);
+    }
+  }, [isWindowsHost, runCommand]);
+
   const refresh = useCallback(async () => {
     setSiteLoading(true);
     setError('');
@@ -154,6 +228,7 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
       ));
       setLastRefreshedAt(new Date().toLocaleTimeString(getShellDeskLocale()));
       await refreshCertbotList(parsed.certbotInstalled);
+      await refreshRenewalStatus();
       setNotice(tCurrent('auto.remoteCertManager.scanComplete', { value0: parsed.certificates.length }));
       if (parsed.errors.length) {
         setError(parsed.errors.slice(0, 4).join('\n'));
@@ -166,7 +241,7 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
     } finally {
       setSiteLoading(false);
     }
-  }, [isWindowsHost, refreshCertbotList, runCommand]);
+  }, [isWindowsHost, refreshCertbotList, refreshRenewalStatus, runCommand]);
 
   const refreshTrustedRoots = useCallback(async () => {
     const requestId = trustedRootsRequestIdRef.current + 1;
@@ -316,6 +391,51 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
     }
   };
 
+  const executeRenewalAction = async () => {
+    if (!pendingRenewalAction) return;
+
+    setActionRunning(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const command = pendingRenewalAction === 'create'
+        ? createEnableCertbotRenewalCommand(isWindowsHost)
+        : pendingRenewalAction === 'delete'
+          ? createDeleteCertbotRenewalCommand(isWindowsHost)
+          : createSetCertbotRenewalEnabledCommand(pendingRenewalAction === 'enable', isWindowsHost);
+      const result = await runCommand(command);
+      const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
+      setRawOutput(output);
+      if (result.code !== 0) throw new Error(output || tCurrent('auto.remoteCertManager.actionFailed'));
+      setNotice(getRenewalNotice(pendingRenewalAction));
+      setPendingRenewalAction(null);
+      await refreshRenewalStatus();
+    } catch (error) {
+      setError(getErrorMessage(error));
+    } finally {
+      setActionRunning(false);
+    }
+  };
+
+  const viewRenewalLog = async () => {
+    setActionRunning(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const result = await runCommand(createCertbotRenewalLogCommand(isWindowsHost));
+      const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim() || '-- No entries --';
+      setRawOutput(output);
+      if (result.code !== 0) throw new Error(output);
+      setNotice(tCurrent('auto.remoteCertManager.renewal.notice.logLoaded'));
+    } catch (error) {
+      setError(getErrorMessage(error));
+    } finally {
+      setActionRunning(false);
+    }
+  };
+
   const copyFingerprint = async () => {
     const fingerprint = activeTab === 'roots'
       ? selectedRootDetail?.sha256Fingerprint || selectedTrustedRoot?.sha256Fingerprint
@@ -450,6 +570,10 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
     [tCurrent('auto.remoteCertManager.field.path'), selectedRootDetail?.filePath],
   ] as const;
   const activeLoading = activeTab === 'roots' ? rootLoading : siteLoading;
+  const canManageRenewalSchedule = renewalStatus?.backend === 'systemd'
+    || (renewalStatus?.backend === 'cron' && renewalStatus.cronPath.includes('shelldesk-certbot-renew'));
+  const canDeleteRenewalSchedule = renewalStatus?.timerName === 'shelldesk-certbot-renew.timer'
+    || (renewalStatus?.backend === 'cron' && renewalStatus.cronPath.includes('shelldesk-certbot-renew'));
 
   return (
     <section className="cert-manager">
@@ -552,6 +676,49 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
               ))}
               {!certbotInstalled ? <p>{tCurrent('auto.remoteCertManager.certbotMissingHint')}</p> : null}
             </div>
+            <div className="certbot-list">
+              <div className={`certbot-item ${renewalStatus?.state === 'enabled' ? 'valid' : renewalStatus?.state === 'disabled' ? 'warning' : 'unknown'}`}>
+                <strong>{tCurrent('auto.remoteCertManager.renewal.title')}</strong>
+                <span>{getRenewalStateLabel(renewalStatus)}</span>
+                <em>{renewalLoading ? tCurrent('auto.remoteCertManager.renewal.loading') : getRenewalBackendLabel(renewalStatus)}</em>
+              </div>
+              <dl className="cert-detail-list">
+                <div>
+                  <dt>{tCurrent('auto.remoteCertManager.renewal.nextRun')}</dt>
+                  <dd>{renewalStatus?.nextRun || '-'}</dd>
+                </div>
+                <div>
+                  <dt>{tCurrent('auto.remoteCertManager.renewal.lastResult')}</dt>
+                  <dd>{renewalStatus?.lastResult || '-- No entries --'}</dd>
+                </div>
+              </dl>
+              <div className="cert-actions">
+                <button type="button" onClick={refreshRenewalStatus} disabled={renewalLoading || actionRunning}>
+                  {renewalLoading ? tCurrent('auto.remoteCertManager.refreshing') : tCurrent('auto.remoteCertManager.refresh')}
+                </button>
+                {renewalStatus?.state === 'enabled' && canManageRenewalSchedule ? (
+                  <button type="button" onClick={() => setPendingRenewalAction('disable')} disabled={actionRunning}>
+                    {tCurrent('auto.remoteCertManager.renewal.disable')}
+                  </button>
+                ) : renewalStatus?.state === 'disabled' && canManageRenewalSchedule ? (
+                  <button type="button" className="primary" onClick={() => setPendingRenewalAction('enable')} disabled={actionRunning}>
+                    {tCurrent('auto.remoteCertManager.renewal.enable')}
+                  </button>
+                ) : renewalStatus?.state === 'not-configured' || !renewalStatus ? (
+                  <button type="button" className="primary" onClick={() => setPendingRenewalAction('create')} disabled={!certbotInstalled || actionRunning}>
+                    {tCurrent('auto.remoteCertManager.renewal.create')}
+                  </button>
+                ) : null}
+                <button type="button" onClick={viewRenewalLog} disabled={actionRunning}>
+                  {tCurrent('auto.remoteCertManager.renewal.viewLog')}
+                </button>
+                {canDeleteRenewalSchedule ? (
+                  <button type="button" className="danger" onClick={() => setPendingRenewalAction('delete')} disabled={actionRunning}>
+                    {tCurrent('auto.remoteCertManager.renewal.delete')}
+                  </button>
+                ) : null}
+              </div>
+            </div>
             <pre className="cert-raw-output">{rawOutput || tCurrent('auto.remoteCertManager.noRawOutput')}</pre>
           </section>
         </main>
@@ -641,6 +808,29 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
             <div className="cert-confirm-actions">
               <button type="button" onClick={() => setPendingAction(null)}>{tCurrent('auto.remoteCertManager.cancel')}</button>
               <button type="button" className={pendingAction === 'renew' ? 'danger' : 'primary'} onClick={executeCertbotAction} disabled={actionRunning}>
+                {actionRunning ? tCurrent('auto.remoteCertManager.running') : tCurrent('auto.remoteCertManager.confirm')}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+      {pendingRenewalAction ? createPortal(
+        <div className="cert-modal-backdrop" role="presentation" onClick={() => setPendingRenewalAction(null)}>
+          <div className={`cert-confirm-dialog ${pendingRenewalAction === 'delete' ? 'danger' : ''}`} role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div className="cert-confirm-header">
+              <span>{tCurrent('auto.remoteCertManager.renewal.confirm.title')}</span>
+              <strong>{getRenewalActionLabel(pendingRenewalAction)}</strong>
+            </div>
+            <p>{getRenewalActionBody(pendingRenewalAction)}</p>
+            <pre>{(pendingRenewalAction === 'create'
+              ? createEnableCertbotRenewalCommand(isWindowsHost)
+              : pendingRenewalAction === 'delete'
+                ? createDeleteCertbotRenewalCommand(isWindowsHost)
+                : createSetCertbotRenewalEnabledCommand(pendingRenewalAction === 'enable', isWindowsHost)).command}</pre>
+            <div className="cert-confirm-actions">
+              <button type="button" onClick={() => setPendingRenewalAction(null)}>{tCurrent('auto.remoteCertManager.cancel')}</button>
+              <button type="button" className={pendingRenewalAction === 'delete' ? 'danger' : 'primary'} onClick={executeRenewalAction} disabled={actionRunning}>
                 {actionRunning ? tCurrent('auto.remoteCertManager.running') : tCurrent('auto.remoteCertManager.confirm')}
               </button>
             </div>
