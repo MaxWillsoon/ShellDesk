@@ -2753,6 +2753,7 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       let output = '';
       let promptBuffer = '';
       let streamRef = null;
+      const MAX_PTY_OUTPUT_BYTES = 1024 * 1024; // 1 MB
 
       const finish = (error, result) => {
         if (settled) {
@@ -2773,6 +2774,12 @@ function registerRemoteConnectionHandlers(registerIpcHandler) {
       const handleChunk = (chunk) => {
         const text = Buffer.from(chunk).toString('utf8');
         output = `${output}${text}`;
+
+        if (Buffer.byteLength(output, 'utf8') > MAX_PTY_OUTPUT_BYTES) {
+          try { streamRef?.destroy?.(); } catch { /* ignore */ }
+          finish(new Error('su root 提权命令输出超过大小限制（1 MB）。'));
+          return;
+        }
 
         if (passwordSent) {
           return;
