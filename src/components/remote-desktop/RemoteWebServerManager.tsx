@@ -172,24 +172,32 @@ function RemoteWebServerManager({ connectionId, systemType, onOpenConfigFile }: 
   const copySiteSummary = async () => {
     if (!selectedSite) return;
 
-    await navigator.clipboard.writeText([
-      `${getWebServerLabel(selectedSite.kind)} ${getSiteTitle(selectedSite)}`,
-      `file: ${selectedSite.filePath}`,
-      `enabled: ${selectedSite.enabled}`,
-      `listen: ${firstValue(selectedSite.listens)}`,
-      `root: ${selectedSite.root ?? '-'}`,
-      `access_log: ${selectedSite.accessLog ?? '-'}`,
-      `error_log: ${selectedSite.errorLog ?? '-'}`,
-      `certificates: ${firstValue(selectedSite.certificateFiles)}`,
-    ].join('\n'));
-    setNotice(tCurrent('auto.remoteWebServerManager.1o5acy3'));
+    try {
+      await navigator.clipboard.writeText([
+        `${getWebServerLabel(selectedSite.kind)} ${getSiteTitle(selectedSite)}`,
+        `file: ${selectedSite.filePath}`,
+        `enabled: ${selectedSite.enabled}`,
+        `listen: ${firstValue(selectedSite.listens)}`,
+        `root: ${selectedSite.root ?? '-'}`,
+        `access_log: ${selectedSite.accessLog ?? '-'}`,
+        `error_log: ${selectedSite.errorLog ?? '-'}`,
+        `certificates: ${firstValue(selectedSite.certificateFiles)}`,
+      ].join('\n'));
+      setNotice(tCurrent('auto.remoteWebServerManager.1o5acy3'));
+    } catch (error) {
+      setError(tCurrent('auto.remoteWebServerManager.copyFailed', { value0: getErrorMessage(error) }));
+    }
   };
 
   const copyConfig = async () => {
     if (!selectedSite) return;
 
-    await navigator.clipboard.writeText(selectedSite.rawConfig);
-    setNotice(tCurrent('auto.remoteWebServerManager.1owzfkn'));
+    try {
+      await navigator.clipboard.writeText(selectedSite.rawConfig);
+      setNotice(tCurrent('auto.remoteWebServerManager.1owzfkn'));
+    } catch (error) {
+      setError(tCurrent('auto.remoteWebServerManager.copyFailed', { value0: getErrorMessage(error) }));
+    }
   };
 
   const openConfigInNotepad = () => {
