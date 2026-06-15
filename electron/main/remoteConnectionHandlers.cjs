@@ -1016,12 +1016,12 @@ if command -v free >/dev/null 2>&1; then
   if [ -n "$memory_total" ]; then
     echo "$memory_total"
   elif [ -r /proc/meminfo ]; then
-    awk '/^MemTotal:/ { printf "%.1f GB\\n", $2 * 1024 / 1024 / 1024 / 1024; found=1 } END { if (!found) exit 1 }' /proc/meminfo
+    awk '/^MemTotal:/ { printf "%.1f GB\\n", $2 / 1024 / 1024; found=1 } END { if (!found) exit 1 }' /proc/meminfo
   else
     echo "未检测到"
   fi
 elif [ -r /proc/meminfo ]; then
-  awk '/^MemTotal:/ { printf "%.1f GB\\n", $2 * 1024 / 1024 / 1024 / 1024; found=1 } END { if (!found) exit 1 }' /proc/meminfo
+  awk '/^MemTotal:/ { printf "%.1f GB\\n", $2 / 1024 / 1024; found=1 } END { if (!found) exit 1 }' /proc/meminfo
 elif command -v sysctl >/dev/null 2>&1; then
   sysctl -n hw.memsize 2>/dev/null | awk '{ if ($1 > 0) printf "%.1f GB\\n", $1 / 1024 / 1024 / 1024; else print "未检测到" }'
 else
