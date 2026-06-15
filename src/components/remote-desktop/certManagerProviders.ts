@@ -202,18 +202,27 @@ function createTrustedRootEmitFunction(includeText: boolean, includePem: boolean
   return `
 emit_root_detail() {
   file="$1"
-  tmp="$(mktemp 2>/dev/null || printf "/tmp/shelldesk-root-cert-$$")"
-  trap 'rm -f "$tmp"' EXIT HUP INT TERM
-  if ! openssl x509 -in "$file" -text -noout >"$tmp" 2>/tmp/shelldesk-root-cert-error-$$; then
+  tmp=""
+  if ${includeText ? 'true' : 'false'}; then
+    tmp="$(mktemp 2>/dev/null || printf "/tmp/shelldesk-root-cert-$$")"
+    trap 'rm -f -- "$tmp"' EXIT HUP INT TERM
+    if ! openssl x509 -in "$file" -text -noout >"$tmp" 2>/tmp/shelldesk-root-cert-error-$$; then
+      err="$(cat /tmp/shelldesk-root-cert-error-$$ 2>/dev/null)"
+      rm -f -- /tmp/shelldesk-root-cert-error-$$
+      printf '__SHELLDESK_ROOT_CERT_ERROR__|%s: %s\\n' "$file" "\${err:-openssl failed}"
+      return 0
+    fi
+  fi
+  if ! fields="$(openssl x509 -in "$file" -noout -subject -issuer -enddate -serial -fingerprint -sha256 2>/tmp/shelldesk-root-cert-error-$$)"; then
     err="$(cat /tmp/shelldesk-root-cert-error-$$ 2>/dev/null)"
-    rm -f /tmp/shelldesk-root-cert-error-$$
+    rm -f -- /tmp/shelldesk-root-cert-error-$$
     printf '__SHELLDESK_ROOT_CERT_ERROR__|%s: %s\\n' "$file" "\${err:-openssl failed}"
     return 0
   fi
-  rm -f /tmp/shelldesk-root-cert-error-$$
+  rm -f -- /tmp/shelldesk-root-cert-error-$$
   printf '__SHELLDESK_ROOT_CERT_BEGIN__|%s\\n' "$file"
   printf '__SHELLDESK_CERT_FIELD__|path|%s\\n' "$file"
-  openssl x509 -in "$file" -noout -subject -issuer -enddate -serial -fingerprint -sha256 2>/dev/null | sed \\
+  printf '%s\\n' "$fields" | sed \\
     -e 's/^subject= */__SHELLDESK_CERT_FIELD__|subject|/' \\
     -e 's/^issuer= */__SHELLDESK_CERT_FIELD__|issuer|/' \\
     -e 's/^notAfter= */__SHELLDESK_CERT_FIELD__|notAfter|/' \\
@@ -226,6 +235,23 @@ emit_root_detail() {
 }
 `.trim();
 }
+
+const canonicalizePathFunction = `
+canonicalize_path() {
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "$1"
+  else
+    readlink -f "$1"
+  fi
+}
+canonicalize_target_path() {
+  if [ -e "$1" ] || [ -L "$1" ]; then
+    canonicalize_path "$1"
+  else
+    printf '%s/%s\\n' "$(canonicalize_path "$(dirname "$1")")" "$(basename "$1")"
+  fi
+}
+`.trim();
 
 export function createCertScanCommand(isWindowsHost: boolean): RemoteCommandInput {
   if (isWindowsHost) {
@@ -244,14 +270,14 @@ emit_error() {
 emit_detail() {
   file="$1"
   tmp="$(mktemp 2>/dev/null || printf "/tmp/shelldesk-cert-$$")"
-  trap 'rm -f "$tmp"' EXIT HUP INT TERM
+  trap 'rm -f -- "$tmp"' EXIT HUP INT TERM
   if ! openssl x509 -in "$file" -text -noout >"$tmp" 2>/tmp/shelldesk-cert-error-$$; then
     err="$(cat /tmp/shelldesk-cert-error-$$ 2>/dev/null)"
-    rm -f /tmp/shelldesk-cert-error-$$
+    rm -f -- /tmp/shelldesk-cert-error-$$
     emit_error "$file: \${err:-openssl failed}"
     return 0
   fi
-  rm -f /tmp/shelldesk-cert-error-$$
+  rm -f -- /tmp/shelldesk-cert-error-$$
   printf '__SHELLDESK_CERT_BEGIN__|%s\\n' "$file"
   printf '__SHELLDESK_CERT_FIELD__|path|%s\\n' "$file"
   openssl x509 -in "$file" -noout -subject -issuer -dates -serial -fingerprint -sha256 2>/dev/null | sed \\
@@ -299,7 +325,7 @@ export function createCertDetailCommand(filePath: string, isWindowsHost: boolean
     command: `
 file=${quotedPath}
 tmp="$(mktemp 2>/dev/null || printf "/tmp/shelldesk-cert-detail-$$")"
-trap 'rm -f "$tmp"' EXIT HUP INT TERM
+trap 'rm -f -- "$tmp"' EXIT HUP INT TERM
 openssl x509 -in "$file" -text -noout >"$tmp" || exit $?
 printf '__SHELLDESK_CERT_FIELD__|path|%s\\n' "$file"
 openssl x509 -in "$file" -noout -subject -issuer -dates -serial -fingerprint -sha256 | sed \\
@@ -387,27 +413,56 @@ export function createAddTrustedRootCommand(filePath: string, isWindowsHost: boo
   return {
     command: `
 set -eu
+${canonicalizePathFunction}
 source_file=${shellSingleQuote(filePath)}
 [ -f "$source_file" ] || { printf '%s\\n' ${shellSingleQuote(tCurrent('auto.certManagerProviders.caFileMissing'))}; exit 2; }
+source_file="$(canonicalize_path "$source_file")"
+if ! openssl x509 -in "$source_file" -noout -checkend 0 >/dev/null 2>&1; then
+  printf '%s\\n' 'Invalid, expired, or unreadable CA certificate'
+  exit 5
+fi
+if ! openssl x509 -in "$source_file" -noout -text 2>/dev/null | grep -q 'CA:TRUE'; then
+  printf '%s\\n' 'Certificate is not a CA certificate'
+  exit 6
+fi
 base="$(basename "$source_file")"
 case "$base" in
+  .|..) printf '%s\\n' ${shellSingleQuote(tCurrent('auto.certManagerProviders.removeManagedOnly'))}; exit 4 ;;
   *.crt|*.cer|*.pem) ;;
   *) base="$base.crt" ;;
 esac
 if command -v update-ca-certificates >/dev/null 2>&1; then
   target_dir="/usr/local/share/ca-certificates"
-  target="$target_dir/$base"
   sudo -n mkdir -p "$target_dir"
-  sudo -n cp "$source_file" "$target"
-  sudo -n chmod 0644 "$target"
+  canonical_target_dir="$(canonicalize_path "$target_dir")"
+  target="$(canonicalize_target_path "$canonical_target_dir/$base")"
+  case "$canonical_target_dir/" in
+    /usr/local/share/ca-certificates/) ;;
+    *) printf '%s\\n' ${shellSingleQuote(tCurrent('auto.certManagerProviders.removeManagedOnly'))}; exit 4 ;;
+  esac
+  case "$target" in
+    /usr/local/share/ca-certificates/*) ;;
+    *) printf '%s\\n' ${shellSingleQuote(tCurrent('auto.certManagerProviders.removeManagedOnly'))}; exit 4 ;;
+  esac
+  sudo -n cp -- "$source_file" "$target"
+  sudo -n chmod 0644 -- "$target"
   sudo -n update-ca-certificates
   printf 'SHELLDESK_TRUST_ROOT_ADDED|%s\\n' "$target"
 elif command -v update-ca-trust >/dev/null 2>&1; then
   target_dir="/etc/pki/ca-trust/source/anchors"
-  target="$target_dir/$base"
   sudo -n mkdir -p "$target_dir"
-  sudo -n cp "$source_file" "$target"
-  sudo -n chmod 0644 "$target"
+  canonical_target_dir="$(canonicalize_path "$target_dir")"
+  target="$(canonicalize_target_path "$canonical_target_dir/$base")"
+  case "$canonical_target_dir/" in
+    /etc/pki/ca-trust/source/anchors/) ;;
+    *) printf '%s\\n' ${shellSingleQuote(tCurrent('auto.certManagerProviders.removeManagedOnly'))}; exit 4 ;;
+  esac
+  case "$target" in
+    /etc/pki/ca-trust/source/anchors/*) ;;
+    *) printf '%s\\n' ${shellSingleQuote(tCurrent('auto.certManagerProviders.removeManagedOnly'))}; exit 4 ;;
+  esac
+  sudo -n cp -- "$source_file" "$target"
+  sudo -n chmod 0644 -- "$target"
   sudo -n update-ca-trust extract
   printf 'SHELLDESK_TRUST_ROOT_ADDED|%s\\n' "$target"
 else
@@ -426,7 +481,10 @@ export function createRemoveTrustedRootCommand(filePath: string, isWindowsHost: 
   return {
     command: `
 set -eu
+${canonicalizePathFunction}
 target=${shellSingleQuote(filePath)}
+[ -f "$target" ] || { printf '%s\\n' ${shellSingleQuote(tCurrent('auto.certManagerProviders.caFileMissing'))}; exit 2; }
+target="$(canonicalize_path "$target")"
 case "$target" in
   /usr/local/share/ca-certificates/*|/etc/pki/ca-trust/source/anchors/*) ;;
   *)
@@ -434,8 +492,7 @@ case "$target" in
     exit 4
     ;;
 esac
-[ -f "$target" ] || { printf '%s\\n' ${shellSingleQuote(tCurrent('auto.certManagerProviders.caFileMissing'))}; exit 2; }
-sudo -n rm -f "$target"
+sudo -n rm -f -- "$target"
 if command -v update-ca-certificates >/dev/null 2>&1; then
   sudo -n update-ca-certificates
 elif command -v update-ca-trust >/dev/null 2>&1; then

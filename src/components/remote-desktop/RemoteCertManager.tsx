@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import DismissibleAlert from './DismissibleAlert';
 
@@ -85,6 +85,10 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [lastRefreshedAt, setLastRefreshedAt] = useState('');
+  const trustedRootsRequestIdRef = useRef(0);
+  const addTrustedRootRequestIdRef = useRef(0);
+  const removeTrustedRootRequestIdRef = useRef(0);
+  const trustedRootsAutoRefreshKeyRef = useRef('');
 
   const filteredCertificates = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -100,8 +104,8 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
   }, [certificates, query]);
 
   const selectedCertificate = useMemo(() => {
-    return certificates.find((cert) => cert.id === selectedId) ?? filteredCertificates[0] ?? null;
-  }, [certificates, filteredCertificates, selectedId]);
+    return filteredCertificates.find((cert) => cert.id === selectedId) ?? filteredCertificates[0] ?? null;
+  }, [filteredCertificates, selectedId]);
 
   const filteredTrustedRoots = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -117,8 +121,8 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
   }, [query, trustedRoots]);
 
   const selectedTrustedRoot = useMemo(() => {
-    return trustedRoots.find((cert) => cert.id === selectedRootId) ?? filteredTrustedRoots[0] ?? null;
-  }, [filteredTrustedRoots, selectedRootId, trustedRoots]);
+    return filteredTrustedRoots.find((cert) => cert.id === selectedRootId) ?? filteredTrustedRoots[0] ?? null;
+  }, [filteredTrustedRoots, selectedRootId]);
 
   const refreshCertbotList = useCallback(async (installed: boolean) => {
     if (!installed || isWindowsHost) {
@@ -164,12 +168,15 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
   }, [isWindowsHost, refreshCertbotList, runCommand]);
 
   const refreshTrustedRoots = useCallback(async () => {
+    const requestId = trustedRootsRequestIdRef.current + 1;
+    trustedRootsRequestIdRef.current = requestId;
     setLoading(true);
     setError('');
     setNotice('');
 
     try {
       const result = await runCommand(createTrustedRootScanCommand(isWindowsHost));
+      if (trustedRootsRequestIdRef.current !== requestId) return;
       const combinedOutput = [result.stdout, result.stderr].filter(Boolean).join('\n');
       const parsed = parseTrustedRootScanOutput(combinedOutput);
       setTrustedRoots(parsed.certificates);
@@ -185,11 +192,12 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
         setError(parsed.errors.slice(0, 4).join('\n'));
       }
     } catch (error) {
+      if (trustedRootsRequestIdRef.current !== requestId) return;
       setTrustedRoots([]);
       setSelectedRootDetail(null);
       setError(getErrorMessage(error));
     } finally {
-      setLoading(false);
+      if (trustedRootsRequestIdRef.current === requestId) setLoading(false);
     }
   }, [isWindowsHost, runCommand]);
 
@@ -199,13 +207,15 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
 
   useEffect(() => {
     void refresh();
-  }, [connectionId, isWindowsHost]);
+  }, [refresh]);
 
   useEffect(() => {
-    if (activeTab === 'roots' && trustedRoots.length === 0 && !loading) {
+    const refreshKey = `${connectionId}:${isWindowsHost}`;
+    if (activeTab === 'roots' && trustedRoots.length === 0 && trustedRootsAutoRefreshKeyRef.current !== refreshKey) {
+      trustedRootsAutoRefreshKeyRef.current = refreshKey;
       void refreshTrustedRoots();
     }
-  }, [activeTab, connectionId, isWindowsHost]);
+  }, [activeTab, connectionId, isWindowsHost, refreshTrustedRoots, trustedRoots.length]);
 
   useEffect(() => {
     if (!selectedCertificate) {
@@ -214,6 +224,7 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
     }
 
     let cancelled = false;
+    setSelectedDetail(null);
 
     const loadDetail = async () => {
       setDetailLoading(true);
@@ -233,10 +244,13 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
       }
     };
 
-    void loadDetail();
+    const timeoutId = window.setTimeout(() => {
+      void loadDetail();
+    }, 300);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timeoutId);
     };
   }, [isWindowsHost, runCommand, selectedCertificate?.id]);
 
@@ -249,6 +263,7 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
     }
 
     let cancelled = false;
+    setSelectedRootDetail(null);
 
     const loadDetail = async () => {
       setRootDetailLoading(true);
@@ -268,10 +283,13 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
       }
     };
 
-    void loadDetail();
+    const timeoutId = window.setTimeout(() => {
+      void loadDetail();
+    }, 300);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timeoutId);
     };
   }, [activeTab, isWindowsHost, runCommand, selectedTrustedRoot?.id]);
 
@@ -325,12 +343,15 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
       return;
     }
 
+    const requestId = addTrustedRootRequestIdRef.current + 1;
+    addTrustedRootRequestIdRef.current = requestId;
     setActionRunning(true);
     setError('');
     setNotice('');
 
     try {
       const result = await runCommand(createAddTrustedRootCommand(filePath, isWindowsHost));
+      if (addTrustedRootRequestIdRef.current !== requestId) return;
       const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
       setRawOutput(output);
       if (result.code !== 0) throw new Error(output || tCurrent('auto.remoteCertManager.actionFailed'));
@@ -338,9 +359,10 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
       setCaPathDraft('');
       await refreshTrustedRoots();
     } catch (error) {
+      if (addTrustedRootRequestIdRef.current !== requestId) return;
       setError(getErrorMessage(error));
     } finally {
-      setActionRunning(false);
+      if (addTrustedRootRequestIdRef.current === requestId) setActionRunning(false);
     }
   };
 
@@ -357,12 +379,18 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
 
     try {
       const uploadResult = await api.uploadFile(connectionId, '/tmp');
-      if (uploadResult.canceled || !uploadResult.remotePath) {
+      if (uploadResult.canceled) {
         setActionRunning(false);
         return;
       }
 
-      const uploadedPath = uploadResult.remotePaths?.[0] ?? uploadResult.remotePath;
+      const uploadedPath = uploadResult.remotePaths?.[0] ?? uploadResult.remotePath ?? '';
+      if (!uploadedPath) {
+        setError(tCurrent('auto.remoteCertManager.actionFailed'));
+        setActionRunning(false);
+        return;
+      }
+
       await addTrustedRoot(uploadedPath);
     } catch (error) {
       setError(getErrorMessage(error));
@@ -373,12 +401,15 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
   const removeTrustedRoot = async () => {
     if (!pendingRootRemoval) return;
 
+    const requestId = removeTrustedRootRequestIdRef.current + 1;
+    removeTrustedRootRequestIdRef.current = requestId;
     setActionRunning(true);
     setError('');
     setNotice('');
 
     try {
       const result = await runCommand(createRemoveTrustedRootCommand(pendingRootRemoval.filePath, isWindowsHost));
+      if (removeTrustedRootRequestIdRef.current !== requestId) return;
       const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
       setRawOutput(output);
       if (result.code !== 0) throw new Error(output || tCurrent('auto.remoteCertManager.actionFailed'));
@@ -386,9 +417,10 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
       setPendingRootRemoval(null);
       await refreshTrustedRoots();
     } catch (error) {
+      if (removeTrustedRootRequestIdRef.current !== requestId) return;
       setError(getErrorMessage(error));
     } finally {
-      setActionRunning(false);
+      if (removeTrustedRootRequestIdRef.current === requestId) setActionRunning(false);
     }
   };
 
