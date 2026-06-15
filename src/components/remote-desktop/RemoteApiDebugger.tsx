@@ -402,8 +402,8 @@ function collectDefaultCollapsedJsonPaths(value: unknown, path = 'root', depth =
 
 function formatJsonPrimitive(value: unknown, expanded: boolean) {
   if (typeof value === 'string') {
-    const displayValue = expanded || value.length <= 120 ? value : `${value.slice(0, 120)}...`;
-    return `"${displayValue}"`;
+    const serializedValue = JSON.stringify(value);
+    return expanded || serializedValue.length <= 120 ? serializedValue : `${serializedValue.slice(0, 120)}..."`;
   }
 
   return String(value);
@@ -647,10 +647,11 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
   const updateAuth = (patch: Partial<ApiDebugAuthConfig>) => {
     setRequest((currentRequest) => {
       const auth = { ...defaultAuth, ...currentRequest.auth, ...patch };
+      const headers = applyAuthHeaders(removeManagedAuthHeaders(currentRequest.headers), auth);
       return {
         ...currentRequest,
         auth,
-        headers: removeManagedAuthHeaders(currentRequest.headers),
+        headers,
       };
     });
   };

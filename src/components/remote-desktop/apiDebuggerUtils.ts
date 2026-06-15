@@ -176,8 +176,8 @@ function getUserAgent(request: ApiDebugRequest) {
   return (request.userAgent ?? '').trim().replace(/[\r\n]+/g, ' ');
 }
 
-function shouldSendBody(request: ApiDebugRequest) {
-  return createRequestBody(request).length > 0 && request.method !== 'GET' && request.method !== 'HEAD';
+function shouldSendBody(method: ApiDebugMethod, requestBody: string) {
+  return requestBody.length > 0 && method !== 'GET' && method !== 'HEAD';
 }
 
 function utf8ByteLength(value: string) {
@@ -205,8 +205,8 @@ export function createApiDebugCommand(request: ApiDebugRequest, isWindowsHost: b
   const url = createUrlWithEnabledParams(request);
   const timeout = clampTimeout(request.timeoutSeconds);
   const headers = getEnabledHeaders(request);
-  const sendBody = shouldSendBody(request);
   const requestBody = createRequestBody(request);
+  const sendBody = shouldSendBody(request.method, requestBody);
   const userAgent = getUserAgent(request);
 
   if (isWindowsHost) {
@@ -366,7 +366,7 @@ export function createCurlPreview(request: ApiDebugRequest) {
   const timeout = clampTimeout(request.timeoutSeconds);
   const headers = getEnabledHeaders(request).map((header) => `-H ${shellSingleQuote(`${header.key}: ${header.value}`)}`);
   const requestBody = createRequestBody(request);
-  const body = shouldSendBody(request) ? [`--data-binary ${shellSingleQuote(requestBody)}`] : [];
+  const body = shouldSendBody(request.method, requestBody) ? [`--data-binary ${shellSingleQuote(requestBody)}`] : [];
   const userAgent = getUserAgent(request);
 
   return [
@@ -579,6 +579,10 @@ export function parseCurlCommand(command: string): ApiDebugRequest {
 
     if (token === '-k' || token === '--insecure') {
       ignoreSslErrors = true;
+      continue;
+    }
+
+    if (token === '--compressed') {
       continue;
     }
 
