@@ -622,6 +622,14 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
           <strong>{certbotInstalled ? tCurrent('auto.remoteCertManager.certbotInstalled') : tCurrent('auto.remoteCertManager.certbotMissing')}</strong>
           <em>{lastRefreshedAt || tCurrent('auto.remoteCertManager.notScanned')}</em>
         </div>
+        <div className="cert-actions cert-tabs" role="tablist" aria-label={tCurrent('auto.remoteCertManager.tabsLabel')}>
+          <button type="button" role="tab" className={activeTab === 'site' ? 'active' : ''} aria-selected={activeTab === 'site'} onClick={() => setActiveTab('site')}>
+            {tCurrent('auto.remoteCertManager.tab.site')}
+          </button>
+          <button type="button" role="tab" className={activeTab === 'roots' ? 'active' : ''} aria-selected={activeTab === 'roots'} onClick={() => setActiveTab('roots')}>
+            {tCurrent('auto.remoteCertManager.tab.roots')}
+          </button>
+        </div>
         <div className="cert-search">
           <input
             value={query}
@@ -639,15 +647,6 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
           ) : null}
         </div>
       </header>
-
-      <div className="cert-actions cert-tabs" role="tablist" aria-label={tCurrent('auto.remoteCertManager.tabsLabel')}>
-        <button type="button" role="tab" className={activeTab === 'site' ? 'active' : ''} aria-selected={activeTab === 'site'} onClick={() => setActiveTab('site')}>
-          {tCurrent('auto.remoteCertManager.tab.site')}
-        </button>
-        <button type="button" role="tab" className={activeTab === 'roots' ? 'active' : ''} aria-selected={activeTab === 'roots'} onClick={() => setActiveTab('roots')}>
-          {tCurrent('auto.remoteCertManager.tab.roots')}
-        </button>
-      </div>
 
       {error ? <DismissibleAlert className="cert-alert danger" onDismiss={() => setError('')} role="alert">{error}</DismissibleAlert> : null}
       {notice ? <DismissibleAlert className="cert-alert info" onDismiss={() => setNotice('')}>{notice}</DismissibleAlert> : null}
@@ -816,13 +815,13 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
               <button type="button" className="danger" onClick={() => selectedTrustedRoot && setPendingRootRemoval(selectedTrustedRoot)} disabled={!selectedTrustedRoot || actionRunning}>
                 {tCurrent('auto.remoteCertManager.removeTrust')}
               </button>
-            </div>
-            <div className="cert-search">
-              <input
-                value={caPathDraft}
-                onChange={(event) => setCaPathDraft(event.target.value)}
-                placeholder={tCurrent('auto.remoteCertManager.caPathPlaceholder')}
-              />
+              <div className="cert-search cert-ca-path">
+                <input
+                  value={caPathDraft}
+                  onChange={(event) => setCaPathDraft(event.target.value)}
+                  placeholder={tCurrent('auto.remoteCertManager.caPathPlaceholder')}
+                />
+              </div>
               <button type="button" className="primary" onClick={() => addTrustedRoot()} disabled={actionRunning || !caPathDraft.trim()}>
                 {actionRunning ? tCurrent('auto.remoteCertManager.running') : tCurrent('auto.remoteCertManager.addTrust')}
               </button>

@@ -33,12 +33,14 @@
   border-bottom: 1px solid var(--cert-border);
   padding: 8px 10px;
   background: rgba(255, 255, 255, 0.035);
+  flex-wrap: wrap;
 }
 
 .cert-status-card {
-  display: grid;
+  display: flex;
+  align-items: center;
   min-width: 180px;
-  gap: 2px;
+  gap: 8px;
 }
 
 .cert-status-card span,
@@ -58,6 +60,7 @@
   color: var(--cert-accent);
   font-size: 14px;
   font-weight: 880;
+  white-space: nowrap;
 }
 
 .cert-status-card.success strong { color: var(--cert-green); }
@@ -66,6 +69,10 @@
 .cert-search {
   min-width: 180px;
   flex: 1 1 260px;
+}
+
+.cert-ca-path {
+  flex: 1 1 280px;
 }
 
 .cert-search input {
@@ -97,6 +104,16 @@
   font: inherit;
   font-size: 11.5px;
   font-weight: 800;
+}
+
+.cert-tabs {
+  flex: 0 0 auto;
+}
+
+.cert-tabs button.active {
+  border-color: rgba(114, 199, 255, 0.42);
+  background: rgba(114, 199, 255, 0.16);
+  color: var(--cert-text);
 }
 
 .cert-toolbar button:hover:not(:disabled),
@@ -192,15 +209,20 @@
 .cert-main {
   min-height: 0;
   gap: 10px;
-  overflow: hidden;
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .cert-detail-panel {
-  flex: 1 1 58%;
+  flex: 0 0 auto;
+  min-height: 260px;
+  overflow: visible;
 }
 
 .cert-actions-panel {
-  flex: 1 1 42%;
+  flex: 0 0 auto;
+  min-height: 240px;
+  overflow: visible;
 }
 
 .cert-list-head,
