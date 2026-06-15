@@ -252,17 +252,17 @@
 .api-response-panel {
   display: flex;
   min-height: 0;
+  flex: 1 1 0;
   flex-direction: column;
   overflow: hidden;
   border-bottom: 1px solid var(--api-border);
 }
 
 .api-request-panel {
-  flex: 0 0 210px;
+  min-height: 0;
 }
 
 .api-response-panel {
-  flex: 1 1 auto;
   border-bottom: 0;
 }
 
@@ -282,6 +282,11 @@
   gap: 8px;
   overflow: auto;
   padding: 10px;
+}
+
+.api-request-panel > .api-header-editor {
+  min-height: 0;
+  flex: 1 1 0;
 }
 
 .api-header-row {
@@ -340,8 +345,8 @@
   color: var(--api-danger);
 }
 
-.api-response-output {
-  flex: 1 1 auto;
+.api-response-output,
+.api-curl-preview {
   min-height: 0;
   margin: 10px;
   overflow: auto;
@@ -354,6 +359,16 @@
   font-size: 11.5px;
   line-height: 1.5;
   white-space: pre-wrap;
+}
+
+.api-response-output {
+  flex: 1 1 auto;
+}
+
+.api-curl-preview {
+  flex: 0 0 48px;
+  height: 48px;
+  margin-top: 0;
 }
 
 @media (max-width: 900px) {
@@ -401,6 +416,7 @@
 [data-theme="light"] .api-request-line input,
 [data-theme="light"] .api-header-row input,
 [data-theme="light"] .api-body-editor,
-[data-theme="light"] .api-response-output {
+[data-theme="light"] .api-response-output,
+[data-theme="light"] .api-curl-preview {
   background: rgba(255, 255, 255, 0.82);
 }

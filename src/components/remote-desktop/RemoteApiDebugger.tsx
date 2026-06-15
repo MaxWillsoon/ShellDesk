@@ -1082,7 +1082,7 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
               )}
             </>
           )}
-          {curlPreview ? <pre className="api-response-output">{curlPreview}</pre> : null}
+          {curlPreview ? <pre className="api-curl-preview">{curlPreview}</pre> : null}
         </section>
 
         <section className="api-response-panel">
