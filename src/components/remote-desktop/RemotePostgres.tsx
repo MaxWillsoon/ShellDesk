@@ -1,6 +1,7 @@
 import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
+import { exportDatabaseRows, type DatabaseExportFormat } from './databaseExport';
 import DismissibleAlert from './DismissibleAlert';
 import { loadRemoteConnectionProfile, readProfileString, saveRemoteConnectionProfile } from './remoteConnectionProfiles';
 import { tCurrent } from '../../i18n';
@@ -28,7 +29,7 @@ interface QueryHistoryItem {
   createdAt: string;
 }
 
-const tablePreviewLimit = 500;
+const tablePreviewLimit = 50;
 const maxHistoryItems = 12;
 
 function createId(prefix: string) {
@@ -271,6 +272,35 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
     }
   }, [api, connectionId, postgresId, sql]);
 
+  const exportQueryResult = useCallback(async (format: DatabaseExportFormat) => {
+    if (!queryResult || queryResult.rows.length === 0) return;
+
+    setError('');
+    setNotice('');
+
+    try {
+      const filePath = await exportDatabaseRows({
+        sourceName: 'PostgreSQL',
+        format,
+        columns: queryResult.columns,
+        rows: queryResult.rows,
+        fileBaseName: selectedTable ? `${selectedTable.schema}-${selectedTable.name}` : database,
+        metadata: {
+          database,
+          table: selectedTable ? `${selectedTable.schema}.${selectedTable.name}` : '',
+          sql,
+          rowCount: queryResult.rowCount ?? queryResult.rows.length,
+        },
+      });
+
+      if (filePath) {
+        setNotice(`查询结果已导出：${filePath}`);
+      }
+    } catch (error) {
+      setError(getErrorMessage(error));
+    }
+  }, [database, queryResult, selectedTable, sql]);
+
   const selectTable = async (table: ShellDeskPostgresTable) => {
     if (!api || !postgresId) return;
 
@@ -402,8 +432,14 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
 
         <section className="postgres-result">
           <div className="postgres-result-head">
-            <strong>{tCurrent('auto.remotePostgres.q9h21m')}</strong>
-            <span>{queryResult ? tCurrent('auto.remotePostgres.18tehe0', { value0: queryResult.rows.length }) : tCurrent('auto.remotePostgres.t9y5o0')}</span>
+            <div className="database-result-title">
+              <strong>{tCurrent('auto.remotePostgres.q9h21m')}</strong>
+              <span>{queryResult ? tCurrent('auto.remotePostgres.18tehe0', { value0: queryResult.rows.length }) : tCurrent('auto.remotePostgres.t9y5o0')}</span>
+            </div>
+            <div className="database-export-actions" aria-label="导出查询结果">
+              <button type="button" className="database-export-button" onClick={() => void exportQueryResult('json')} disabled={!queryResult || queryResult.rows.length === 0}>导出 JSON</button>
+              <button type="button" className="database-export-button" onClick={() => void exportQueryResult('csv')} disabled={!queryResult || queryResult.rows.length === 0}>导出 CSV</button>
+            </div>
           </div>
           {queryResult ? (
             <div className="postgres-table-wrap">

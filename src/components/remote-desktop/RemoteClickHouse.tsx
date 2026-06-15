@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
+import { exportDatabaseRows, type DatabaseExportFormat } from './databaseExport';
 import DismissibleAlert from './DismissibleAlert';
 import { loadRemoteConnectionProfile, readProfileBoolean, readProfileString, saveRemoteConnectionProfile } from './remoteConnectionProfiles';
 
@@ -58,7 +59,7 @@ interface ClickHouseHistoryItem {
 const defaultHttpPort = 8123;
 const defaultHttpsPort = 8443;
 const pageSize = 100;
-const tablePreviewLimit = 500;
+const tablePreviewLimit = 50;
 const maxResultTabs = 10;
 const maxHistoryItems = 12;
 
@@ -658,6 +659,34 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
     }
   }, [activeDb, activeQueryTab, addHistoryItem, addResultTab, api, clickhouseId, connectionId, setQueryRunning]);
 
+  const handleExportActiveResult = useCallback(async (format: DatabaseExportFormat) => {
+    if (!activeResult || activeResult.rows.length === 0) return;
+
+    setMessage(null);
+
+    try {
+      const filePath = await exportDatabaseRows({
+        sourceName: 'ClickHouse',
+        format,
+        columns: activeResult.columns,
+        rows: activeResult.rows,
+        fileBaseName: activeResultTab?.title,
+        metadata: {
+          database: activeResultTab?.database ?? '',
+          sql: activeResultTab?.sql ?? '',
+          queryTimeMs: activeResultTab?.queryTime ?? 0,
+          statistics: activeResult.statistics ?? null,
+        },
+      });
+
+      if (filePath) {
+        setMessage({ type: 'success', text: `查询结果已导出：${filePath}` });
+      }
+    } catch (error) {
+      setMessage({ type: 'error', text: getErrorMessage(error) });
+    }
+  }, [activeResult, activeResultTab]);
+
   const handleSqlKeyDown = useCallback((event: React.KeyboardEvent) => {
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
       event.preventDefault();
@@ -1069,6 +1098,10 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
                   <span>{activeResultTab.subtitle}</span>
                   {describeStatistics(activeResult.statistics) ? <span>{describeStatistics(activeResult.statistics)}</span> : null}
                   <span>{activeResultTab.table ? '表预览只读' : '结果集只读'}</span>
+                  <div className="database-export-actions" aria-label="导出查询结果">
+                    <button type="button" className="database-export-button" onClick={() => void handleExportActiveResult('json')} disabled={activeResult.rows.length === 0}>导出 JSON</button>
+                    <button type="button" className="database-export-button" onClick={() => void handleExportActiveResult('csv')} disabled={activeResult.rows.length === 0}>导出 CSV</button>
+                  </div>
                 </div>
                 {activeResult.columns.length > 0 ? (
                   <>

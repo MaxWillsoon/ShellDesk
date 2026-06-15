@@ -2,6 +2,7 @@ import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState }
 import { createPortal } from 'react-dom';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
+import { exportDatabaseRows, type DatabaseExportFormat } from './databaseExport';
 import DismissibleAlert from './DismissibleAlert';
 import RemoteFilePicker from './RemoteFilePicker';
 import { clearCachedSudoPassword, getCachedSudoOptions, setCachedSudoPassword } from './sudoPrompt';
@@ -71,7 +72,7 @@ interface SqliteSudoPrompt {
 }
 
 const pageSize = 100;
-const tablePreviewLimit = 500;
+const tablePreviewLimit = 50;
 const maxHistoryItems = 12;
 const rowidColumn = '__shelldesk_rowid';
 const elevationErrorPrefixes = [
@@ -601,6 +602,41 @@ function RemoteSqlite({ connectionId, initialFilePath, systemType }: RemoteSqlit
     void executeSql(sql);
   }, [executeSql, sql]);
 
+  const handleExportResult = useCallback(async (format: DatabaseExportFormat) => {
+    if (!queryResult || queryResult.rows.length === 0) return;
+
+    setMessage(null);
+
+    try {
+      const rows = queryResult.rows.map((row) => {
+        const nextRow: Record<string, unknown> = {};
+        for (const column of visibleColumns) {
+          nextRow[column] = row[column];
+        }
+        return nextRow;
+      });
+      const exportedPath = await exportDatabaseRows({
+        sourceName: 'SQLite',
+        format,
+        columns: visibleColumns,
+        rows,
+        fileBaseName: resultMeta?.object?.name ?? 'query-result',
+        metadata: {
+          filePath,
+          object: resultMeta?.object?.name ?? '',
+          sql: resultMeta?.sql ?? '',
+          queryTimeMs: resultMeta?.queryTime ?? 0,
+        },
+      });
+
+      if (exportedPath) {
+        setMessage({ type: 'success', text: `查询结果已导出：${exportedPath}` });
+      }
+    } catch (error) {
+      setMessage({ type: 'error', text: getErrorMessage(error) });
+    }
+  }, [filePath, queryResult, resultMeta, visibleColumns]);
+
   const handleSqlKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
       event.preventDefault();
@@ -1023,6 +1059,10 @@ function RemoteSqlite({ connectionId, initialFilePath, systemType }: RemoteSqlit
                       ? primaryKeys.length > 0 ? tCurrent('auto.remoteSqlite.zacxkg', { value0: primaryKeys.join(', ') }) : tCurrent('auto.remoteSqlite.zfahz')
                       : resultMeta?.source === 'object' ? tCurrent('auto.remoteSqlite.11g20o2') : tCurrent('auto.remoteSqlite.1g60mb5')}
                   </span>
+                  <div className="database-export-actions" aria-label="导出查询结果">
+                    <button type="button" className="database-export-button" onClick={() => void handleExportResult('json')} disabled={queryResult.rows.length === 0 || visibleColumns.length === 0}>导出 JSON</button>
+                    <button type="button" className="database-export-button" onClick={() => void handleExportResult('csv')} disabled={queryResult.rows.length === 0 || visibleColumns.length === 0}>导出 CSV</button>
+                  </div>
                 </div>
                 {visibleColumns.length > 0 ? (
                   <>

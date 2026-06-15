@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DismissibleAlert from './DismissibleAlert';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
+import { exportDatabaseRows, type DatabaseExportFormat } from './databaseExport';
 import { loadRemoteConnectionProfile, readProfileString, saveRemoteConnectionProfile } from './remoteConnectionProfiles';
 import { tCurrent } from '../../i18n';
 
@@ -325,6 +326,37 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
     setNotice(tCurrent('auto.remoteMongo.1qqllr0'));
   };
 
+  const exportQueryResult = useCallback(async (format: DatabaseExportFormat) => {
+    if (!queryResult || queryResult.documents.length === 0) return;
+
+    setError('');
+    setNotice('');
+
+    try {
+      const filePath = await exportDatabaseRows({
+        sourceName: 'MongoDB',
+        format,
+        columns: documentColumns,
+        rows: queryResult.documents,
+        fileBaseName: selectedCollection ? `${selectedCollection.database}-${selectedCollection.collection}` : 'query-result',
+        metadata: {
+          collection: selectedCollection ? `${selectedCollection.database}.${selectedCollection.collection}` : '',
+          filter,
+          projection,
+          sort,
+          limit: queryResult.limit,
+          count: queryResult.count,
+        },
+      });
+
+      if (filePath) {
+        setNotice(`查询结果已导出：${filePath}`);
+      }
+    } catch (error) {
+      setError(getErrorMessage(error));
+    }
+  }, [documentColumns, filter, projection, queryResult, selectedCollection, sort]);
+
   if (!isConnected) {
     return (
       <section className="mongo-manager">
@@ -462,8 +494,14 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
 
         <section className="mongo-result-panel">
           <div className="mongo-result-head">
-            <strong>{tCurrent('auto.remoteMongo.8g95y7')}</strong>
-            <span>{queryResult ? `${queryResult.count} / limit ${queryResult.limit}` : tCurrent('auto.remoteMongo.snxhdy')}</span>
+            <div className="database-result-title">
+              <strong>{tCurrent('auto.remoteMongo.8g95y7')}</strong>
+              <span>{queryResult ? `${queryResult.count} / limit ${queryResult.limit}` : tCurrent('auto.remoteMongo.snxhdy')}</span>
+            </div>
+            <div className="database-export-actions" aria-label="导出查询结果">
+              <button type="button" className="database-export-button" onClick={() => void exportQueryResult('json')} disabled={!queryResult || queryResult.documents.length === 0}>导出 JSON</button>
+              <button type="button" className="database-export-button" onClick={() => void exportQueryResult('csv')} disabled={!queryResult || queryResult.documents.length === 0}>导出 CSV</button>
+            </div>
           </div>
           <div className="mongo-table-wrap">
             <table className="mongo-table">

@@ -724,6 +724,7 @@
   padding: 6px 12px;
   color: var(--text-muted);
   font-size: 11px;
+  flex-wrap: wrap;
 }
 
 .mysql-result-info span:first-child {
@@ -733,6 +734,40 @@
 
 .mysql-result-info.write span:first-child {
   color: #f8ca6f;
+}
+
+.database-result-title {
+  min-width: 0;
+}
+
+.database-export-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.database-export-button {
+  min-height: 24px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 0 9px;
+  background: var(--surface-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 780;
+  white-space: nowrap;
+}
+
+.database-export-button:not(:disabled):hover {
+  border-color: rgba(68, 167, 255, 0.55);
+  color: var(--text);
+}
+
+.database-export-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .mysql-table-wrapper {

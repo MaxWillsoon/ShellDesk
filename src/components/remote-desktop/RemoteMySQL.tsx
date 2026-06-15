@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
+import { exportDatabaseRows, type DatabaseExportFormat } from './databaseExport';
 import DismissibleAlert from './DismissibleAlert';
 import { loadRemoteConnectionProfile, readProfileString, saveRemoteConnectionProfile } from './remoteConnectionProfiles';
 import { tCurrent } from '../../i18n';
@@ -78,7 +79,7 @@ interface PendingEdit {
 
 const defaultPort = 3306;
 const pageSize = 100;
-const tablePreviewLimit = 500;
+const tablePreviewLimit = 50;
 const maxResultTabs = 10;
 const maxHistoryItems = 12;
 
@@ -634,6 +635,33 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
     }
   }, [activeDb, activeQueryTab, addHistoryItem, addResultTab, api, connectionId, mysqlId, setQueryRunning]);
 
+  const handleExportActiveResult = useCallback(async (format: DatabaseExportFormat) => {
+    if (!activeResult || activeResult.rows.length === 0) return;
+
+    setMessage(null);
+
+    try {
+      const filePath = await exportDatabaseRows({
+        sourceName: 'MySQL',
+        format,
+        columns: activeResult.columns,
+        rows: activeResult.rows,
+        fileBaseName: activeResultTab?.title,
+        metadata: {
+          database: activeResultTab?.database ?? '',
+          sql: activeResultTab?.sql ?? '',
+          queryTimeMs: activeResultTab?.queryTime ?? 0,
+        },
+      });
+
+      if (filePath) {
+        setMessage({ type: 'success', text: `查询结果已导出：${filePath}` });
+      }
+    } catch (error) {
+      setMessage({ type: 'error', text: getErrorMessage(error) });
+    }
+  }, [activeResult, activeResultTab]);
+
   const handleCellEdit = useCallback((rowIndex: number, column: string, currentValue: unknown) => {
     if (!activeResultTab || !activeResult || !activeResultTab.table) {
       setMessage({ type: 'info', text: tCurrent('auto.remoteMySQL.6buiou') });
@@ -1130,6 +1158,10 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
                       ? tCurrent('auto.remoteMySQL.zacxkg', { value0: activeResultPrimaryKeys.join(', ') })
                       : activeResultTab.table ? tCurrent('auto.remoteMySQL.122vefz') : tCurrent('auto.remoteMySQL.g4u81i')}
                   </span>
+                  <div className="database-export-actions" aria-label="导出查询结果">
+                    <button type="button" className="database-export-button" onClick={() => void handleExportActiveResult('json')} disabled={activeResult.rows.length === 0}>导出 JSON</button>
+                    <button type="button" className="database-export-button" onClick={() => void handleExportActiveResult('csv')} disabled={activeResult.rows.length === 0}>导出 CSV</button>
+                  </div>
                 </div>
                 {activeResult.columns.length > 0 ? (
                   <>

@@ -76,6 +76,39 @@ function sanitizeTextFileName(value, fallback) {
   return sanitizedValue || fallback;
 }
 
+function readTextFileFilters(rawFilters) {
+  if (!Array.isArray(rawFilters)) {
+    return null;
+  }
+
+  const filters = [];
+
+  for (const rawFilter of rawFilters.slice(0, 8)) {
+    if (!isPlainObject(rawFilter)) {
+      continue;
+    }
+
+    const name = typeof rawFilter.name === 'string'
+      ? rawFilter.name.trim().slice(0, 80)
+      : '';
+    const extensions = Array.isArray(rawFilter.extensions)
+      ? rawFilter.extensions
+        .filter((extension) => typeof extension === 'string')
+        .map((extension) => extension.trim().replace(/^\./u, '').toLowerCase())
+        .filter((extension) => extension === '*' || /^[a-z0-9][a-z0-9_-]{0,15}$/iu.test(extension))
+        .slice(0, 8)
+      : [];
+
+    if (name && extensions.length > 0) {
+      filters.push({ name, extensions });
+    }
+  }
+
+  return filters.length > 0
+    ? filters
+    : null;
+}
+
 function readLogEntry(rawEntry) {
   if (!isPlainObject(rawEntry)) {
     return null;
@@ -400,7 +433,7 @@ function registerConfigHandlers(registerIpcHandler) {
     }
 
     const text = getDialogText(getCurrentLanguage());
-    const content = readBoundedString(rawPayload.content, '文件内容', 2_000_000, {
+    const content = readBoundedString(rawPayload.content, '文件内容', 50_000_000, {
       trim: false,
       rejectLineBreaks: false,
     });
@@ -411,15 +444,16 @@ function registerConfigHandlers(registerIpcHandler) {
       rawPayload.defaultFileName,
       `shelldesk-report-${new Date().toISOString().slice(0, 10)}.md`,
     );
+    const filters = readTextFileFilters(rawPayload.filters) ?? [
+      { name: text.markdown, extensions: ['md'] },
+      { name: text.textFiles, extensions: ['txt'] },
+      { name: text.allFiles, extensions: ['*'] },
+    ];
     const window = getSenderWindow(event);
     const result = await dialog.showSaveDialog(window ?? undefined, {
       title,
       defaultPath: path.join(app.getPath('documents'), defaultFileName),
-      filters: [
-        { name: text.markdown, extensions: ['md'] },
-        { name: text.textFiles, extensions: ['txt'] },
-        { name: text.allFiles, extensions: ['*'] },
-      ],
+      filters,
     });
 
     if (result.canceled || !result.filePath) {
