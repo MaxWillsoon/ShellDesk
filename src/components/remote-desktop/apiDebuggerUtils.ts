@@ -214,9 +214,10 @@ export function createApiDebugCommand(request: ApiDebugRequest, isWindowsHost: b
     const redirectArg = shouldFollowRedirects(request) ? '$curlArgs += "-L"' : '';
     const sslArg = shouldIgnoreSslErrors(request) ? '$curlArgs += "-k"' : '';
     const userAgentArg = userAgent ? `$curlArgs += @("-A", ${powershellSingleQuote(userAgent)})` : '';
+    const bodyBase64 = base64EncodeUtf8(requestBody);
     const bodySetupScript = sendBody ? `
 $requestBodyFile = New-TemporaryFile
-[System.IO.File]::WriteAllText($requestBodyFile.FullName, ${powershellSingleQuote(requestBody)}, [System.Text.UTF8Encoding]::new($false))
+[System.IO.File]::WriteAllBytes($requestBodyFile.FullName, [System.Convert]::FromBase64String(${powershellSingleQuote(bodyBase64)}))
 ` : '$requestBodyFile = $null';
     const bodyArgScript = sendBody ? '$curlArgs += @("--data-binary", "@$($requestBodyFile.FullName)")' : '';
 
@@ -474,7 +475,7 @@ function tokenizeCurlCommand(command: string) {
   }
 
   if (quote) {
-    throw new Error('curl 命令引号未闭合。');
+    throw new Error(tCurrent('auto.apiDebuggerUtils.curlUnclosedQuote'));
   }
 
   if (token) {
@@ -494,7 +495,7 @@ function nextCurlValue(tokens: string[], index: number, option: string) {
   const value = tokens[index + 1];
 
   if (value === undefined) {
-    throw new Error(`curl 参数缺少值：${option}`);
+    throw new Error(tCurrent('auto.apiDebuggerUtils.curlMissingValue', { value0: option }));
   }
 
   return { value, index: index + 1 };
@@ -506,11 +507,37 @@ function methodFromCurlValue(value: string): ApiDebugMethod {
   return methods.includes(upper as ApiDebugMethod) ? upper as ApiDebugMethod : 'GET';
 }
 
+function expandCombinedShortCurlOptions(tokens: string[]) {
+  return tokens.flatMap((token, index) => (
+    index > 0 && /^-[kLIG]{2,}$/.test(token)
+      ? token.slice(1).split('').map((flag) => `-${flag}`)
+      : [token]
+  ));
+}
+
+function appendCookieHeader(headers: ApiDebugHeader[], cookie: string) {
+  const existingCookieHeader = headers.find((header) => header.key.trim().toLowerCase() === 'cookie');
+
+  if (existingCookieHeader) {
+    existingCookieHeader.value = existingCookieHeader.value
+      ? `${existingCookieHeader.value}; ${cookie}`
+      : cookie;
+    return;
+  }
+
+  headers.push({
+    id: createHeaderId(),
+    key: 'Cookie',
+    value: cookie,
+    enabled: true,
+  });
+}
+
 export function parseCurlCommand(command: string): ApiDebugRequest {
-  const tokens = tokenizeCurlCommand(command.trim());
+  const tokens = expandCombinedShortCurlOptions(tokenizeCurlCommand(command.trim()));
 
   if (!tokens.length || tokens[0] !== 'curl') {
-    throw new Error('请输入以 curl 开头的命令。');
+    throw new Error(tCurrent('auto.apiDebuggerUtils.curlMustStart'));
   }
 
   let method: ApiDebugMethod = 'GET';
@@ -520,6 +547,7 @@ export function parseCurlCommand(command: string): ApiDebugRequest {
   let followRedirects = false;
   let ignoreSslErrors = false;
   let userAgent = '';
+  let forceGetWithData = false;
   const headers: ApiDebugHeader[] = [];
   const auth = {
     type: 'none' as ApiDebugAuthType,
@@ -535,6 +563,17 @@ export function parseCurlCommand(command: string): ApiDebugRequest {
 
     if (token === '-L' || token === '--location') {
       followRedirects = true;
+      continue;
+    }
+
+    if (token === '-I' || token === '--head') {
+      method = 'HEAD';
+      continue;
+    }
+
+    if (token === '-G' || token === '--get') {
+      method = 'GET';
+      forceGetWithData = true;
       continue;
     }
 
@@ -567,9 +606,12 @@ export function parseCurlCommand(command: string): ApiDebugRequest {
 
     if (token === '-d' || token === '--data' || token === '--data-raw' || token === '--data-binary' || token.startsWith('--data=') || token.startsWith('--data-raw=') || token.startsWith('--data-binary=')) {
       const result = nextCurlValue(tokens, index, token);
+      if (result.value.startsWith('@')) {
+        throw new Error(tCurrent('auto.apiDebuggerUtils.curlDataFileUnsupported', { value0: result.value }));
+      }
       body = body ? `${body}&${result.value}` : result.value;
       bodyType = 'raw';
-      if (method === 'GET') {
+      if (method === 'GET' && !forceGetWithData) {
         method = 'POST';
       }
       index = result.index;
@@ -582,13 +624,13 @@ export function parseCurlCommand(command: string): ApiDebugRequest {
       auth.basicUsername = separatorIndex >= 0 ? result.value.slice(0, separatorIndex) : result.value;
       auth.basicPassword = separatorIndex >= 0 ? result.value.slice(separatorIndex + 1) : '';
       auth.type = 'basic';
-      headers.push({
-        id: createHeaderId(),
-        key: 'Authorization',
-        value: `Basic ${base64EncodeUtf8(`${auth.basicUsername}:${auth.basicPassword}`)}`,
-        enabled: true,
-        managedByAuth: true,
-      });
+      index = result.index;
+      continue;
+    }
+
+    if (token === '-b' || token === '--cookie' || token.startsWith('--cookie=')) {
+      const result = nextCurlValue(tokens, index, token);
+      appendCookieHeader(headers, result.value);
       index = result.index;
       continue;
     }
@@ -613,7 +655,30 @@ export function parseCurlCommand(command: string): ApiDebugRequest {
   }
 
   if (!url) {
-    throw new Error('curl 命令中没有可用 URL。');
+    throw new Error(tCurrent('auto.apiDebuggerUtils.curlNoUrl'));
+  }
+
+  const validatedUrl = validateUrl(url);
+  const parsedUrl = new URL(validatedUrl);
+  const queryParams = Array.from(parsedUrl.searchParams.entries()).map(([key, value]) => ({
+    id: createParamId(),
+    key,
+    value,
+    enabled: true,
+  }));
+
+  if (forceGetWithData && body) {
+    Array.from(new URLSearchParams(body).entries()).forEach(([key, value]) => {
+      queryParams.push({
+        id: createParamId(),
+        key,
+        value,
+        enabled: true,
+      });
+    });
+    body = '';
+    bodyType = 'none';
+    method = 'GET';
   }
 
   const contentType = headers.find((header) => header.key.toLowerCase() === 'content-type')?.value.toLowerCase() ?? '';
@@ -628,9 +693,9 @@ export function parseCurlCommand(command: string): ApiDebugRequest {
   const request: ApiDebugRequest = {
     id: createRequestId(),
     method,
-    url: validateUrl(url),
+    url: validatedUrl,
     headers,
-    queryParams: [],
+    queryParams,
     auth,
     bodyType,
     formBody: [],

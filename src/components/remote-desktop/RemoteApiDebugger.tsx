@@ -230,6 +230,10 @@ function applyAuthHeaders(headers: ApiDebugHeader[], auth: ApiDebugAuthConfig) {
   return nextHeaders;
 }
 
+function removeManagedAuthHeaders(headers: ApiDebugHeader[]) {
+  return headers.filter((header) => !header.managedByAuth || header.managedByBody);
+}
+
 function applyBodyContentType(headers: ApiDebugHeader[], bodyType: ApiDebugBodyType) {
   const contentType = bodyType === 'json'
     ? 'application/json'
@@ -238,7 +242,7 @@ function applyBodyContentType(headers: ApiDebugHeader[], bodyType: ApiDebugBodyT
       : '';
 
   if (!contentType) {
-    return headers;
+    return headers.filter((header) => !header.managedByBody);
   }
 
   const existingHeader = headers.find((header) => header.key.trim().toLowerCase() === 'content-type');
@@ -258,7 +262,6 @@ function applyBodyContentType(headers: ApiDebugHeader[], bodyType: ApiDebugBodyT
       key: 'Content-Type',
       value: contentType,
       enabled: true,
-      managedByAuth: true,
       managedByBody: true,
     },
   ];
@@ -284,13 +287,24 @@ function replaceEnvironmentVariables(value: string, variables: ApiEnvironmentVar
 }
 
 function materializeRequest(request: ApiDebugRequest, variables: ApiEnvironmentVariable[]) {
+  const auth = { ...defaultAuth, ...request.auth };
+  const materializedAuth = {
+    ...auth,
+    bearerToken: replaceEnvironmentVariables(auth.bearerToken, variables),
+    basicUsername: replaceEnvironmentVariables(auth.basicUsername, variables),
+    basicPassword: replaceEnvironmentVariables(auth.basicPassword, variables),
+    apiKeyName: replaceEnvironmentVariables(auth.apiKeyName, variables),
+    apiKeyValue: replaceEnvironmentVariables(auth.apiKeyValue, variables),
+  };
+  const headers = request.headers.map((header) => ({
+    ...header,
+    value: replaceEnvironmentVariables(header.value, variables),
+  }));
+
   return {
     ...cloneRequest(request),
     url: replaceEnvironmentVariables(request.url, variables),
-    headers: request.headers.map((header) => ({
-      ...header,
-      value: replaceEnvironmentVariables(header.value, variables),
-    })),
+    headers: applyAuthHeaders(headers, materializedAuth),
     queryParams: (request.queryParams ?? []).map((param) => ({
       ...param,
       value: replaceEnvironmentVariables(param.value, variables),
@@ -300,6 +314,7 @@ function materializeRequest(request: ApiDebugRequest, variables: ApiEnvironmentV
       key: replaceEnvironmentVariables(param.key, variables),
       value: replaceEnvironmentVariables(param.value, variables),
     })),
+    auth: materializedAuth,
     body: replaceEnvironmentVariables(request.body, variables),
   };
 }
@@ -367,7 +382,8 @@ function shouldCollapseJsonValue(value: unknown, depth: number) {
 }
 
 function createJsonPath(parentPath: string, key: string | number) {
-  return parentPath ? `${parentPath}.${key}` : String(key);
+  const escapedKey = String(key).replace(/\\/g, '\\\\').replace(/\]/g, '\\]');
+  return parentPath ? `${parentPath}[${escapedKey}]` : `root[${escapedKey}]`;
 }
 
 function collectDefaultCollapsedJsonPaths(value: unknown, path = 'root', depth = 0, paths = new Set<string>()) {
@@ -440,7 +456,7 @@ function JsonTree({ value }: { value: unknown }) {
             <button
               type="button"
               onClick={() => togglePath(path)}
-              aria-label={isCollapsed ? '展开 JSON 节点' : '折叠 JSON 节点'}
+              aria-label={isCollapsed ? tCurrent('auto.remoteApiDebugger.expandJsonNode') : tCurrent('auto.remoteApiDebugger.collapseJsonNode')}
               style={{ width: 20, border: 0, background: 'transparent', color: 'var(--api-text)', cursor: 'pointer', padding: 0 }}
             >
               {isCollapsed ? '▸' : '▾'}
@@ -461,7 +477,7 @@ function JsonTree({ value }: { value: unknown }) {
               onClick={() => toggleString(path)}
               style={{ border: 0, background: 'transparent', color: 'var(--api-accent)', cursor: 'pointer', padding: 0, fontSize: 12 }}
             >
-              {expandedString ? '收起' : '展开'}
+              {expandedString ? tCurrent('auto.remoteApiDebugger.collapse') : tCurrent('auto.remoteApiDebugger.expand')}
             </button>
           ) : null}
         </div>
@@ -634,7 +650,7 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
       return {
         ...currentRequest,
         auth,
-        headers: applyAuthHeaders(currentRequest.headers, auth),
+        headers: removeManagedAuthHeaders(currentRequest.headers),
       };
     });
   };
@@ -647,9 +663,9 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
       setCurlImportText('');
       setRequestTab('headers');
       setError('');
-      setNotice('已导入 curl 命令。');
+      setNotice(tCurrent('auto.remoteApiDebugger.curlImported'));
     } catch (error) {
-      setError(`curl 导入失败：${getErrorMessage(error)}`);
+      setError(tCurrent('auto.remoteApiDebugger.curlImportFailed', { value0: getErrorMessage(error) }));
     }
   };
 
@@ -676,7 +692,7 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
       },
       ...currentRequests,
     ]);
-    setNotice('已收藏当前请求。');
+    setNotice(tCurrent('auto.remoteApiDebugger.requestSaved'));
   };
 
   const loadSavedRequest = (savedRequest: ApiSavedRequest) => {
@@ -752,15 +768,19 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
   const copyCurl = async () => {
     if (showSensitive && !pendingFullCurlCopy) {
       setPendingFullCurlCopy(true);
-      setNotice('将复制包含完整敏感信息的 curl，请再次确认。');
+      setNotice(tCurrent('auto.remoteApiDebugger.confirmSensitiveCurlCopy'));
       return;
     }
 
-    const materializedRequest = materializeRequest(request, environmentVariables);
-    const text = createCurlPreview(showSensitive && pendingFullCurlCopy ? materializedRequest : maskSensitiveHeaders(materializedRequest));
-    await navigator.clipboard.writeText(text);
-    setPendingFullCurlCopy(false);
-    setNotice(tCurrent('auto.remoteApiDebugger.1e5k4ep'));
+    try {
+      const materializedRequest = materializeRequest(request, environmentVariables);
+      const text = createCurlPreview(showSensitive && pendingFullCurlCopy ? materializedRequest : maskSensitiveHeaders(materializedRequest));
+      await navigator.clipboard.writeText(text);
+      setPendingFullCurlCopy(false);
+      setNotice(tCurrent('auto.remoteApiDebugger.1e5k4ep'));
+    } catch (error) {
+      setError(tCurrent('auto.remoteApiDebugger.clipboardWriteFailed', { value0: getErrorMessage(error) }));
+    }
   };
 
   const auth = { ...defaultAuth, ...request.auth };
@@ -770,8 +790,12 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
       return;
     }
 
-    await navigator.clipboard.writeText(activeRun.response.body || activeRun.response.headersText || activeRun.response.raw);
-    setNotice(tCurrent('auto.remoteApiDebugger.wnngk9'));
+    try {
+      await navigator.clipboard.writeText(activeRun.response.body || activeRun.response.headersText || activeRun.response.raw);
+      setNotice(tCurrent('auto.remoteApiDebugger.wnngk9'));
+    } catch (error) {
+      setError(tCurrent('auto.remoteApiDebugger.clipboardWriteFailed', { value0: getErrorMessage(error) }));
+    }
   };
 
   const formatJsonResponse = () => {
@@ -797,7 +821,7 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
       updateRequest('body', formatJsonBody(request.body));
       setError('');
     } catch (error) {
-      setError(`JSON 格式错误：${getErrorMessage(error)}`);
+      setError(tCurrent('auto.remoteApiDebugger.jsonSyntaxFailed', { value0: getErrorMessage(error) }));
     }
   };
 
@@ -805,17 +829,17 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
     <section className="api-debugger">
       <aside className="api-history">
         <div className="api-history-head">
-          <strong>收藏</strong>
-          <span>{savedRequests.length} 个请求</span>
+          <strong>{tCurrent('auto.remoteApiDebugger.favorites')}</strong>
+          <span>{tCurrent('auto.remoteApiDebugger.savedRequestCount', { value0: savedRequests.length })}</span>
         </div>
         <div className="api-history-list" style={{ flex: '0 0 auto', maxHeight: 210 }}>
           {savedRequests.map((savedRequest) => (
             <div key={savedRequest.id} style={{ border: '1px solid var(--api-border)', borderRadius: 7, marginBottom: 8, padding: 8 }}>
               {editingSavedRequestId === savedRequest.id ? (
                 <div className="api-header-row" style={{ gridTemplateColumns: 'minmax(0, 1fr) 58px 58px' }}>
-                  <input value={editingSavedRequestName} onChange={(event) => setEditingSavedRequestName(event.target.value)} aria-label="收藏名称" />
-                  <button type="button" onClick={commitRenameSavedRequest}>保存</button>
-                  <button type="button" onClick={() => setEditingSavedRequestId('')}>取消</button>
+                  <input value={editingSavedRequestName} onChange={(event) => setEditingSavedRequestName(event.target.value)} aria-label={tCurrent('auto.remoteApiDebugger.favoriteName')} />
+                  <button type="button" onClick={commitRenameSavedRequest}>{tCurrent('auto.remoteApiDebugger.save')}</button>
+                  <button type="button" onClick={() => setEditingSavedRequestId('')}>{tCurrent('auto.remoteApiDebugger.cancel')}</button>
                 </div>
               ) : (
                 <>
@@ -824,14 +848,14 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
                     <span title={savedRequest.request.url}>{savedRequest.request.url}</span>
                   </button>
                   <div className="api-response-actions" style={{ justifyContent: 'flex-end', marginTop: 6 }}>
-                    <button type="button" onClick={() => startRenameSavedRequest(savedRequest)}>重命名</button>
-                    <button type="button" onClick={() => removeSavedRequest(savedRequest.id)}>删除</button>
+                    <button type="button" onClick={() => startRenameSavedRequest(savedRequest)}>{tCurrent('auto.remoteApiDebugger.rename')}</button>
+                    <button type="button" onClick={() => removeSavedRequest(savedRequest.id)}>{tCurrent('auto.remoteApiDebugger.1t2vi4h')}</button>
                   </div>
                 </>
               )}
             </div>
           ))}
-          {!savedRequests.length ? <div className="api-history-empty" style={{ minHeight: 72 }}>暂无收藏</div> : null}
+          {!savedRequests.length ? <div className="api-history-empty" style={{ minHeight: 72 }}>{tCurrent('auto.remoteApiDebugger.noFavorites')}</div> : null}
         </div>
         <div className="api-history-head">
           <strong>{tCurrent('auto.remoteApiDebugger.1nw1cic')}</strong>
@@ -870,9 +894,9 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
             onChange={(event) => updateRequest('timeoutSeconds', Number(event.target.value))}
             aria-label={tCurrent('auto.remoteApiDebugger.tabbi8')}
           />
-          <button type="button" onClick={() => setShowNetworkOptions((value) => !value)} aria-label="高级网络选项" title="高级网络选项">⚙</button>
-          <button type="button" onClick={() => setShowCurlImport((value) => !value)}>导入 curl</button>
-          <button type="button" onClick={saveCurrentRequest} aria-label="收藏当前请求">☆</button>
+          <button type="button" onClick={() => setShowNetworkOptions((value) => !value)} aria-label={tCurrent('auto.remoteApiDebugger.advancedNetworkOptions')} title={tCurrent('auto.remoteApiDebugger.advancedNetworkOptions')}>⚙</button>
+          <button type="button" onClick={() => setShowCurlImport((value) => !value)}>{tCurrent('auto.remoteApiDebugger.importCurl')}</button>
+          <button type="button" onClick={saveCurrentRequest} aria-label={tCurrent('auto.remoteApiDebugger.saveCurrentRequest')}>☆</button>
           <button type="button" className="primary" onClick={sendRequest} disabled={loading}>{loading ? tCurrent('auto.remoteApiDebugger.19ewkta') : tCurrent('auto.remoteApiDebugger.j5vidj')}</button>
         </header>
         {showCurlImport ? (
@@ -883,11 +907,11 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
               value={curlImportText}
               onChange={(event) => setCurlImportText(event.target.value)}
               placeholder={"curl -X POST https://api.example.com/items -H 'Content-Type: application/json' -d '{\"name\":\"demo\"}'"}
-              aria-label="curl 命令"
+              aria-label={tCurrent('auto.remoteApiDebugger.curlCommand')}
             />
             <div className="api-response-actions" style={{ justifyContent: 'flex-end' }}>
-              <button type="button" onClick={() => { setShowCurlImport(false); setCurlImportText(''); }}>取消</button>
-              <button type="button" className="primary" onClick={importCurl} disabled={!curlImportText.trim()}>导入</button>
+              <button type="button" onClick={() => { setShowCurlImport(false); setCurlImportText(''); }}>{tCurrent('auto.remoteApiDebugger.cancel')}</button>
+              <button type="button" className="primary" onClick={importCurl} disabled={!curlImportText.trim()}>{tCurrent('auto.remoteApiDebugger.import')}</button>
             </div>
           </section>
         ) : null}
@@ -895,7 +919,7 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
           <section className="api-request-line" style={{ minHeight: 0, alignItems: 'stretch', flexDirection: 'column' }}>
             <div className="api-header-editor" style={{ padding: 0 }}>
               <label className="api-header-row" style={{ gridTemplateColumns: 'minmax(0, 1fr) 90px 1fr 58px' }}>
-                <span>Follow Redirects</span>
+                <span>{tCurrent('auto.remoteApiDebugger.followRedirects')}</span>
                 <input
                   type="checkbox"
                   checked={request.followRedirects ?? true}
@@ -905,7 +929,7 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
                 <span />
               </label>
               <label className="api-header-row" style={{ gridTemplateColumns: 'minmax(0, 1fr) 90px 1fr 58px' }}>
-                <span>Ignore SSL Errors</span>
+                <span>{tCurrent('auto.remoteApiDebugger.ignoreSslErrors')}</span>
                 <input
                   type="checkbox"
                   checked={request.ignoreSslErrors ?? false}
@@ -915,14 +939,14 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
                 <span />
               </label>
               <div className="api-header-row" style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr) 1fr 58px' }}>
-                <span>Custom User-Agent</span>
+                <span>{tCurrent('auto.remoteApiDebugger.customUserAgent')}</span>
                 <input
                   value={request.userAgent ?? ''}
                   onChange={(event) => updateRequest('userAgent', event.target.value)}
                   placeholder="ShellDesk/1.0"
                 />
                 <span style={{ color: 'var(--api-muted)', fontSize: 12 }}>curl -A</span>
-                <button type="button" onClick={() => updateRequest('userAgent', '')}>清空</button>
+                <button type="button" onClick={() => updateRequest('userAgent', '')}>{tCurrent('auto.remoteApiDebugger.clear')}</button>
               </div>
             </div>
           </section>
@@ -930,9 +954,9 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
         <section className="api-request-line" style={{ minHeight: 0, alignItems: 'stretch', flexDirection: 'column' }}>
           <div className="api-response-actions">
             <button type="button" onClick={() => setShowEnvironmentEditor((value) => !value)}>
-              环境变量
+              {tCurrent('auto.remoteApiDebugger.environmentVariables')}
             </button>
-            <button type="button" onClick={addEnvironmentVariable}>新增变量</button>
+            <button type="button" onClick={addEnvironmentVariable}>{tCurrent('auto.remoteApiDebugger.addVariable')}</button>
           </div>
           {showEnvironmentEditor ? (
             <div className="api-header-editor" style={{ padding: 0 }}>
@@ -946,7 +970,7 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
                   <button type="button" onClick={() => removeEnvironmentVariable(variable.id)}>{tCurrent('auto.remoteApiDebugger.1t2vi4h')}</button>
                 </div>
               ))}
-              {!environmentVariables.length ? <span style={{ color: 'var(--api-muted)', fontSize: 12 }}>在 URL、Header value、Body 中使用 {'{{variableName}}'}</span> : null}
+              {!environmentVariables.length ? <span style={{ color: 'var(--api-muted)', fontSize: 12 }}>{tCurrent('auto.remoteApiDebugger.variableUsageHint')}</span> : null}
             </div>
           ) : null}
         </section>
@@ -960,7 +984,7 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
             <button type="button" className={requestTab === 'params' ? 'active' : ''} onClick={() => setRequestTab('params')}>Params</button>
             <button type="button" className={requestTab === 'body' ? 'active' : ''} onClick={() => setRequestTab('body')}>Body</button>
             <button type="button" className={showSensitive ? 'active' : ''} onClick={() => { setShowSensitive((value) => !value); setPendingFullCurlCopy(false); }}>
-              {showSensitive ? '隐藏敏感信息' : '显示敏感信息'}
+              {showSensitive ? tCurrent('auto.remoteApiDebugger.hideSensitiveInfo') : tCurrent('auto.remoteApiDebugger.showSensitiveInfo')}
             </button>
             <button type="button" onClick={copyCurl} disabled={!curlPreview}>{tCurrent('auto.remoteApiDebugger.up9ow0')}</button>
           </div>
@@ -969,7 +993,7 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
             <div className="api-header-editor">
               <div className="api-header-row">
                 <span />
-                <select value={auth.type} onChange={(event) => updateAuth({ type: event.target.value as ApiDebugAuthConfig['type'] })} aria-label="Auth">
+                <select value={auth.type} onChange={(event) => updateAuth({ type: event.target.value as ApiDebugAuthConfig['type'] })} aria-label={tCurrent('auto.remoteApiDebugger.auth')}>
                   <option value="none">None</option>
                   <option value="bearer">Bearer Token</option>
                   <option value="basic">Basic Auth</option>
@@ -1021,21 +1045,21 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
                   <button type="button" onClick={() => removeParam(param.id)}>{tCurrent('auto.remoteApiDebugger.1t2vi4h')}</button>
                 </div>
               ))}
-              <button type="button" className="api-add-header" onClick={addParam}>新增参数</button>
+              <button type="button" className="api-add-header" onClick={addParam}>{tCurrent('auto.remoteApiDebugger.addParam')}</button>
             </div>
           ) : (
             <>
               <div className="api-request-line" style={{ minHeight: 42 }}>
-                <select value={request.bodyType ?? 'raw'} onChange={(event) => updateBodyType(event.target.value as ApiDebugBodyType)} aria-label="Body 类型">
+                <select value={request.bodyType ?? 'raw'} onChange={(event) => updateBodyType(event.target.value as ApiDebugBodyType)} aria-label={tCurrent('auto.remoteApiDebugger.bodyType')}>
                   {bodyTypes.map((bodyType) => <option key={bodyType.value} value={bodyType.value}>{bodyType.label}</option>)}
                 </select>
                 {(request.bodyType ?? 'raw') === 'json' ? (
-                  <button type="button" onClick={formatJsonRequestBody}>格式化</button>
+                  <button type="button" onClick={formatJsonRequestBody}>{tCurrent('auto.remoteApiDebugger.format')}</button>
                 ) : null}
-                {jsonBodyError ? <span style={{ color: 'var(--api-danger)', fontSize: 12, fontWeight: 730 }}>JSON 语法错误</span> : null}
+                {jsonBodyError ? <span style={{ color: 'var(--api-danger)', fontSize: 12, fontWeight: 730 }}>{tCurrent('auto.remoteApiDebugger.jsonSyntaxError')}</span> : null}
               </div>
               {(request.bodyType ?? 'raw') === 'none' ? (
-                <div className="api-history-empty">None 模式不会发送请求 Body。</div>
+                <div className="api-history-empty">{tCurrent('auto.remoteApiDebugger.noneBodyHint')}</div>
               ) : (request.bodyType ?? 'raw') === 'form' ? (
                 <div className="api-header-editor">
                   {(request.formBody ?? []).map((param) => (
@@ -1048,7 +1072,7 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
                       <button type="button" onClick={() => removeFormBodyParam(param.id)}>{tCurrent('auto.remoteApiDebugger.1t2vi4h')}</button>
                     </div>
                   ))}
-                  <button type="button" className="api-add-header" onClick={addFormBodyParam}>新增表单项</button>
+                  <button type="button" className="api-add-header" onClick={addFormBodyParam}>{tCurrent('auto.remoteApiDebugger.addFormItem')}</button>
                 </div>
               ) : (
                 <textarea
@@ -1073,7 +1097,7 @@ function RemoteApiDebugger({ connectionId, systemType }: RemoteApiDebuggerProps)
               </strong>
               {activeRun ? <em>{activeRun.response.durationMs} ms</em> : null}
               {activeRun && activeResponseFormat ? (
-                <em title={activeResponseContentType || 'Content-Type 未返回'}>
+                <em title={activeResponseContentType || tCurrent('auto.remoteApiDebugger.contentTypeMissing')}>
                   {getFormatLabel(activeResponseFormat, activeResponseContentType)}
                 </em>
               ) : null}
