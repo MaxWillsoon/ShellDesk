@@ -76,7 +76,8 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
   const [caPathDraft, setCaPathDraft] = useState('');
   const [pendingRootRemoval, setPendingRootRemoval] = useState<TrustedRootCertificate | null>(null);
   const [query, setQuery] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [siteLoading, setSiteLoading] = useState(false);
+  const [rootLoading, setRootLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [rootDetailLoading, setRootDetailLoading] = useState(false);
   const [actionRunning, setActionRunning] = useState(false);
@@ -135,7 +136,7 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
   }, [isWindowsHost, runCommand]);
 
   const refresh = useCallback(async () => {
-    setLoading(true);
+    setSiteLoading(true);
     setError('');
     setNotice('');
 
@@ -163,14 +164,14 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
       setSelectedDetail(null);
       setError(getErrorMessage(error));
     } finally {
-      setLoading(false);
+      setSiteLoading(false);
     }
   }, [isWindowsHost, refreshCertbotList, runCommand]);
 
   const refreshTrustedRoots = useCallback(async () => {
     const requestId = trustedRootsRequestIdRef.current + 1;
     trustedRootsRequestIdRef.current = requestId;
-    setLoading(true);
+    setRootLoading(true);
     setError('');
     setNotice('');
 
@@ -197,7 +198,7 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
       setSelectedRootDetail(null);
       setError(getErrorMessage(error));
     } finally {
-      if (trustedRootsRequestIdRef.current === requestId) setLoading(false);
+      if (trustedRootsRequestIdRef.current === requestId) setRootLoading(false);
     }
   }, [isWindowsHost, runCommand]);
 
@@ -448,6 +449,7 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
     [tCurrent('auto.remoteCertManager.field.fingerprint'), selectedRootDetail?.sha256Fingerprint],
     [tCurrent('auto.remoteCertManager.field.path'), selectedRootDetail?.filePath],
   ] as const;
+  const activeLoading = activeTab === 'roots' ? rootLoading : siteLoading;
 
   return (
     <section className="cert-manager">
@@ -465,7 +467,7 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
           />
         </div>
         <div className="cert-toolbar-actions">
-          <button type="button" onClick={refreshActiveTab} disabled={loading}>{loading ? tCurrent('auto.remoteCertManager.refreshing') : tCurrent('auto.remoteCertManager.refresh')}</button>
+          <button type="button" onClick={refreshActiveTab} disabled={activeLoading}>{activeLoading ? tCurrent('auto.remoteCertManager.refreshing') : tCurrent('auto.remoteCertManager.refresh')}</button>
           {activeTab === 'site' ? (
             <>
               <button type="button" className="primary" onClick={() => setPendingAction('dry-run')} disabled={!certbotInstalled || actionRunning}>{tCurrent('auto.remoteCertManager.dryRun')}</button>
@@ -507,7 +509,7 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
                 <small title={cert.filePath}>{cert.filePath}</small>
               </button>
             ))}
-            {!filteredCertificates.length ? <div className="cert-empty-state">{loading ? tCurrent('auto.remoteCertManager.loading') : tCurrent('auto.remoteCertManager.empty')}</div> : null}
+            {!filteredCertificates.length ? <div className="cert-empty-state">{siteLoading ? tCurrent('auto.remoteCertManager.loading') : tCurrent('auto.remoteCertManager.empty')}</div> : null}
           </div>
         </aside>
 
@@ -534,7 +536,7 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
               <span>{certbotCertificates.length ? tCurrent('auto.remoteCertManager.certbotCount', { value0: certbotCertificates.length }) : tCurrent('auto.remoteCertManager.certbotInstallHint')}</span>
             </div>
             <div className="cert-actions">
-              <button type="button" onClick={refresh} disabled={loading}>{tCurrent('auto.remoteCertManager.refresh')}</button>
+              <button type="button" onClick={refresh} disabled={siteLoading}>{tCurrent('auto.remoteCertManager.refresh')}</button>
               <button type="button" className="primary" onClick={() => setPendingAction('dry-run')} disabled={!certbotInstalled || actionRunning}>{tCurrent('auto.remoteCertManager.dryRun')}</button>
               <button type="button" className="danger" onClick={() => setPendingAction('renew')} disabled={!certbotInstalled || actionRunning}>{tCurrent('auto.remoteCertManager.renew')}</button>
               <button type="button" onClick={viewPem} disabled={!selectedDetail?.pem}>{tCurrent('auto.remoteCertManager.viewPem')}</button>
@@ -575,7 +577,7 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
                 <small title={cert.filePath}>{cert.filePath}</small>
               </button>
             ))}
-            {!filteredTrustedRoots.length ? <div className="cert-empty-state">{loading ? tCurrent('auto.remoteCertManager.loadingRoots') : tCurrent('auto.remoteCertManager.emptyRoots')}</div> : null}
+            {!filteredTrustedRoots.length ? <div className="cert-empty-state">{rootLoading ? tCurrent('auto.remoteCertManager.loadingRoots') : tCurrent('auto.remoteCertManager.emptyRoots')}</div> : null}
           </div>
         </aside>
 
@@ -602,7 +604,7 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
               <span>{tCurrent('auto.remoteCertManager.rootCount', { value0: trustedRoots.length })}</span>
             </div>
             <div className="cert-actions">
-              <button type="button" onClick={refreshTrustedRoots} disabled={loading}>{tCurrent('auto.remoteCertManager.refresh')}</button>
+              <button type="button" onClick={refreshTrustedRoots} disabled={rootLoading}>{tCurrent('auto.remoteCertManager.refresh')}</button>
               <button type="button" onClick={viewPem} disabled={!selectedRootDetail?.pem}>{tCurrent('auto.remoteCertManager.viewPem')}</button>
               <button type="button" onClick={copyFingerprint} disabled={!selectedTrustedRoot?.sha256Fingerprint}>{tCurrent('auto.remoteCertManager.copyFingerprint')}</button>
               <button type="button" className="danger" onClick={() => selectedTrustedRoot && setPendingRootRemoval(selectedTrustedRoot)} disabled={!selectedTrustedRoot || actionRunning}>

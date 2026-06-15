@@ -205,17 +205,16 @@ emit_root_detail() {
   tmp=""
   if ${includeText ? 'true' : 'false'}; then
     tmp="$(mktemp 2>/dev/null || printf "/tmp/shelldesk-root-cert-$$")"
-    trap 'rm -f -- "$tmp"' EXIT HUP INT TERM
     if ! openssl x509 -in "$file" -text -noout >"$tmp" 2>/tmp/shelldesk-root-cert-error-$$; then
       err="$(cat /tmp/shelldesk-root-cert-error-$$ 2>/dev/null)"
-      rm -f -- /tmp/shelldesk-root-cert-error-$$
+      rm -f -- "$tmp" /tmp/shelldesk-root-cert-error-$$
       printf '__SHELLDESK_ROOT_CERT_ERROR__|%s: %s\\n' "$file" "\${err:-openssl failed}"
       return 0
     fi
   fi
   if ! fields="$(openssl x509 -in "$file" -noout -subject -issuer -enddate -serial -fingerprint -sha256 2>/tmp/shelldesk-root-cert-error-$$)"; then
     err="$(cat /tmp/shelldesk-root-cert-error-$$ 2>/dev/null)"
-    rm -f -- /tmp/shelldesk-root-cert-error-$$
+    rm -f -- "$tmp" /tmp/shelldesk-root-cert-error-$$
     printf '__SHELLDESK_ROOT_CERT_ERROR__|%s: %s\\n' "$file" "\${err:-openssl failed}"
     return 0
   fi
@@ -232,6 +231,7 @@ emit_root_detail() {
   ${includeText ? 'cat "$tmp"' : ''}
   ${includePem ? 'printf \'\\n__SHELLDESK_CERT_PEM_BEGIN__\\n\'; openssl x509 -in "$file" -outform PEM 2>/dev/null; printf \'__SHELLDESK_CERT_PEM_END__\\n\'' : ''}
   printf '\\n__SHELLDESK_ROOT_CERT_END__\\n'
+  rm -f -- "$tmp"
 }
 `.trim();
 }
@@ -270,10 +270,9 @@ emit_error() {
 emit_detail() {
   file="$1"
   tmp="$(mktemp 2>/dev/null || printf "/tmp/shelldesk-cert-$$")"
-  trap 'rm -f -- "$tmp"' EXIT HUP INT TERM
   if ! openssl x509 -in "$file" -text -noout >"$tmp" 2>/tmp/shelldesk-cert-error-$$; then
     err="$(cat /tmp/shelldesk-cert-error-$$ 2>/dev/null)"
-    rm -f -- /tmp/shelldesk-cert-error-$$
+    rm -f -- "$tmp" /tmp/shelldesk-cert-error-$$
     emit_error "$file: \${err:-openssl failed}"
     return 0
   fi
@@ -298,6 +297,7 @@ emit_detail() {
   printf '__SHELLDESK_CERT_FIELD__|keySize|%s\\n' "$key_size"
   cat "$tmp"
   printf '\\n__SHELLDESK_CERT_END__\\n'
+  rm -f -- "$tmp"
 }
 if command -v certbot >/dev/null 2>&1; then
   printf '__SHELLDESK_CERTBOT__|installed\\n'
@@ -418,11 +418,11 @@ source_file=${shellSingleQuote(filePath)}
 [ -f "$source_file" ] || { printf '%s\\n' ${shellSingleQuote(tCurrent('auto.certManagerProviders.caFileMissing'))}; exit 2; }
 source_file="$(canonicalize_path "$source_file")"
 if ! openssl x509 -in "$source_file" -noout -checkend 0 >/dev/null 2>&1; then
-  printf '%s\\n' 'Invalid, expired, or unreadable CA certificate'
+  printf '%s\\n' ${shellSingleQuote(tCurrent('auto.certManagerProviders.caInvalidOrExpired'))}
   exit 5
 fi
 if ! openssl x509 -in "$source_file" -noout -text 2>/dev/null | grep -q 'CA:TRUE'; then
-  printf '%s\\n' 'Certificate is not a CA certificate'
+  printf '%s\\n' ${shellSingleQuote(tCurrent('auto.certManagerProviders.caNotAuthority'))}
   exit 6
 fi
 base="$(basename "$source_file")"
