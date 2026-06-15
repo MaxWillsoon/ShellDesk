@@ -9,15 +9,23 @@ import type { RemoteSystemType } from './types';
 import {
   createCertbotListCommand,
   createCertbotRenewCommand,
+  createAddTrustedRootCommand,
   createCertDetailCommand,
   createCertScanCommand,
+  createRemoveTrustedRootCommand,
+  createTrustedRootDetailCommand,
+  createTrustedRootScanCommand,
   parseCertbotList,
   parseCertDetail,
   parseCertScanOutput,
+  parseTrustedRootDetail,
+  parseTrustedRootScanOutput,
   type CertbotCertificate,
   type CertExpiryStatus,
   type RemoteCertificateDetail,
   type RemoteCertificateSummary,
+  type TrustedRootCertificate,
+  type TrustedRootCertificateDetail,
 } from './certManagerProviders';
 import { tCurrent } from '../../i18n';
 
@@ -27,6 +35,7 @@ interface RemoteCertManagerProps {
 }
 
 type PendingAction = 'renew' | 'dry-run';
+type CertManagerTab = 'site' | 'roots';
 
 function getStatusLabel(status: CertExpiryStatus, daysRemaining: number | null) {
   if (status === 'expired') return tCurrent('auto.remoteCertManager.status.expired');
@@ -47,17 +56,29 @@ function getCertificateTitle(cert: RemoteCertificateSummary | RemoteCertificateD
   return cert.subjectCommonName || cert.sans[0] || cert.filePath.split('/').pop() || cert.filePath;
 }
 
+function getTrustedRootTitle(cert: TrustedRootCertificate | TrustedRootCertificateDetail | null) {
+  if (!cert) return tCurrent('auto.remoteCertManager.noSelection');
+  return cert.subjectCommonName || cert.filePath.split('/').pop() || cert.filePath;
+}
+
 function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps) {
   const isWindowsHost = isWindowsSystem(systemType);
   const { runCommand, sudoPrompt } = useSudoCommand(connectionId, systemType);
+  const [activeTab, setActiveTab] = useState<CertManagerTab>('site');
   const [certificates, setCertificates] = useState<RemoteCertificateSummary[]>([]);
   const [certbotCertificates, setCertbotCertificates] = useState<CertbotCertificate[]>([]);
   const [certbotInstalled, setCertbotInstalled] = useState(false);
   const [selectedId, setSelectedId] = useState('');
   const [selectedDetail, setSelectedDetail] = useState<RemoteCertificateDetail | null>(null);
+  const [trustedRoots, setTrustedRoots] = useState<TrustedRootCertificate[]>([]);
+  const [selectedRootId, setSelectedRootId] = useState('');
+  const [selectedRootDetail, setSelectedRootDetail] = useState<TrustedRootCertificateDetail | null>(null);
+  const [caPathDraft, setCaPathDraft] = useState('');
+  const [pendingRootRemoval, setPendingRootRemoval] = useState<TrustedRootCertificate | null>(null);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [rootDetailLoading, setRootDetailLoading] = useState(false);
   const [actionRunning, setActionRunning] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [rawOutput, setRawOutput] = useState('');
@@ -81,6 +102,23 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
   const selectedCertificate = useMemo(() => {
     return certificates.find((cert) => cert.id === selectedId) ?? filteredCertificates[0] ?? null;
   }, [certificates, filteredCertificates, selectedId]);
+
+  const filteredTrustedRoots = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return trustedRoots;
+    return trustedRoots.filter((cert) => [
+      cert.subjectCommonName,
+      cert.subject,
+      cert.issuer,
+      cert.filePath,
+      cert.serialNumber,
+      cert.sha256Fingerprint,
+    ].some((value) => value.toLowerCase().includes(needle)));
+  }, [query, trustedRoots]);
+
+  const selectedTrustedRoot = useMemo(() => {
+    return trustedRoots.find((cert) => cert.id === selectedRootId) ?? filteredTrustedRoots[0] ?? null;
+  }, [filteredTrustedRoots, selectedRootId, trustedRoots]);
 
   const refreshCertbotList = useCallback(async (installed: boolean) => {
     if (!installed || isWindowsHost) {
@@ -125,9 +163,49 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
     }
   }, [isWindowsHost, refreshCertbotList, runCommand]);
 
+  const refreshTrustedRoots = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const result = await runCommand(createTrustedRootScanCommand(isWindowsHost));
+      const combinedOutput = [result.stdout, result.stderr].filter(Boolean).join('\n');
+      const parsed = parseTrustedRootScanOutput(combinedOutput);
+      setTrustedRoots(parsed.certificates);
+      setRawOutput(parsed.rawOutput);
+      setSelectedRootId((current) => (
+        current && parsed.certificates.some((cert) => cert.id === current)
+          ? current
+          : parsed.certificates[0]?.id ?? ''
+      ));
+      setLastRefreshedAt(new Date().toLocaleTimeString(getShellDeskLocale()));
+      setNotice(tCurrent('auto.remoteCertManager.rootScanComplete', { value0: parsed.certificates.length }));
+      if (parsed.errors.length) {
+        setError(parsed.errors.slice(0, 4).join('\n'));
+      }
+    } catch (error) {
+      setTrustedRoots([]);
+      setSelectedRootDetail(null);
+      setError(getErrorMessage(error));
+    } finally {
+      setLoading(false);
+    }
+  }, [isWindowsHost, runCommand]);
+
+  const refreshActiveTab = useCallback(() => {
+    return activeTab === 'roots' ? refreshTrustedRoots() : refresh();
+  }, [activeTab, refresh, refreshTrustedRoots]);
+
   useEffect(() => {
     void refresh();
   }, [connectionId, isWindowsHost]);
+
+  useEffect(() => {
+    if (activeTab === 'roots' && trustedRoots.length === 0 && !loading) {
+      void refreshTrustedRoots();
+    }
+  }, [activeTab, connectionId, isWindowsHost]);
 
   useEffect(() => {
     if (!selectedCertificate) {
@@ -162,6 +240,41 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
     };
   }, [isWindowsHost, runCommand, selectedCertificate?.id]);
 
+  useEffect(() => {
+    if (activeTab !== 'roots') return undefined;
+
+    if (!selectedTrustedRoot) {
+      setSelectedRootDetail(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const loadDetail = async () => {
+      setRootDetailLoading(true);
+      setError('');
+
+      try {
+        const result = await runCommand(createTrustedRootDetailCommand(selectedTrustedRoot.filePath, isWindowsHost));
+        const detail = parseTrustedRootDetail([result.stdout, result.stderr].filter(Boolean).join('\n'));
+        if (!cancelled) setSelectedRootDetail(detail);
+      } catch (error) {
+        if (!cancelled) {
+          setSelectedRootDetail({ ...selectedTrustedRoot, rawText: '', pem: undefined });
+          setError(getErrorMessage(error));
+        }
+      } finally {
+        if (!cancelled) setRootDetailLoading(false);
+      }
+    };
+
+    void loadDetail();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, isWindowsHost, runCommand, selectedTrustedRoot?.id]);
+
   const executeCertbotAction = async () => {
     if (!pendingAction) return;
     const dryRun = pendingAction === 'dry-run';
@@ -185,7 +298,9 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
   };
 
   const copyFingerprint = async () => {
-    const fingerprint = selectedDetail?.sha256Fingerprint || selectedCertificate?.sha256Fingerprint;
+    const fingerprint = activeTab === 'roots'
+      ? selectedRootDetail?.sha256Fingerprint || selectedTrustedRoot?.sha256Fingerprint
+      : selectedDetail?.sha256Fingerprint || selectedCertificate?.sha256Fingerprint;
     if (!fingerprint) return;
 
     try {
@@ -197,9 +312,58 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
   };
 
   const viewPem = () => {
-    if (!selectedDetail?.pem) return;
-    setRawOutput(selectedDetail.pem);
+    const pem = activeTab === 'roots' ? selectedRootDetail?.pem : selectedDetail?.pem;
+    if (!pem) return;
+    setRawOutput(pem);
     setNotice(tCurrent('auto.remoteCertManager.pemShown'));
+  };
+
+  const addTrustedRoot = async () => {
+    const filePath = caPathDraft.trim();
+    if (!filePath) {
+      setError(tCurrent('auto.remoteCertManager.caPathRequired'));
+      return;
+    }
+
+    setActionRunning(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const result = await runCommand(createAddTrustedRootCommand(filePath, isWindowsHost));
+      const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
+      setRawOutput(output);
+      if (result.code !== 0) throw new Error(output || tCurrent('auto.remoteCertManager.actionFailed'));
+      setNotice(tCurrent('auto.remoteCertManager.rootAdded'));
+      setCaPathDraft('');
+      await refreshTrustedRoots();
+    } catch (error) {
+      setError(getErrorMessage(error));
+    } finally {
+      setActionRunning(false);
+    }
+  };
+
+  const removeTrustedRoot = async () => {
+    if (!pendingRootRemoval) return;
+
+    setActionRunning(true);
+    setError('');
+    setNotice('');
+
+    try {
+      const result = await runCommand(createRemoveTrustedRootCommand(pendingRootRemoval.filePath, isWindowsHost));
+      const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
+      setRawOutput(output);
+      if (result.code !== 0) throw new Error(output || tCurrent('auto.remoteCertManager.actionFailed'));
+      setNotice(tCurrent('auto.remoteCertManager.rootRemoved'));
+      setPendingRootRemoval(null);
+      await refreshTrustedRoots();
+    } catch (error) {
+      setError(getErrorMessage(error));
+    } finally {
+      setActionRunning(false);
+    }
   };
 
   const detailRows = [
@@ -216,6 +380,17 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
     [tCurrent('auto.remoteCertManager.field.path'), selectedDetail?.filePath],
   ] as const;
 
+  const rootDetailRows = [
+    [tCurrent('auto.remoteCertManager.field.subject'), selectedRootDetail?.subjectCommonName],
+    [tCurrent('auto.remoteCertManager.field.subjectFull'), selectedRootDetail?.subject],
+    [tCurrent('auto.remoteCertManager.field.issuer'), selectedRootDetail?.issuer],
+    [tCurrent('auto.remoteCertManager.field.notAfter'), selectedRootDetail?.notAfter],
+    [tCurrent('auto.remoteCertManager.field.daysRemaining'), selectedRootDetail?.daysRemaining],
+    [tCurrent('auto.remoteCertManager.field.serialNumber'), selectedRootDetail?.serialNumber],
+    [tCurrent('auto.remoteCertManager.field.fingerprint'), selectedRootDetail?.sha256Fingerprint],
+    [tCurrent('auto.remoteCertManager.field.path'), selectedRootDetail?.filePath],
+  ] as const;
+
   return (
     <section className="cert-manager">
       <header className="cert-toolbar">
@@ -228,20 +403,33 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder={tCurrent('auto.remoteCertManager.searchPlaceholder')}
+            placeholder={activeTab === 'roots' ? tCurrent('auto.remoteCertManager.rootSearchPlaceholder') : tCurrent('auto.remoteCertManager.searchPlaceholder')}
           />
         </div>
         <div className="cert-toolbar-actions">
-          <button type="button" onClick={refresh} disabled={loading}>{loading ? tCurrent('auto.remoteCertManager.refreshing') : tCurrent('auto.remoteCertManager.refresh')}</button>
-          <button type="button" className="primary" onClick={() => setPendingAction('dry-run')} disabled={!certbotInstalled || actionRunning}>{tCurrent('auto.remoteCertManager.dryRun')}</button>
-          <button type="button" className="danger" onClick={() => setPendingAction('renew')} disabled={!certbotInstalled || actionRunning}>{tCurrent('auto.remoteCertManager.renew')}</button>
+          <button type="button" onClick={refreshActiveTab} disabled={loading}>{loading ? tCurrent('auto.remoteCertManager.refreshing') : tCurrent('auto.remoteCertManager.refresh')}</button>
+          {activeTab === 'site' ? (
+            <>
+              <button type="button" className="primary" onClick={() => setPendingAction('dry-run')} disabled={!certbotInstalled || actionRunning}>{tCurrent('auto.remoteCertManager.dryRun')}</button>
+              <button type="button" className="danger" onClick={() => setPendingAction('renew')} disabled={!certbotInstalled || actionRunning}>{tCurrent('auto.remoteCertManager.renew')}</button>
+            </>
+          ) : null}
         </div>
       </header>
+
+      <div className="cert-actions cert-tabs" role="tablist" aria-label={tCurrent('auto.remoteCertManager.tabsLabel')}>
+        <button type="button" role="tab" className={activeTab === 'site' ? 'active' : ''} aria-selected={activeTab === 'site'} onClick={() => setActiveTab('site')}>
+          {tCurrent('auto.remoteCertManager.tab.site')}
+        </button>
+        <button type="button" role="tab" className={activeTab === 'roots' ? 'active' : ''} aria-selected={activeTab === 'roots'} onClick={() => setActiveTab('roots')}>
+          {tCurrent('auto.remoteCertManager.tab.roots')}
+        </button>
+      </div>
 
       {error ? <DismissibleAlert className="cert-alert danger" onDismiss={() => setError('')} role="alert">{error}</DismissibleAlert> : null}
       {notice ? <DismissibleAlert className="cert-alert info" onDismiss={() => setNotice('')}>{notice}</DismissibleAlert> : null}
 
-      <div className="cert-layout">
+      {activeTab === 'site' ? <div className="cert-layout">
         <aside className="cert-list">
           <div className="cert-list-head">
             <strong>{tCurrent('auto.remoteCertManager.certificates')}</strong>
@@ -307,7 +495,76 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
             <pre className="cert-raw-output">{rawOutput || tCurrent('auto.remoteCertManager.noRawOutput')}</pre>
           </section>
         </main>
-      </div>
+      </div> : null}
+
+      {activeTab === 'roots' ? <div className="cert-layout">
+        <aside className="cert-list">
+          <div className="cert-list-head">
+            <strong>{tCurrent('auto.remoteCertManager.trustedRoots')}</strong>
+            <span>{filteredTrustedRoots.length}</span>
+          </div>
+          <div className="cert-list-scroll">
+            {filteredTrustedRoots.map((cert) => (
+              <button
+                key={cert.id}
+                type="button"
+                className={selectedTrustedRoot?.id === cert.id ? 'active' : ''}
+                onClick={() => setSelectedRootId(cert.id)}
+              >
+                <span className={`cert-expiry-dot ${cert.status}`} />
+                <strong title={getTrustedRootTitle(cert)}>{getTrustedRootTitle(cert)}</strong>
+                <em>{getStatusLabel(cert.status, cert.daysRemaining)}</em>
+                <small title={cert.filePath}>{cert.filePath}</small>
+              </button>
+            ))}
+            {!filteredTrustedRoots.length ? <div className="cert-empty-state">{loading ? tCurrent('auto.remoteCertManager.loadingRoots') : tCurrent('auto.remoteCertManager.emptyRoots')}</div> : null}
+          </div>
+        </aside>
+
+        <main className="cert-main">
+          <section className="cert-detail-panel">
+            <div className="cert-detail-hero">
+              <span>{selectedTrustedRoot ? getStatusLabel(selectedTrustedRoot.status, selectedTrustedRoot.daysRemaining) : tCurrent('auto.remoteCertManager.status.unknown')}</span>
+              <strong>{rootDetailLoading ? tCurrent('auto.remoteCertManager.loadingDetail') : getTrustedRootTitle(selectedRootDetail ?? selectedTrustedRoot)}</strong>
+              <em>{selectedTrustedRoot?.filePath ?? tCurrent('auto.remoteCertManager.noCertificatePath')}</em>
+            </div>
+            <dl className="cert-detail-list">
+              {rootDetailRows.map(([label, value]) => (
+                <div key={label}>
+                  <dt>{label}</dt>
+                  <dd>{formatDetailValue(value)}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+
+          <section className="cert-actions-panel">
+            <div className="cert-actions-head">
+              <strong>{tCurrent('auto.remoteCertManager.rootActions')}</strong>
+              <span>{tCurrent('auto.remoteCertManager.rootCount', { value0: trustedRoots.length })}</span>
+            </div>
+            <div className="cert-actions">
+              <button type="button" onClick={refreshTrustedRoots} disabled={loading}>{tCurrent('auto.remoteCertManager.refresh')}</button>
+              <button type="button" onClick={viewPem} disabled={!selectedRootDetail?.pem}>{tCurrent('auto.remoteCertManager.viewPem')}</button>
+              <button type="button" onClick={copyFingerprint} disabled={!selectedTrustedRoot?.sha256Fingerprint}>{tCurrent('auto.remoteCertManager.copyFingerprint')}</button>
+              <button type="button" className="danger" onClick={() => selectedTrustedRoot && setPendingRootRemoval(selectedTrustedRoot)} disabled={!selectedTrustedRoot || actionRunning}>
+                {tCurrent('auto.remoteCertManager.removeTrust')}
+              </button>
+            </div>
+            <div className="cert-search">
+              <input
+                value={caPathDraft}
+                onChange={(event) => setCaPathDraft(event.target.value)}
+                placeholder={tCurrent('auto.remoteCertManager.caPathPlaceholder')}
+              />
+              <button type="button" className="primary" onClick={addTrustedRoot} disabled={actionRunning || !caPathDraft.trim()}>
+                {actionRunning ? tCurrent('auto.remoteCertManager.running') : tCurrent('auto.remoteCertManager.addTrust')}
+              </button>
+            </div>
+            <pre className="cert-raw-output">{rawOutput || tCurrent('auto.remoteCertManager.noRawOutput')}</pre>
+          </section>
+        </main>
+      </div> : null}
 
       {pendingAction ? createPortal(
         <div className="cert-modal-backdrop" role="presentation" onClick={() => setPendingAction(null)}>
@@ -321,6 +578,25 @@ function RemoteCertManager({ connectionId, systemType }: RemoteCertManagerProps)
             <div className="cert-confirm-actions">
               <button type="button" onClick={() => setPendingAction(null)}>{tCurrent('auto.remoteCertManager.cancel')}</button>
               <button type="button" className={pendingAction === 'renew' ? 'danger' : 'primary'} onClick={executeCertbotAction} disabled={actionRunning}>
+                {actionRunning ? tCurrent('auto.remoteCertManager.running') : tCurrent('auto.remoteCertManager.confirm')}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+      {pendingRootRemoval ? createPortal(
+        <div className="cert-modal-backdrop" role="presentation" onClick={() => setPendingRootRemoval(null)}>
+          <div className="cert-confirm-dialog danger" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div className="cert-confirm-header">
+              <span>{tCurrent('auto.remoteCertManager.removeTrustConfirmTitle')}</span>
+              <strong>{getTrustedRootTitle(pendingRootRemoval)}</strong>
+            </div>
+            <p>{tCurrent('auto.remoteCertManager.removeTrustConfirmBody', { value0: pendingRootRemoval.filePath })}</p>
+            <pre>{createRemoveTrustedRootCommand(pendingRootRemoval.filePath, isWindowsHost).command}</pre>
+            <div className="cert-confirm-actions">
+              <button type="button" onClick={() => setPendingRootRemoval(null)}>{tCurrent('auto.remoteCertManager.cancel')}</button>
+              <button type="button" className="danger" onClick={removeTrustedRoot} disabled={actionRunning}>
                 {actionRunning ? tCurrent('auto.remoteCertManager.running') : tCurrent('auto.remoteCertManager.confirm')}
               </button>
             </div>

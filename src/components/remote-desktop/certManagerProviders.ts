@@ -26,6 +26,30 @@ export interface RemoteCertificateDetail extends RemoteCertificateSummary {
   pem?: string;
 }
 
+export interface TrustedRootCertificate {
+  id: string;
+  filePath: string;
+  subjectCommonName: string;
+  subject: string;
+  issuer: string;
+  notAfter: string;
+  daysRemaining: number | null;
+  status: CertExpiryStatus;
+  serialNumber: string;
+  sha256Fingerprint: string;
+}
+
+export interface TrustedRootCertificateDetail extends TrustedRootCertificate {
+  rawText: string;
+  pem?: string;
+}
+
+export interface TrustedRootScanResult {
+  certificates: TrustedRootCertificate[];
+  errors: string[];
+  rawOutput: string;
+}
+
 export interface CertbotCertificate {
   id: string;
   name: string;
@@ -145,6 +169,64 @@ function parseCertFields(stdout: string, fallbackFilePath = ''): RemoteCertifica
   };
 }
 
+function parseTrustedRootFields(stdout: string, fallbackFilePath = ''): TrustedRootCertificateDetail {
+  const values = parseNameValueLines(stdout);
+  const rawText = stdout
+    .replace(/^__SHELLDESK_CERT_FIELD__\|.*$/gm, '')
+    .replace(/^__SHELLDESK_CERT_PEM_BEGIN__[\s\S]*?__SHELLDESK_CERT_PEM_END__$/m, '')
+    .trim();
+  const pemMatch = stdout.match(/__SHELLDESK_CERT_PEM_BEGIN__\n([\s\S]*?)\n__SHELLDESK_CERT_PEM_END__/);
+  const filePath = firstValue(values, 'path') || fallbackFilePath;
+  const subject = firstValue(values, 'subject');
+  const notAfter = firstValue(values, 'notAfter');
+  const daysRemaining = getDaysRemaining(notAfter);
+  const subjectCommonName = stripCn(subject);
+
+  return {
+    id: `trust-root:${stableId(filePath || subject || notAfter)}`,
+    filePath,
+    subjectCommonName: subjectCommonName || filePath.split('/').pop() || tCurrent('auto.certManagerProviders.unknownCertificate'),
+    subject,
+    issuer: firstValue(values, 'issuer'),
+    notAfter,
+    daysRemaining,
+    status: getCertExpiryStatus(daysRemaining),
+    serialNumber: firstValue(values, 'serialNumber'),
+    sha256Fingerprint: firstValue(values, 'sha256Fingerprint'),
+    rawText,
+    pem: pemMatch?.[1]?.trim(),
+  };
+}
+
+function createTrustedRootEmitFunction(includeText: boolean, includePem: boolean) {
+  return `
+emit_root_detail() {
+  file="$1"
+  tmp="$(mktemp 2>/dev/null || printf "/tmp/shelldesk-root-cert-$$")"
+  trap 'rm -f "$tmp"' EXIT HUP INT TERM
+  if ! openssl x509 -in "$file" -text -noout >"$tmp" 2>/tmp/shelldesk-root-cert-error-$$; then
+    err="$(cat /tmp/shelldesk-root-cert-error-$$ 2>/dev/null)"
+    rm -f /tmp/shelldesk-root-cert-error-$$
+    printf '__SHELLDESK_ROOT_CERT_ERROR__|%s: %s\\n' "$file" "\${err:-openssl failed}"
+    return 0
+  fi
+  rm -f /tmp/shelldesk-root-cert-error-$$
+  printf '__SHELLDESK_ROOT_CERT_BEGIN__|%s\\n' "$file"
+  printf '__SHELLDESK_CERT_FIELD__|path|%s\\n' "$file"
+  openssl x509 -in "$file" -noout -subject -issuer -enddate -serial -fingerprint -sha256 2>/dev/null | sed \\
+    -e 's/^subject= */__SHELLDESK_CERT_FIELD__|subject|/' \\
+    -e 's/^issuer= */__SHELLDESK_CERT_FIELD__|issuer|/' \\
+    -e 's/^notAfter= */__SHELLDESK_CERT_FIELD__|notAfter|/' \\
+    -e 's/^serial= */__SHELLDESK_CERT_FIELD__|serialNumber|/' \\
+    -e 's/^sha256 Fingerprint= */__SHELLDESK_CERT_FIELD__|sha256Fingerprint|/' \\
+    -e 's/^SHA256 Fingerprint= */__SHELLDESK_CERT_FIELD__|sha256Fingerprint|/'
+  ${includeText ? 'cat "$tmp"' : ''}
+  ${includePem ? 'printf \'\\n__SHELLDESK_CERT_PEM_BEGIN__\\n\'; openssl x509 -in "$file" -outform PEM 2>/dev/null; printf \'__SHELLDESK_CERT_PEM_END__\\n\'' : ''}
+  printf '\\n__SHELLDESK_ROOT_CERT_END__\\n'
+}
+`.trim();
+}
+
 export function createCertScanCommand(isWindowsHost: boolean): RemoteCommandInput {
   if (isWindowsHost) {
     return powershellStdinCommand(`
@@ -256,6 +338,114 @@ export function createCertbotRenewCommand(dryRun: boolean): RemoteCommandInput {
   };
 }
 
+export function createTrustedRootScanCommand(isWindowsHost: boolean): RemoteCommandInput {
+  if (isWindowsHost) {
+    return powershellStdinCommand(`[Console]::Out.WriteLine("__SHELLDESK_ROOT_CERT_ERROR__|${tCurrent('auto.certManagerProviders.windowsUnsupported')}")`);
+  }
+
+  return {
+    command: `
+set -u
+if ! command -v openssl >/dev/null 2>&1; then
+  printf '__SHELLDESK_ROOT_CERT_ERROR__|%s\\n' ${shellSingleQuote(tCurrent('auto.certManagerProviders.opensslMissing'))}
+  exit 0
+fi
+${createTrustedRootEmitFunction(false, false)}
+for dir in /etc/ssl/certs /usr/local/share/ca-certificates /etc/pki/ca-trust/extracted/pem /etc/pki/ca-trust/source/anchors /etc/pki/tls/certs; do
+  [ -d "$dir" ] || continue
+  find "$dir" -maxdepth 2 \\( -type f -o -type l \\) \\( -name '*.pem' -o -name '*.crt' -o -name '*.cer' -o -name '*.[0-9]' \\) 2>/dev/null | sort
+done | awk '!seen[$0]++' | while IFS= read -r file; do
+  [ -n "$file" ] && emit_root_detail "$file"
+done
+`.trim(),
+  };
+}
+
+export function createTrustedRootDetailCommand(filePath: string, isWindowsHost: boolean): RemoteCommandInput {
+  if (isWindowsHost) {
+    return powershellStdinCommand(`[Console]::Out.WriteLine("__SHELLDESK_ROOT_CERT_ERROR__|${tCurrent('auto.certManagerProviders.windowsUnsupported')}")`);
+  }
+
+  return {
+    command: `
+file=${shellSingleQuote(filePath)}
+if ! command -v openssl >/dev/null 2>&1; then
+  printf '__SHELLDESK_ROOT_CERT_ERROR__|%s\\n' ${shellSingleQuote(tCurrent('auto.certManagerProviders.opensslMissing'))}
+  exit 0
+fi
+${createTrustedRootEmitFunction(true, true)}
+emit_root_detail "$file"
+`.trim(),
+  };
+}
+
+export function createAddTrustedRootCommand(filePath: string, isWindowsHost: boolean): RemoteCommandInput {
+  if (isWindowsHost) {
+    return powershellStdinCommand(`[Console]::Out.WriteLine("${tCurrent('auto.certManagerProviders.windowsUnsupported')}")`);
+  }
+
+  return {
+    command: `
+set -eu
+source_file=${shellSingleQuote(filePath)}
+[ -f "$source_file" ] || { printf '%s\\n' ${shellSingleQuote(tCurrent('auto.certManagerProviders.caFileMissing'))}; exit 2; }
+base="$(basename "$source_file")"
+case "$base" in
+  *.crt|*.cer|*.pem) ;;
+  *) base="$base.crt" ;;
+esac
+if command -v update-ca-certificates >/dev/null 2>&1; then
+  target_dir="/usr/local/share/ca-certificates"
+  target="$target_dir/$base"
+  sudo -n mkdir -p "$target_dir"
+  sudo -n cp "$source_file" "$target"
+  sudo -n chmod 0644 "$target"
+  sudo -n update-ca-certificates
+  printf 'SHELLDESK_TRUST_ROOT_ADDED|%s\\n' "$target"
+elif command -v update-ca-trust >/dev/null 2>&1; then
+  target_dir="/etc/pki/ca-trust/source/anchors"
+  target="$target_dir/$base"
+  sudo -n mkdir -p "$target_dir"
+  sudo -n cp "$source_file" "$target"
+  sudo -n chmod 0644 "$target"
+  sudo -n update-ca-trust extract
+  printf 'SHELLDESK_TRUST_ROOT_ADDED|%s\\n' "$target"
+else
+  printf '%s\\n' ${shellSingleQuote(tCurrent('auto.certManagerProviders.caTrustUnsupported'))}
+  exit 3
+fi
+`.trim(),
+  };
+}
+
+export function createRemoveTrustedRootCommand(filePath: string, isWindowsHost: boolean): RemoteCommandInput {
+  if (isWindowsHost) {
+    return powershellStdinCommand(`[Console]::Out.WriteLine("${tCurrent('auto.certManagerProviders.windowsUnsupported')}")`);
+  }
+
+  return {
+    command: `
+set -eu
+target=${shellSingleQuote(filePath)}
+case "$target" in
+  /usr/local/share/ca-certificates/*|/etc/pki/ca-trust/source/anchors/*) ;;
+  *)
+    printf '%s\\n' ${shellSingleQuote(tCurrent('auto.certManagerProviders.removeManagedOnly'))}
+    exit 4
+    ;;
+esac
+[ -f "$target" ] || { printf '%s\\n' ${shellSingleQuote(tCurrent('auto.certManagerProviders.caFileMissing'))}; exit 2; }
+sudo -n rm -f "$target"
+if command -v update-ca-certificates >/dev/null 2>&1; then
+  sudo -n update-ca-certificates
+elif command -v update-ca-trust >/dev/null 2>&1; then
+  sudo -n update-ca-trust extract
+fi
+printf 'SHELLDESK_TRUST_ROOT_REMOVED|%s\\n' "$target"
+`.trim(),
+  };
+}
+
 export function parseCertScanOutput(stdout: string): CertScanResult {
   const certificates: RemoteCertificateSummary[] = [];
   const errors: string[] = [];
@@ -305,12 +495,62 @@ export function parseCertScanOutput(stdout: string): CertScanResult {
   return { certbotInstalled, certificates, errors, rawOutput: stdout };
 }
 
+export function parseTrustedRootScanOutput(stdout: string): TrustedRootScanResult {
+  const certificates: TrustedRootCertificate[] = [];
+  const errors: string[] = [];
+  const lines = stdout.split(/\r?\n/);
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+
+    if (line.startsWith('__SHELLDESK_ROOT_CERT_ERROR__|')) errors.push(line.slice('__SHELLDESK_ROOT_CERT_ERROR__|'.length));
+
+    if (line.startsWith('__SHELLDESK_ROOT_CERT_BEGIN__|')) {
+      const chunk: string[] = [];
+      index += 1;
+      while (index < lines.length && lines[index] !== '__SHELLDESK_ROOT_CERT_END__') {
+        chunk.push(lines[index]);
+        index += 1;
+      }
+      const detail = parseTrustedRootFields(chunk.join('\n'), line.slice('__SHELLDESK_ROOT_CERT_BEGIN__|'.length));
+      certificates.push({
+        id: detail.id,
+        filePath: detail.filePath,
+        subjectCommonName: detail.subjectCommonName,
+        subject: detail.subject,
+        issuer: detail.issuer,
+        notAfter: detail.notAfter,
+        daysRemaining: detail.daysRemaining,
+        status: detail.status,
+        serialNumber: detail.serialNumber,
+        sha256Fingerprint: detail.sha256Fingerprint,
+      });
+    }
+  }
+
+  certificates.sort((left, right) => {
+    const leftDays = left.daysRemaining ?? Number.POSITIVE_INFINITY;
+    const rightDays = right.daysRemaining ?? Number.POSITIVE_INFINITY;
+    return left.subjectCommonName.localeCompare(right.subjectCommonName) || leftDays - rightDays;
+  });
+
+  return { certificates, errors, rawOutput: stdout };
+}
+
 export function parseCertDetail(stdout: string): RemoteCertificateDetail {
   const errorLine = stdout.split(/\r?\n/).find((line) => line.startsWith('__SHELLDESK_CERT_ERROR__|'));
   if (errorLine) {
     throw new Error(errorLine.slice('__SHELLDESK_CERT_ERROR__|'.length));
   }
   return parseCertFields(stdout);
+}
+
+export function parseTrustedRootDetail(stdout: string): TrustedRootCertificateDetail {
+  const errorLine = stdout.split(/\r?\n/).find((line) => line.startsWith('__SHELLDESK_ROOT_CERT_ERROR__|'));
+  if (errorLine) {
+    throw new Error(errorLine.slice('__SHELLDESK_ROOT_CERT_ERROR__|'.length));
+  }
+  return parseTrustedRootFields(stdout);
 }
 
 export function parseCertbotList(stdout: string): CertbotCertificate[] {
