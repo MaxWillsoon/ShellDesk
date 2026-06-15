@@ -590,6 +590,12 @@
     var(--log-bg);
 }
 
+[data-theme="light"] .log-tool-button.primary {
+  border-color: rgba(18, 111, 122, 0.3);
+  background: rgba(18, 111, 122, 0.1);
+  color: #126f7a;
+}
+
 [data-theme="light"] .log-query-row {
   background: rgba(247, 250, 253, 0.78);
 }

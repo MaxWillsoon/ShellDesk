@@ -537,6 +537,14 @@
   background: linear-gradient(180deg, #fff9f1, #eef3f8);
 }
 
+[data-theme="light"] .firewall-toolbar button.primary,
+[data-theme="light"] .firewall-add-button,
+[data-theme="light"] .firewall-confirm-actions button.primary {
+  border-color: rgba(154, 91, 11, 0.3);
+  background: rgba(154, 91, 11, 0.1);
+  color: #74430a;
+}
+
 [data-theme="light"] .firewall-form-panel input,
 [data-theme="light"] .firewall-form-panel select,
 [data-theme="light"] .firewall-raw,

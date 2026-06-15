@@ -451,3 +451,12 @@
   --mq-muted-strong: #4b3824;
   --mq-tabs-bg: rgba(255, 255, 255, 0.78);
 }
+
+[data-theme="light"] .mq-toolbar button.primary,
+[data-theme="light"] .mq-backend-switch button.active,
+[data-theme="light"] .mq-mode-switch button.active,
+[data-theme="light"] .mq-tabs button.active {
+  border-color: rgba(154, 91, 11, 0.3);
+  background: rgba(154, 91, 11, 0.1);
+  color: #74430a;
+}

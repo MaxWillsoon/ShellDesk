@@ -537,3 +537,11 @@
   --search-muted: #617584;
   --search-muted-strong: #2f4858;
 }
+
+[data-theme="light"] .search-cluster-toolbar button.primary,
+[data-theme="light"] .search-tabs button.active,
+[data-theme="light"] .search-query-actions button.primary {
+  border-color: rgba(21, 101, 148, 0.3);
+  background: rgba(21, 101, 148, 0.1);
+  color: #155985;
+}

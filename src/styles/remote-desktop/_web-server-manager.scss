@@ -494,6 +494,15 @@
   background: linear-gradient(180deg, #f5fbff, #edf3f7);
 }
 
+[data-theme="light"] .web-toolbar button.primary,
+[data-theme="light"] .web-tabs button.primary,
+[data-theme="light"] .web-config-panel-head button,
+[data-theme="light"] .web-confirm-actions button.primary {
+  border-color: rgba(21, 101, 148, 0.3);
+  background: rgba(21, 101, 148, 0.1);
+  color: #155985;
+}
+
 [data-theme="light"] .web-config-output {
   background: rgba(255, 255, 255, 0.82);
 }

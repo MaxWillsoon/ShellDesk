@@ -480,3 +480,10 @@
   --mongo-muted: #607569;
   --mongo-muted-strong: #2c4738;
 }
+
+[data-theme="light"] .mongo-connect-btn,
+[data-theme="light"] .mongo-query-actions button.primary {
+  border-color: rgba(23, 100, 59, 0.3);
+  background: rgba(23, 100, 59, 0.1);
+  color: #17643b;
+}

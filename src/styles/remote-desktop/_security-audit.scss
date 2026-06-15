@@ -796,6 +796,12 @@
   background: rgba(255, 255, 255, 0.82);
 }
 
+[data-theme="light"] .security-actions button.primary {
+  border-color: rgba(21, 128, 83, 0.3);
+  background: rgba(21, 128, 83, 0.1);
+  color: #0f6b46;
+}
+
 [data-theme="light"] .security-actions button.ai {
   background: rgba(37, 99, 235, 0.1);
   color: #1559cc;

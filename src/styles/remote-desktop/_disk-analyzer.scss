@@ -604,6 +604,13 @@
   background: linear-gradient(180deg, #f8fbf9, #edf4f0);
 }
 
+[data-theme="light"] .disk-toolbar button.primary,
+[data-theme="light"] .disk-tabs button.active {
+  border-color: rgba(31, 125, 72, 0.32);
+  background: rgba(31, 125, 72, 0.12);
+  color: #14532d;
+}
+
 [data-theme="light"] .disk-path-bar input,
 [data-theme="light"] .disk-threshold {
   background: rgba(255, 255, 255, 0.82);

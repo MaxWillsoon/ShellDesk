@@ -526,6 +526,13 @@
   background: linear-gradient(180deg, #f6fbff, #eef4f8);
 }
 
+[data-theme="light"] .s3-toolbar button.primary,
+[data-theme="light"] .s3-confirm-actions button.primary {
+  border-color: rgba(21, 101, 148, 0.3);
+  background: rgba(21, 101, 148, 0.1);
+  color: #155985;
+}
+
 [data-theme="light"] .s3-config input,
 [data-theme="light"] .s3-addressbar input,
 [data-theme="light"] .s3-raw-output {

@@ -419,6 +419,13 @@
   background: linear-gradient(180deg, #f8fbfe, #edf3f7);
 }
 
+[data-theme="light"] .network-run-btn,
+[data-theme="light"] .network-result-head button {
+  border-color: rgba(21, 101, 148, 0.3);
+  background: rgba(21, 101, 148, 0.1);
+  color: #155985;
+}
+
 [data-theme="light"] .network-form input,
 [data-theme="light"] .network-output {
   background: rgba(255, 255, 255, 0.82);

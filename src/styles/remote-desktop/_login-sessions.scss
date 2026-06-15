@@ -347,6 +347,12 @@
   background: linear-gradient(180deg, #f6fbff, #edf3f7);
 }
 
+[data-theme="light"] .login-toolbar-actions button.primary {
+  border-color: rgba(21, 101, 148, 0.3);
+  background: rgba(21, 101, 148, 0.1);
+  color: #155985;
+}
+
 [data-theme="light"] .login-table th {
   background: rgba(246, 248, 252, 0.98);
 }

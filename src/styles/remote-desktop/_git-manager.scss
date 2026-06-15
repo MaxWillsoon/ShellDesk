@@ -1040,5 +1040,24 @@
 [data-theme="light"] .git-history-body button.active,
 [data-theme="light"] .git-sidebar-section button:hover,
 [data-theme="light"] .git-sidebar-section button.active {
-  color: #ffffff;
+  color: #155985;
+}
+
+[data-theme="light"] .git-branch-control button:hover:not(:disabled),
+[data-theme="light"] .git-commit-actions button:hover:not(:disabled),
+[data-theme="light"] .git-selected-actions button:hover:not(:disabled),
+[data-theme="light"] .git-diff-actions button:hover:not(:disabled),
+[data-theme="light"] .git-pane-head button:hover:not(:disabled),
+[data-theme="light"] .git-track-remote-btn:hover:not(:disabled),
+[data-theme="light"] .git-confirm-actions button:hover:not(:disabled) {
+  border-color: rgba(21, 101, 148, 0.3);
+  background: rgba(21, 101, 148, 0.1);
+  color: var(--git-text);
+}
+
+[data-theme="light"] .git-commit-actions button.primary,
+[data-theme="light"] .git-confirm-actions button.primary {
+  border-color: rgba(21, 101, 148, 0.34);
+  background: rgba(21, 101, 148, 0.12);
+  color: #155985;
 }

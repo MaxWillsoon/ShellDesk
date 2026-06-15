@@ -667,6 +667,16 @@
   background: linear-gradient(180deg, #fbfaf7, #f1f4f7);
 }
 
+[data-theme="light"] .package-toolbar button.primary,
+[data-theme="light"] .package-tabs button.active,
+[data-theme="light"] .package-source-list button.active,
+[data-theme="light"] .package-detail-actions button.primary,
+[data-theme="light"] .package-confirm-actions button.primary {
+  border-color: rgba(151, 103, 12, 0.3);
+  background: rgba(151, 103, 12, 0.1);
+  color: #6f4a08;
+}
+
 [data-theme="light"] .package-search-box input,
 [data-theme="light"] .package-source-editor,
 [data-theme="light"] .package-confirm-dialog pre {

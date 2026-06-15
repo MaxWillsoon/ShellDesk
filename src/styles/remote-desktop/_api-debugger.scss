@@ -391,6 +391,12 @@
   background: linear-gradient(180deg, #f6fff4, #edf3f7);
 }
 
+[data-theme="light"] .api-request-line button.primary {
+  border-color: rgba(58, 125, 33, 0.3);
+  background: rgba(58, 125, 33, 0.1);
+  color: #2f651b;
+}
+
 [data-theme="light"] .api-request-line select,
 [data-theme="light"] .api-request-line input,
 [data-theme="light"] .api-header-row input,

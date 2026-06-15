@@ -414,6 +414,12 @@
   background: linear-gradient(180deg, #f7fafc, #edf3f7);
 }
 
+[data-theme="light"] .port-tool-button.primary {
+  border-color: rgba(15, 118, 98, 0.3);
+  background: rgba(15, 118, 98, 0.1);
+  color: #0f5e50;
+}
+
 [data-theme="light"] .port-table th {
   background: rgba(245, 248, 252, 0.98);
 }

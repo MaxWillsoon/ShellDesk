@@ -449,6 +449,14 @@
   background: linear-gradient(180deg, #faf8ff, #f0f2f8);
 }
 
+[data-theme="light"] .scheduled-tabs button.active,
+[data-theme="light"] .cron-actions button.primary,
+[data-theme="light"] .scheduled-confirm-actions button.primary {
+  border-color: rgba(91, 53, 163, 0.3);
+  background: rgba(91, 53, 163, 0.1);
+  color: #4c288f;
+}
+
 [data-theme="light"] .cron-grid input,
 [data-theme="light"] .cron-command input,
 [data-theme="light"] .cron-raw,
