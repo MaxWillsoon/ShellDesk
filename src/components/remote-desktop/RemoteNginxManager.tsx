@@ -170,6 +170,7 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
   const requestIdRef = useRef(0);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const previousSelectedFilePathRef = useRef<string | null>(null);
+  const previousRawContentRef = useRef<string>('');
   const modalOpenerRef = useRef<HTMLElement | null>(null);
 
   const filteredFiles = useMemo(() => {
@@ -261,6 +262,14 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
     return result.code === 0 ? parsed : { ...parsed, success: false };
   }, [isWindowsHost, runCommand]);
 
+  const getReloadWarning = useCallback((output: string) => (
+    `Nginx reload failed: ${output || tCurrent('auto.remoteNginxManager.actionFailed')}`
+  ), []);
+
+  const appendNotice = useCallback((message: string) => {
+    setNotice((current) => (current ? `${current}\n${message}` : message));
+  }, []);
+
   const testConfig = useCallback(async () => {
     setActionRunning(true);
     setError('');
@@ -309,9 +318,11 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
         throw new Error(tCurrent('auto.remoteNginxManager.testFailed'));
       }
 
-      await runCommand(createNginxReloadCommand(isWindowsHost));
+      const reloadResult = await runCommand(createNginxReloadCommand(isWindowsHost));
+      const reloadWarning = reloadResult.code !== 0 ? getReloadWarning(combineOutput(reloadResult)) : '';
       setNotice(enable ? tCurrent('auto.remoteNginxManager.enableSuccess') : tCurrent('auto.remoteNginxManager.disableSuccess'));
       await refresh();
+      if (reloadWarning) appendNotice(reloadWarning);
     } catch (error) {
       setError(getErrorMessage(error));
     } finally {
@@ -342,10 +353,12 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
         throw new Error(tCurrent('auto.remoteNginxManager.rollbackNotice'));
       }
 
-      await runCommand(createNginxReloadCommand(isWindowsHost));
+      const reloadResult = await runCommand(createNginxReloadCommand(isWindowsHost));
+      const reloadWarning = reloadResult.code !== 0 ? getReloadWarning(combineOutput(reloadResult)) : '';
       setHasUnsavedChanges(false);
       setNotice(tCurrent('auto.remoteNginxManager.saveSuccess'));
       await refresh();
+      if (reloadWarning) appendNotice(reloadWarning);
     } catch (error) {
       setError(getErrorMessage(error));
     } finally {
@@ -371,10 +384,12 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
         if (rollbackResult.code !== 0) throw new Error(`${tCurrent('auto.remoteNginxManager.testFailed')} ${combineOutput(rollbackResult) || tCurrent('auto.remoteNginxManager.actionFailed')}`);
         throw new Error(tCurrent('auto.remoteNginxManager.testFailed'));
       }
-      await runCommand(createNginxReloadCommand(isWindowsHost));
+      const reloadResult = await runCommand(createNginxReloadCommand(isWindowsHost));
+      const reloadWarning = reloadResult.code !== 0 ? getReloadWarning(combineOutput(reloadResult)) : '';
       setNotice(tCurrent('auto.remoteNginxManager.deleteSuccess'));
       setPendingAction(null);
       await refresh();
+      if (reloadWarning) appendNotice(reloadWarning);
     } catch (error) {
       setError(getErrorMessage(error));
     } finally {
@@ -402,8 +417,17 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
       if (writeResult.code !== 0) throw new Error(combineOutput(writeResult) || tCurrent('auto.remoteNginxManager.actionFailed'));
 
       if (installation.sitesLayout === 'debian') {
-        const enableResult = await runCommand(createNginxEnableSiteCommand(targetPath, installation, isWindowsHost));
-        if (enableResult.code !== 0) throw new Error(combineOutput(enableResult) || tCurrent('auto.remoteNginxManager.actionFailed'));
+        try {
+          const enableResult = await runCommand(createNginxEnableSiteCommand(targetPath, installation, isWindowsHost));
+          if (enableResult.code !== 0) throw new Error(combineOutput(enableResult) || tCurrent('auto.remoteNginxManager.actionFailed'));
+        } catch (error) {
+          try {
+            await runCommand(createNginxCleanupCreatedConfigCommand(targetPath, installation, isWindowsHost));
+          } catch {
+            // Keep the enable failure as the primary error.
+          }
+          throw error;
+        }
       }
 
       const parsedTest = await runNginxTest();
@@ -412,13 +436,15 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
         await runCommand(createNginxCleanupCreatedConfigCommand(targetPath, installation, isWindowsHost));
         throw new Error(tCurrent('auto.remoteNginxManager.testFailed'));
       }
-      await runCommand(createNginxReloadCommand(isWindowsHost));
+      const reloadResult = await runCommand(createNginxReloadCommand(isWindowsHost));
+      const reloadWarning = reloadResult.code !== 0 ? getReloadWarning(combineOutput(reloadResult)) : '';
       setNotice(tCurrent('auto.remoteNginxManager.createSuccess'));
       setSelectedTemplate(null);
       setTemplateValues({});
       setActiveTab('sites');
       setSelectedFilePath(targetPath);
       await refresh();
+      if (reloadWarning) appendNotice(reloadWarning);
     } catch (error) {
       setError(getErrorMessage(error));
     } finally {
@@ -442,14 +468,19 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
 
   useEffect(() => {
     const file = configFiles.find((item) => item.fullPath === selectedFilePath) ?? configFiles[0] ?? null;
+    const currentPath = file?.fullPath ?? null;
+    const currentRawContent = file?.rawContent ?? '';
+    const pathChanged = previousSelectedFilePathRef.current !== currentPath;
+    const rawContentChanged = previousRawContentRef.current !== currentRawContent;
     setSelectedFile(file);
     setSelectedServerBlock(file?.serverBlocks[0] ?? null);
-    if (previousSelectedFilePathRef.current !== (file?.fullPath ?? null)) {
-      previousSelectedFilePathRef.current = file?.fullPath ?? null;
-      setEditorContent(file?.rawContent ?? '');
+    previousSelectedFilePathRef.current = currentPath;
+    previousRawContentRef.current = currentRawContent;
+    if (pathChanged || (rawContentChanged && !hasUnsavedChanges)) {
+      setEditorContent(currentRawContent);
       setHasUnsavedChanges(false);
     }
-  }, [configFiles, selectedFilePath]);
+  }, [configFiles, hasUnsavedChanges, selectedFilePath]);
 
   useEffect(() => {
     if (!modalOpen) {

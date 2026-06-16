@@ -48,8 +48,21 @@ function createHeredocDelimiter(content: string) {
 
 function isPathUnder(filePath: string, directory: string | null | undefined) {
   if (!directory) return false;
-  const base = directory.replace(/\/+$/g, '');
-  return filePath === base || filePath.startsWith(`${base}/`);
+  const normalizePath = (value: string) => {
+    const parts: string[] = [];
+    for (const part of value.split('/')) {
+      if (!part || part === '.') continue;
+      if (part === '..') {
+        parts.pop();
+        continue;
+      }
+      parts.push(part);
+    }
+    return `/${parts.join('/')}`;
+  };
+  const normalizedFilePath = normalizePath(filePath);
+  const base = normalizePath(directory);
+  return normalizedFilePath === base || normalizedFilePath.startsWith(`${base}/`);
 }
 
 // Provider commands run privileged operations; callers should pass discovered Nginx paths only.

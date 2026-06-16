@@ -1,4 +1,4 @@
-import type { NginxConfigTemplate } from './nginxManagerTypes';
+import type { NginxConfigTemplate, NginxTemplateVariable } from './nginxManagerTypes';
 
 export const nginxConfigTemplates: NginxConfigTemplate[] = [
   {
@@ -201,29 +201,35 @@ server {
   },
 ];
 
-export function sanitizeNginxTemplateValue(name: string, value: string): string {
-  const stripped = value.trim().replace(/[\r\n{};]/g, '');
+export function sanitizeNginxTemplateValue(name: string, type: NginxTemplateVariable['type'], value: string): string {
+  const stripped = value.trim();
   const upperName = name.toUpperCase();
 
-  if (upperName.includes('PORT')) {
+  if (/[\r\n{};]/.test(stripped)) throw new Error(`${name} contains unsupported characters.`);
+
+  if (type === 'port') {
     if (!/^\d+$/.test(stripped)) throw new Error(`${name} must be a numeric port.`);
     const port = Number(stripped);
     if (port < 1 || port > 65535) throw new Error(`${name} must be between 1 and 65535.`);
   }
 
-  if (upperName.includes('PATH') || upperName.endsWith('_LOG')) {
+  if (type === 'path') {
     if (!stripped.startsWith('/')) throw new Error(`${name} must start with /.`);
   }
 
-  if (upperName.includes('URL')) {
-    if (!/^https?:\/\//i.test(stripped)) throw new Error(`${name} must start with http:// or https://.`);
+  if (type === 'number' && !/^\d+$/.test(stripped)) {
+    throw new Error(`${name} must be numeric.`);
   }
 
-  if (upperName.includes('SERVER_NAME')) {
+  if (type === 'text' && upperName.includes('URL')) {
+    if (!/^https?:\/\//i.test(stripped)) throw new Error(`${name} must start with http:// or https://.`);
+  } else if (type === 'text' && upperName.includes('SERVER_NAME')) {
     const domains = stripped.split(/\s+/).filter(Boolean);
     if (!domains.length || !domains.every((domain) => /^(\*\.)?([a-z0-9-]+\.)*[a-z0-9-]+(\.[a-z]{2,})$/i.test(domain))) {
       throw new Error(`${name} must contain valid domain names.`);
     }
+  } else if (type === 'text' && (upperName.includes('UPSTREAM') || upperName.includes('METHOD') || upperName.includes('PASS'))) {
+    if (!/^[a-z0-9._-]+$/i.test(stripped)) throw new Error(`${name} must contain only letters, numbers, hyphens, dots, or underscores.`);
   }
 
   return stripped;
@@ -231,9 +237,10 @@ export function sanitizeNginxTemplateValue(name: string, value: string): string 
 
 export function renderNginxTemplate(template: NginxConfigTemplate, values: Record<string, string>): string {
   const defaults = new Map(template.variables.map((variable) => [variable.name, variable.default]));
+  const variables = new Map(template.variables.map((variable) => [variable.name, variable]));
 
   return template.content.replace(/\{\{([A-Z0-9_]+)(?:\|default:([^}]+))?\}\}/g, (_match, name: string, inlineDefault?: string) => {
     const value = values[name]?.trim();
-    return sanitizeNginxTemplateValue(name, value || inlineDefault || defaults.get(name) || '');
+    return sanitizeNginxTemplateValue(name, variables.get(name)?.type ?? 'text', value || inlineDefault || defaults.get(name) || '');
   });
 }
