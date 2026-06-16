@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent, KeyboardEvent } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import DismissibleAlert from './DismissibleAlert';
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
@@ -25,6 +25,16 @@ import {
   validateNginxConfigPath,
 } from './nginxManagerProviders';
 import { nginxConfigTemplates, renderNginxTemplate } from './nginxManagerTemplates';
+import { analyzeNginxConfig, nginxEditorDiagnosticsExtension } from './nginxEditorDiagnostics';
+import {
+  createEmptyNginxVisualLocationForm,
+  createNginxVisualServerForm,
+  replaceNginxServerBlock,
+  type NginxVisualLocationForm,
+  type NginxVisualLocationKind,
+  type NginxVisualServerForm,
+  type NginxVisualSiteKind,
+} from './nginxVisualEditor';
 import type {
   NginxConfigFile,
   NginxConfigTemplate,
@@ -36,13 +46,15 @@ import type {
 } from './nginxManagerTypes';
 import { tCurrent, type MessageId } from '../../i18n';
 
+const NotepadEditor = lazy(() => import('./NotepadEditor'));
+
 interface RemoteNginxManagerProps {
   connectionId: string;
   systemType?: RemoteSystemType;
 }
 
 type NginxTab = 'sites' | 'templates' | 'config';
-type NginxSubTab = 'overview' | 'editor' | 'locations';
+type NginxSubTab = 'overview' | 'visual' | 'editor';
 type PendingAction =
   | { type: 'enable'; filePath: string }
   | { type: 'disable'; filePath: string }
@@ -122,26 +134,10 @@ async function pMap<T, R>(items: T[], concurrency: number, mapper: (item: T) => 
   return results;
 }
 
-function renderLocation(location: NginxLocationBlock, depth = 0) {
-  return (
-    <details key={location.id} className="nginx-location-node" open={depth === 0}>
-      <summary>
-        <span>{`${location.modifier ? `${location.modifier} ` : ''}${location.path || '/'}`}</span>
-        <em>{tCurrent('auto.remoteNginxManager.lines', { value0: `${location.startLine}-${location.endLine}` })}</em>
-      </summary>
-      <dl>
-        <div><dt>{tCurrent('auto.remoteNginxManager.proxyPass')}</dt><dd>{formatValue(location.proxyPass)}</dd></div>
-        <div><dt>{tCurrent('auto.remoteNginxManager.fastcgiPass')}</dt><dd>{formatValue(location.fastcgiPass)}</dd></div>
-        <div><dt>{tCurrent('auto.remoteNginxManager.documentRoot')}</dt><dd>{formatValue(location.root ?? location.alias)}</dd></div>
-        <div><dt>{tCurrent('auto.remoteNginxManager.tryFiles')}</dt><dd>{formatValue(location.tryFiles)}</dd></div>
-      </dl>
-      {location.nestedLocations.length ? (
-        <div className="nginx-location-children">
-          {location.nestedLocations.map((child) => renderLocation(child, depth + 1))}
-        </div>
-      ) : null}
-    </details>
-  );
+function getServerBlockIndex(file: NginxConfigFile | null, block: NginxServerBlock | null) {
+  if (!file || !block) return 0;
+  const index = file.serverBlocks.findIndex((item) => item.id === block.id);
+  return index >= 0 ? index : 0;
 }
 
 function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProps) {
@@ -193,6 +189,13 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
   const globalConfig = useMemo(() => configFiles.find((file) => file.fullPath === installation?.configPath) ?? null, [configFiles, installation?.configPath]);
   const selectedListenPorts = selectedServerBlock?.listenDirectives.map((listen) => listen.raw || `${listen.address}:${listen.port}`) ?? [];
   const modalOpen = Boolean(pendingAction || selectedTemplate);
+  const visualServerForm = useMemo(() => (selectedServerBlock ? createNginxVisualServerForm(selectedServerBlock) : null), [selectedServerBlock]);
+  const editorDiagnostics = useMemo(() => analyzeNginxConfig(editorContent), [editorContent]);
+  const editorExtensions = useMemo(() => [nginxEditorDiagnosticsExtension], []);
+  const editorTheme = typeof document !== 'undefined' && document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+  const editorDiagnosticLabel = editorDiagnostics.length > 0
+    ? tCurrent('auto.remoteNginxManager.editorIssues', { value0: editorDiagnostics.length })
+    : tCurrent('auto.remoteNginxManager.editorClean');
 
   const refresh = useCallback(async () => {
     const requestId = requestIdRef.current + 1;
@@ -476,14 +479,14 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
     const pathChanged = previousSelectedFilePathRef.current !== currentPath;
     const rawContentChanged = previousRawContentRef.current !== currentRawContent;
     setSelectedFile(file);
-    setSelectedServerBlock(file?.serverBlocks[0] ?? null);
+    setSelectedServerBlock((current) => file?.serverBlocks.find((block) => block.id === current?.id) ?? file?.serverBlocks[0] ?? null);
     previousSelectedFilePathRef.current = currentPath;
     previousRawContentRef.current = currentRawContent;
     if (pathChanged || (rawContentChanged && !hasUnsavedChanges)) {
       setEditorContent(currentRawContent);
       setHasUnsavedChanges(false);
     }
-  }, [configFiles, hasUnsavedChanges, selectedFilePath]);
+  }, [configFiles, selectedFilePath]);
 
   useEffect(() => {
     if (!modalOpen) {
@@ -496,10 +499,94 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
     }, 0);
   }, [modalOpen]);
 
-  const handleEditorChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
-    setEditorContent(event.target.value);
-    setHasUnsavedChanges(event.target.value !== (selectedFile?.rawContent ?? ''));
-  };
+  const syncSelectedServerBlock = useCallback((nextContent: string) => {
+    if (!selectedFile) return;
+    const currentIndex = getServerBlockIndex(selectedFile, selectedServerBlock);
+    const parsed = parseNginxConfig(nextContent, selectedFile.fullPath);
+    setSelectedServerBlock(parsed.serverBlocks[currentIndex] ?? parsed.serverBlocks[0] ?? null);
+  }, [selectedFile, selectedServerBlock]);
+
+  const handleEditorChange = useCallback((nextContent: string) => {
+    setEditorContent(nextContent);
+    setHasUnsavedChanges(nextContent !== (selectedFile?.rawContent ?? ''));
+    syncSelectedServerBlock(nextContent);
+  }, [selectedFile?.rawContent, syncSelectedServerBlock]);
+
+  const handleEditorCursorChange = useCallback(() => undefined, []);
+
+  const applyVisualServerForm = useCallback((nextForm: NginxVisualServerForm) => {
+    if (!selectedFile || !selectedServerBlock) return;
+    const currentIndex = getServerBlockIndex(selectedFile, selectedServerBlock);
+    const nextContent = replaceNginxServerBlock(editorContent, selectedServerBlock, nextForm);
+    const parsed = parseNginxConfig(nextContent, selectedFile.fullPath);
+    setEditorContent(nextContent);
+    setHasUnsavedChanges(nextContent !== selectedFile.rawContent);
+    setSelectedServerBlock(parsed.serverBlocks[currentIndex] ?? parsed.serverBlocks[0] ?? null);
+  }, [editorContent, selectedFile, selectedServerBlock]);
+
+  const updateVisualLocation = useCallback((locationId: string, updater: (location: NginxVisualLocationForm) => NginxVisualLocationForm) => {
+    if (!visualServerForm) return;
+    applyVisualServerForm({
+      ...visualServerForm,
+      locations: visualServerForm.locations.map((location) => (location.id === locationId ? updater(location) : location)),
+    });
+  }, [applyVisualServerForm, visualServerForm]);
+
+  const applyVisualSiteKind = useCallback((siteKind: NginxVisualSiteKind) => {
+    if (!visualServerForm) return;
+    const locations = [...visualServerForm.locations];
+    const upsertRootLocation = (kind: NginxVisualLocationKind, fallbackTarget = '') => {
+      const rootIndex = locations.findIndex((location) => location.modifier === '' && location.path === '/');
+      const current = rootIndex >= 0 ? locations[rootIndex] : createEmptyNginxVisualLocationForm(kind, '/');
+      const nextLocation: NginxVisualLocationForm = {
+        ...current,
+        kind,
+        modifier: '',
+        path: '/',
+        proxyPass: kind === 'proxy' ? (current.proxyPass || fallbackTarget || 'http://127.0.0.1:3000') : '',
+        fastcgiPass: '',
+        root: kind === 'static' ? current.root : '',
+        alias: '',
+        tryFiles: kind === 'static' ? (current.tryFiles || '$uri $uri/ =404') : '',
+      };
+      if (rootIndex >= 0) {
+        locations[rootIndex] = nextLocation;
+      } else {
+        locations.unshift(nextLocation);
+      }
+    };
+
+    if (siteKind === 'static') {
+      upsertRootLocation('static');
+    } else if (siteKind === 'proxy') {
+      upsertRootLocation('proxy', 'http://127.0.0.1:3000');
+    } else if (siteKind === 'php') {
+      upsertRootLocation('static');
+      const rootIndex = locations.findIndex((location) => location.modifier === '' && location.path === '/');
+      if (rootIndex >= 0) {
+        locations[rootIndex] = {
+          ...locations[rootIndex],
+          tryFiles: locations[rootIndex].tryFiles || '$uri $uri/ /index.php?$query_string',
+        };
+      }
+      if (!locations.some((location) => location.kind === 'fastcgi' || location.fastcgiPass)) {
+        locations.push({
+          ...createEmptyNginxVisualLocationForm('fastcgi', '\\.php$'),
+          modifier: '~',
+          fastcgiPass: 'unix:/run/php/php-fpm.sock',
+        });
+      }
+    }
+
+    applyVisualServerForm({ ...visualServerForm, siteKind, locations });
+  }, [applyVisualServerForm, visualServerForm]);
+
+  const addVisualLocation = useCallback((kind: NginxVisualLocationKind) => {
+    if (!visualServerForm) return;
+    const location = createEmptyNginxVisualLocationForm(kind, kind === 'proxy' ? '/api/' : kind === 'fastcgi' ? '\\.php$' : '/assets/');
+    const nextLocation = kind === 'fastcgi' ? { ...location, modifier: '~' as NginxLocationBlock['modifier'] } : location;
+    applyVisualServerForm({ ...visualServerForm, locations: [...visualServerForm.locations, nextLocation] });
+  }, [applyVisualServerForm, visualServerForm]);
 
   const openTemplate = (template: NginxConfigTemplate) => {
     modalOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -543,6 +630,171 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
     }
   };
 
+  const renderVisualEditor = () => {
+    if (!visualServerForm) {
+      return <div className="nginx-empty-state">{tCurrent('auto.remoteNginxManager.noSelection')}</div>;
+    }
+    const siteKinds: Exclude<NginxVisualSiteKind, 'custom'>[] = ['static', 'proxy', 'php'];
+    const locationKinds: NginxVisualLocationKind[] = ['static', 'proxy', 'fastcgi', 'custom'];
+
+    return (
+      <div id="nginx-sub-panel-visual" className="nginx-visual-editor" role="tabpanel" aria-labelledby="nginx-sub-tab-visual">
+        <section className="nginx-visual-section">
+          <div className="nginx-list-head">
+            <strong>{tCurrent('auto.remoteNginxManager.siteStructure')}</strong>
+            <span>{tCurrent('auto.remoteNginxManager.visualSyncHint')}</span>
+          </div>
+          <div className="nginx-site-kind-grid" role="group" aria-label={tCurrent('auto.remoteNginxManager.siteMode')}>
+            {siteKinds.map((siteKind) => (
+              <button
+                key={siteKind}
+                type="button"
+                className={visualServerForm.siteKind === siteKind ? 'active' : ''}
+                onClick={() => applyVisualSiteKind(siteKind)}
+              >
+                <strong>{tCurrent(`auto.remoteNginxManager.siteMode.${siteKind}`)}</strong>
+                <span>{tCurrent(`auto.remoteNginxManager.siteMode.${siteKind}.summary`)}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="nginx-visual-section">
+          <div className="nginx-list-head">
+            <strong>{tCurrent('auto.remoteNginxManager.siteEntry')}</strong>
+          </div>
+          <div className="nginx-visual-grid">
+            <label>
+              <span>{tCurrent('auto.remoteNginxManager.serverNames')}</span>
+              <input value={visualServerForm.serverNames} onChange={(event) => applyVisualServerForm({ ...visualServerForm, serverNames: event.target.value })} />
+            </label>
+            <label>
+              <span>{tCurrent('auto.remoteNginxManager.listenPorts')}</span>
+              <textarea value={visualServerForm.listen} onChange={(event) => applyVisualServerForm({ ...visualServerForm, listen: event.target.value })} />
+            </label>
+            <label>
+              <span>{tCurrent('auto.remoteNginxManager.accessLog')}</span>
+              <input value={visualServerForm.accessLog} onChange={(event) => applyVisualServerForm({ ...visualServerForm, accessLog: event.target.value })} />
+            </label>
+            <label>
+              <span>{tCurrent('auto.remoteNginxManager.errorLog')}</span>
+              <input value={visualServerForm.errorLog} onChange={(event) => applyVisualServerForm({ ...visualServerForm, errorLog: event.target.value })} />
+            </label>
+          </div>
+        </section>
+
+        <section className="nginx-visual-section">
+          <div className="nginx-list-head">
+            <strong>{tCurrent('auto.remoteNginxManager.siteContent')}</strong>
+          </div>
+          <div className="nginx-visual-grid">
+            <label>
+              <span>{tCurrent('auto.remoteNginxManager.documentRoot')}</span>
+              <input value={visualServerForm.root} onChange={(event) => applyVisualServerForm({ ...visualServerForm, root: event.target.value })} />
+            </label>
+            <label>
+              <span>{tCurrent('auto.remoteNginxManager.indexFiles')}</span>
+              <input value={visualServerForm.index} onChange={(event) => applyVisualServerForm({ ...visualServerForm, index: event.target.value })} />
+            </label>
+          </div>
+        </section>
+
+        <section className="nginx-visual-section">
+          <div className="nginx-list-head">
+            <strong>{tCurrent('auto.remoteNginxManager.sslStatus')}</strong>
+          </div>
+          <div className="nginx-visual-grid">
+            <label className="nginx-visual-toggle">
+              <input type="checkbox" checked={visualServerForm.sslEnabled} onChange={(event) => applyVisualServerForm({ ...visualServerForm, sslEnabled: event.target.checked })} />
+              <span>{tCurrent('auto.remoteNginxManager.sslEnabled')}</span>
+            </label>
+            <label>
+              <span>{tCurrent('auto.remoteNginxManager.certPath')}</span>
+              <input value={visualServerForm.sslCertificate} onChange={(event) => applyVisualServerForm({ ...visualServerForm, sslCertificate: event.target.value })} disabled={!visualServerForm.sslEnabled} />
+            </label>
+            <label>
+              <span>{tCurrent('auto.remoteNginxManager.keyPath')}</span>
+              <input value={visualServerForm.sslCertificateKey} onChange={(event) => applyVisualServerForm({ ...visualServerForm, sslCertificateKey: event.target.value })} disabled={!visualServerForm.sslEnabled} />
+            </label>
+          </div>
+        </section>
+
+        <section className="nginx-visual-section">
+          <div className="nginx-list-head">
+            <strong>{tCurrent('auto.remoteNginxManager.pathRules')}</strong>
+            <div className="nginx-visual-add-buttons">
+              <button type="button" onClick={() => addVisualLocation('static')}>{tCurrent('auto.remoteNginxManager.addStaticPath')}</button>
+              <button type="button" onClick={() => addVisualLocation('proxy')}>{tCurrent('auto.remoteNginxManager.addProxyPath')}</button>
+              <button type="button" onClick={() => addVisualLocation('fastcgi')}>{tCurrent('auto.remoteNginxManager.addPhpPath')}</button>
+            </div>
+          </div>
+          <div className="nginx-visual-location-list">
+            {visualServerForm.locations.length ? visualServerForm.locations.map((location) => (
+              <article key={location.id} className="nginx-visual-location">
+                <div className="nginx-visual-location-head">
+                  <strong>{`${location.modifier ? `${location.modifier} ` : ''}${location.path || '/'}`}</strong>
+                  <button type="button" className="danger" onClick={() => applyVisualServerForm({ ...visualServerForm, locations: visualServerForm.locations.filter((item) => item.id !== location.id) })}>
+                    {tCurrent('auto.remoteNginxManager.removeLocation')}
+                  </button>
+                </div>
+                <div className="nginx-visual-grid compact">
+                  <label>
+                    <span>{tCurrent('auto.remoteNginxManager.locationType')}</span>
+                    <select value={location.kind} onChange={(event) => updateVisualLocation(location.id, (current) => ({ ...current, kind: event.target.value as NginxVisualLocationKind }))}>
+                      {locationKinds.map((kind) => (
+                        <option key={kind} value={kind}>{tCurrent(`auto.remoteNginxManager.locationType.${kind}`)}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>{tCurrent('auto.remoteNginxManager.modifier')}</span>
+                    <select value={location.modifier} onChange={(event) => updateVisualLocation(location.id, (current) => ({ ...current, modifier: event.target.value as NginxLocationBlock['modifier'] }))}>
+                      {(['', '=', '^~', '~', '~*', '@'] as NginxLocationBlock['modifier'][]).map((modifier) => (
+                        <option key={modifier || 'default'} value={modifier}>{modifier || tCurrent('auto.remoteNginxManager.modifier.default')}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>{tCurrent('auto.remoteNginxManager.locationPath')}</span>
+                    <input value={location.path} onChange={(event) => updateVisualLocation(location.id, (current) => ({ ...current, path: event.target.value }))} />
+                  </label>
+                  {location.kind === 'proxy' ? (
+                    <label>
+                      <span>{tCurrent('auto.remoteNginxManager.proxyTarget')}</span>
+                      <input value={location.proxyPass} onChange={(event) => updateVisualLocation(location.id, (current) => ({ ...current, proxyPass: event.target.value }))} />
+                    </label>
+                  ) : null}
+                  {location.kind === 'fastcgi' ? (
+                    <label>
+                      <span>{tCurrent('auto.remoteNginxManager.fastcgiTarget')}</span>
+                      <input value={location.fastcgiPass} onChange={(event) => updateVisualLocation(location.id, (current) => ({ ...current, fastcgiPass: event.target.value }))} />
+                    </label>
+                  ) : null}
+                  {location.kind === 'static' ? (
+                    <>
+                      <label>
+                        <span>{tCurrent('auto.remoteNginxManager.documentRoot')}</span>
+                        <input value={location.root} onChange={(event) => updateVisualLocation(location.id, (current) => ({ ...current, root: event.target.value }))} />
+                      </label>
+                      <label>
+                        <span>{tCurrent('auto.remoteNginxManager.aliasPath')}</span>
+                        <input value={location.alias} onChange={(event) => updateVisualLocation(location.id, (current) => ({ ...current, alias: event.target.value }))} />
+                      </label>
+                      <label className="wide">
+                        <span>{tCurrent('auto.remoteNginxManager.tryFiles')}</span>
+                        <input value={location.tryFiles} onChange={(event) => updateVisualLocation(location.id, (current) => ({ ...current, tryFiles: event.target.value }))} />
+                      </label>
+                    </>
+                  ) : null}
+                </div>
+              </article>
+            )) : <div className="nginx-empty-state">{tCurrent('auto.remoteNginxManager.noLocations')}</div>}
+          </div>
+        </section>
+      </div>
+    );
+  };
+
   const selectedFileActionsDisabled = actionRunning || loading || !selectedFile || selectedFile.fullPath === installation?.configPath;
   const confirmLabel = pendingAction?.type === 'enable'
     ? tCurrent('auto.remoteNginxManager.confirmEnable')
@@ -563,8 +815,7 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
         </div>
         <div className="nginx-status-divider" />
         <label className="nginx-search">
-          <span>{tCurrent('auto.remoteNginxManager.search')}</span>
-          <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder={tCurrent('auto.remoteNginxManager.searchPlaceholder')} />
+          <input aria-label={tCurrent('auto.remoteNginxManager.search')} value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder={tCurrent('auto.remoteNginxManager.searchPlaceholder')} />
         </label>
         <div className="nginx-filter-chips" role="group" aria-label={tCurrent('auto.remoteNginxManager.filterLabel')}>
           {(['all', 'enabled', 'disabled', 'ssl', 'non-ssl'] as NginxSiteFilter[]).map((filter) => (
@@ -634,16 +885,8 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
               <em title={selectedFile?.fullPath}>{selectedFile?.fullPath ?? tCurrent('auto.remoteNginxManager.noSelection')}</em>
             </div>
 
-            <div className="nginx-server-switcher">
-              {selectedFile?.serverBlocks.map((block, index) => (
-                <button key={block.id} type="button" className={selectedServerBlock?.id === block.id ? 'active' : ''} onClick={() => setSelectedServerBlock(block)}>
-                  {block.serverNames.join(', ') || tCurrent('auto.remoteNginxManager.serverBlock', { value0: index + 1 })}
-                </button>
-              ))}
-            </div>
-
             <div className="nginx-sub-tabs" role="tablist" aria-label={tCurrent('auto.remoteNginxManager.detailTabsLabel')}>
-              {(['overview', 'locations', 'editor'] as NginxSubTab[]).map((tab) => (
+              {(['overview', 'visual', 'editor'] as NginxSubTab[]).map((tab) => (
                 <button
                   key={tab}
                   id={`nginx-sub-tab-${tab}`}
@@ -654,12 +897,14 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
                   aria-controls={`nginx-sub-panel-${tab}`}
                   tabIndex={activeSubTab === tab ? 0 : -1}
                   onClick={() => setActiveSubTab(tab)}
-                  onKeyDown={(event) => handleTabKeyDown(event, ['overview', 'locations', 'editor'] as const, activeSubTab, setActiveSubTab, 'nginx-sub-tab')}
+                  onKeyDown={(event) => handleTabKeyDown(event, ['overview', 'visual', 'editor'] as const, activeSubTab, setActiveSubTab, 'nginx-sub-tab')}
                 >
                   {tCurrent(`auto.remoteNginxManager.${tab}`)}
                 </button>
               ))}
             </div>
+
+            {activeSubTab === 'visual' ? renderVisualEditor() : null}
 
             {activeSubTab === 'overview' ? (
               <dl id="nginx-sub-panel-overview" className="nginx-detail-list" role="tabpanel" aria-labelledby="nginx-sub-tab-overview">
@@ -673,17 +918,25 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
               </dl>
             ) : null}
 
-            {activeSubTab === 'locations' ? (
-              <div id="nginx-sub-panel-locations" className="nginx-location-tree" role="tabpanel" aria-labelledby="nginx-sub-tab-locations">
-                {selectedServerBlock?.locations.length ? selectedServerBlock.locations.map((location) => renderLocation(location)) : <div className="nginx-empty-state">{tCurrent('auto.remoteNginxManager.noLocations')}</div>}
-              </div>
-            ) : null}
-
             {activeSubTab === 'editor' ? (
               <div id="nginx-sub-panel-editor" className="nginx-editor" role="tabpanel" aria-labelledby="nginx-sub-tab-editor">
-                <textarea aria-label={tCurrent('auto.remoteNginxManager.editor')} value={editorContent} onChange={handleEditorChange} spellCheck={false} />
+                <Suspense fallback={<div className="nginx-editor-loading">{tCurrent('auto.remoteNginxManager.editorLoading')}</div>}>
+                  <NotepadEditor
+                    ariaLabel={tCurrent('auto.remoteNginxManager.editor')}
+                    className="nginx-code-editor"
+                    content={editorContent}
+                    extensions={editorExtensions}
+                    language="nginx"
+                    readOnly={false}
+                    theme={editorTheme}
+                    wrapEnabled={false}
+                    onChange={handleEditorChange}
+                    onCursorChange={handleEditorCursorChange}
+                  />
+                </Suspense>
                 <div className="nginx-editor-actions">
-                  {hasUnsavedChanges ? <span>{tCurrent('auto.remoteNginxManager.unsavedChanges')}</span> : <span>{selectedFile?.lastModified ? new Date(selectedFile.lastModified * 1000).toLocaleString(getShellDeskLocale()) : '-'}</span>}
+                  <span>{hasUnsavedChanges ? tCurrent('auto.remoteNginxManager.unsavedChanges') : (selectedFile?.lastModified ? new Date(selectedFile.lastModified * 1000).toLocaleString(getShellDeskLocale()) : '-')}</span>
+                  <span className={editorDiagnostics.length > 0 ? 'nginx-editor-diagnostics has-issues' : 'nginx-editor-diagnostics'}>{editorDiagnosticLabel}</span>
                   <button type="button" onClick={() => { setEditorContent(selectedFile?.rawContent ?? ''); setHasUnsavedChanges(false); }} disabled={!hasUnsavedChanges || actionRunning}>{tCurrent('auto.remoteNginxManager.revert')}</button>
                   <button type="button" className="primary" onClick={saveConfig} disabled={!hasUnsavedChanges || actionRunning}>{tCurrent('auto.remoteNginxManager.save')}</button>
                 </div>

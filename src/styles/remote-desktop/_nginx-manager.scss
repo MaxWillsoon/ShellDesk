@@ -90,11 +90,9 @@
 }
 
 /* Generic muted spans (non-status-card) */
-.nginx-search span,
 .nginx-list-head span,
 .nginx-detail-hero span,
 .nginx-detail-hero em,
-.nginx-location-node summary em,
 .nginx-editor-actions span,
 .nginx-confirm-header span,
 .nginx-template-card em,
@@ -120,9 +118,11 @@
 
 .nginx-search input,
 .nginx-template-fields input,
-.nginx-template-fields select {
+.nginx-template-fields select,
+.nginx-visual-grid input,
+.nginx-visual-grid select,
+.nginx-visual-grid textarea {
   width: 100%;
-  height: 32px;
   min-width: 0;
   border: 1px solid var(--nginx-border);
   border-radius: 7px;
@@ -135,13 +135,30 @@
   outline: none;
 }
 
+.nginx-search input,
+.nginx-template-fields input,
+.nginx-template-fields select,
+.nginx-visual-grid input,
+.nginx-visual-grid select {
+  height: 32px;
+}
+
+.nginx-visual-grid textarea {
+  min-height: 56px;
+  resize: vertical;
+  padding-top: 8px;
+}
+
 .nginx-search input::placeholder {
   color: var(--nginx-muted);
 }
 
 .nginx-search input:focus,
 .nginx-template-fields input:focus,
-.nginx-template-fields select:focus {
+.nginx-template-fields select:focus,
+.nginx-visual-grid input:focus,
+.nginx-visual-grid select:focus,
+.nginx-visual-grid textarea:focus {
   border-color: rgba(114, 199, 255, 0.5);
   box-shadow: 0 0 0 3px rgba(114, 199, 255, 0.12);
 }
@@ -152,8 +169,9 @@
 .nginx-sub-tabs button,
 .nginx-actions button,
 .nginx-editor-actions button,
-.nginx-server-switcher button,
-.nginx-confirm-actions button {
+.nginx-confirm-actions button,
+.nginx-list-head button,
+.nginx-visual-location-head button {
   height: 30px;
   border: 1px solid var(--nginx-border);
   border-radius: 6px;
@@ -174,8 +192,7 @@
 
 .nginx-tabs button.active,
 .nginx-sub-tabs button.active,
-.nginx-filter-chips button.active,
-.nginx-server-switcher button.active {
+.nginx-filter-chips button.active {
   border-color: rgba(114, 199, 255, 0.42);
   background: rgba(114, 199, 255, 0.16);
   color: var(--nginx-text);
@@ -187,8 +204,9 @@
 .nginx-sub-tabs button:hover,
 .nginx-actions button:hover:not(:disabled),
 .nginx-editor-actions button:hover:not(:disabled),
-.nginx-server-switcher button:hover,
-.nginx-confirm-actions button:hover:not(:disabled) {
+.nginx-confirm-actions button:hover:not(:disabled),
+.nginx-list-head button:hover:not(:disabled),
+.nginx-visual-location-head button:hover:not(:disabled) {
   border-color: rgba(114, 199, 255, 0.34);
   background: rgba(114, 199, 255, 0.12);
   color: var(--nginx-text);
@@ -197,14 +215,16 @@
 .nginx-toolbar button.primary,
 .nginx-actions button.primary,
 .nginx-editor-actions button.primary,
-.nginx-confirm-actions button.primary {
+.nginx-confirm-actions button.primary,
+.nginx-list-head button.primary {
   border-color: rgba(114, 199, 255, 0.36);
   background: rgba(114, 199, 255, 0.14);
   color: #e4f5ff;
 }
 
 .nginx-actions button.danger,
-.nginx-confirm-actions button.danger {
+.nginx-confirm-actions button.danger,
+.nginx-visual-location-head button.danger {
   border-color: rgba(255, 143, 163, 0.28);
   background: rgba(255, 143, 163, 0.12);
   color: var(--nginx-red);
@@ -214,6 +234,8 @@
 .nginx-actions button:disabled,
 .nginx-editor-actions button:disabled,
 .nginx-confirm-actions button:disabled,
+.nginx-list-head button:disabled,
+.nginx-visual-location-head button:disabled,
 .nginx-template-card:disabled {
   opacity: 0.52;
   cursor: not-allowed;
@@ -384,22 +406,19 @@
   white-space: nowrap;
 }
 
-.nginx-server-switcher,
 .nginx-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
 }
 
-.nginx-detail-list,
-.nginx-location-node dl {
+.nginx-detail-list {
   display: grid;
   gap: 7px;
   margin: 0;
 }
 
-.nginx-detail-list div,
-.nginx-location-node dl div {
+.nginx-detail-list div {
   display: grid;
   grid-template-columns: 150px minmax(0, 1fr);
   gap: 10px;
@@ -407,19 +426,143 @@
   padding-bottom: 7px;
 }
 
-.nginx-detail-list dt,
-.nginx-location-node dt {
+.nginx-detail-list dt {
   color: var(--nginx-muted);
   font-size: 11px;
   font-weight: 800;
 }
 
-.nginx-detail-list dd,
-.nginx-location-node dd {
+.nginx-detail-list dd {
   margin: 0;
   color: var(--nginx-muted-strong);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.nginx-visual-editor {
+  display: grid;
+  min-height: 0;
+  gap: 10px;
+  overflow: auto;
+}
+
+.nginx-visual-section {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--nginx-border);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.032);
+}
+
+.nginx-visual-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.nginx-site-kind-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.nginx-site-kind-grid button {
+  display: grid;
+  min-height: 64px;
+  gap: 4px;
+  border: 1px solid rgba(128, 184, 220, 0.14);
+  border-radius: 8px;
+  padding: 9px;
+  background: rgba(0, 0, 0, 0.16);
+  color: var(--nginx-muted);
+  text-align: left;
+}
+
+.nginx-site-kind-grid button strong {
+  color: var(--nginx-muted-strong);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.nginx-site-kind-grid button span {
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.nginx-site-kind-grid button:hover,
+.nginx-site-kind-grid button.active {
+  border-color: rgba(39, 184, 122, 0.42);
+  background: rgba(39, 184, 122, 0.12);
+  color: var(--nginx-green);
+}
+
+.nginx-visual-grid.compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.nginx-visual-grid label {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.nginx-visual-grid label.wide {
+  grid-column: 1 / -1;
+}
+
+.nginx-visual-grid label > span,
+.nginx-visual-toggle span {
+  color: var(--nginx-muted);
+  font-size: 11px;
+  font-weight: 780;
+}
+
+.nginx-visual-toggle {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+}
+
+.nginx-visual-toggle input {
+  width: 15px;
+  height: 15px;
+}
+
+.nginx-visual-location-list {
+  display: grid;
+  gap: 8px;
+}
+
+.nginx-visual-add-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.nginx-visual-location {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(128, 184, 220, 0.14);
+  border-radius: 8px;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.nginx-visual-location-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.nginx-visual-location-head strong {
+  min-width: 0;
+  color: var(--nginx-muted-strong);
+  font-size: 12px;
+  font-weight: 850;
   overflow-wrap: anywhere;
 }
 
@@ -431,60 +574,62 @@
   gap: 8px;
 }
 
-.nginx-editor textarea {
+.nginx-editor .notepad-codemirror {
   min-height: 280px;
   flex: 1 1 auto;
-  resize: vertical;
   border: 1px solid rgba(128, 184, 220, 0.14);
   border-radius: 8px;
-  padding: 10px;
+  overflow: hidden;
   background: rgba(0, 0, 0, 0.24);
-  color: var(--nginx-muted-strong);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.nginx-editor .nginx-code-editor .cm-editor,
+.nginx-editor .nginx-code-editor .cm-scroller {
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.nginx-editor .nginx-code-editor .cm-content,
+.nginx-editor .nginx-code-editor .cm-gutters {
   font-size: 12px;
-  line-height: 1.45;
+}
+
+.nginx-editor-loading {
+  display: grid;
+  min-height: 280px;
+  flex: 1 1 auto;
+  place-items: center;
+  border: 1px solid rgba(128, 184, 220, 0.14);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.24);
+  color: var(--nginx-muted);
+  font-size: 12px;
+  font-weight: 780;
 }
 
 .nginx-editor-actions {
   justify-content: flex-end;
 }
 
-.nginx-editor-actions span {
+.nginx-editor-actions > span:first-child {
   margin-right: auto;
 }
 
-.nginx-location-tree {
-  display: grid;
-  gap: 8px;
+.nginx-editor-diagnostics {
+  color: var(--nginx-green);
 }
 
-.nginx-location-node {
-  border: 1px solid var(--nginx-border);
-  border-radius: 8px;
-  padding: 8px;
-  background: rgba(255, 255, 255, 0.035);
+.nginx-editor-diagnostics.has-issues {
+  color: var(--nginx-yellow);
 }
 
-.nginx-location-node summary {
-  display: flex;
-  cursor: pointer;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  color: var(--nginx-muted-strong);
-  font-size: 12px;
-  font-weight: 820;
+.nginx-editor-diagnostic-warning {
+  text-decoration: underline wavy var(--nginx-yellow) 1px;
+  text-underline-offset: 3px;
 }
 
-.nginx-location-node dl {
-  margin-top: 8px;
-}
-
-.nginx-location-children {
-  display: grid;
-  gap: 6px;
-  margin-top: 8px;
-  padding-left: 14px;
+.nginx-editor-diagnostic-error {
+  text-decoration: underline wavy var(--nginx-red) 1px;
+  text-underline-offset: 3px;
 }
 
 .nginx-templates-grid {
@@ -665,14 +810,53 @@
 [data-theme="light"] .nginx-search input,
 [data-theme="light"] .nginx-template-fields input,
 [data-theme="light"] .nginx-template-fields select,
-[data-theme="light"] .nginx-editor textarea,
+[data-theme="light"] .nginx-visual-grid input,
+[data-theme="light"] .nginx-visual-grid select,
+[data-theme="light"] .nginx-visual-grid textarea,
 [data-theme="light"] .nginx-test-output,
 [data-theme="light"] .nginx-global-config pre,
 [data-theme="light"] .nginx-template-wizard pre {
   background: rgba(255, 255, 255, 0.82);
 }
 
+[data-theme="light"] .nginx-visual-section {
+  background: rgba(255, 255, 255, 0.58);
+}
+
+[data-theme="light"] .nginx-site-kind-grid button {
+  border-color: rgba(23, 58, 87, 0.12);
+  background: rgba(242, 248, 252, 0.76);
+}
+
+[data-theme="light"] .nginx-site-kind-grid button:hover,
+[data-theme="light"] .nginx-site-kind-grid button.active {
+  border-color: rgba(12, 136, 92, 0.32);
+  background: rgba(12, 136, 92, 0.1);
+}
+
+[data-theme="light"] .nginx-visual-location {
+  background: rgba(243, 248, 253, 0.76);
+}
+
+[data-theme="light"] .nginx-editor .notepad-codemirror,
+[data-theme="light"] .nginx-editor .nginx-code-editor .cm-editor,
+[data-theme="light"] .nginx-editor .nginx-code-editor .cm-scroller,
+[data-theme="light"] .nginx-editor-loading {
+  background: rgba(255, 255, 255, 0.82);
+}
+
 [data-theme="light"] .nginx-confirm-dialog,
 [data-theme="light"] .nginx-template-wizard {
   background: #ffffff;
+}
+
+@media (max-width: 980px) {
+  .nginx-visual-grid,
+  .nginx-visual-grid.compact {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .nginx-site-kind-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }

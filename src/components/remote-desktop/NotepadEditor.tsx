@@ -16,6 +16,8 @@ import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
 
 type CodeMirrorLanguageLoader = () => Promise<Extension>;
 
+const emptyCodeMirrorExtensions: Extension[] = [];
+
 const CODEMIRROR_LANGUAGE_LOADERS: Partial<Record<string, CodeMirrorLanguageLoader>> = {
   javascript: async () => (await import('@codemirror/lang-javascript')).javascript({ jsx: true }),
   typescript: async () => (await import('@codemirror/lang-javascript')).javascript({ jsx: true, typescript: true }),
@@ -91,7 +93,9 @@ export interface NotepadEditorHandle {
 
 interface NotepadEditorProps {
   ariaLabel: string;
+  className?: string;
   content: string;
+  extensions?: Extension[];
   language: string;
   readOnly: boolean;
   theme: 'light' | 'dark';
@@ -111,7 +115,9 @@ function getCursorPosition(view: EditorView) {
 
 const NotepadEditor = forwardRef<NotepadEditorHandle, NotepadEditorProps>(function NotepadEditor({
   ariaLabel,
+  className,
   content,
+  extensions: extraExtensions = emptyCodeMirrorExtensions,
   language,
   readOnly,
   theme,
@@ -151,6 +157,7 @@ const NotepadEditor = forwardRef<NotepadEditorHandle, NotepadEditorProps>(functi
   const extensions = useMemo<Extension[]>(() => [
     keymap.of([indentWithTab]),
     ...languageExtensions,
+    ...extraExtensions,
     ...(wrapEnabled ? [EditorView.lineWrapping] : []),
     EditorView.theme({
       '&': {
@@ -217,7 +224,7 @@ const NotepadEditor = forwardRef<NotepadEditorHandle, NotepadEditorProps>(functi
     }, {
       dark: theme === 'dark',
     }),
-  ], [languageExtensions, theme, wrapEnabled]);
+  ], [extraExtensions, languageExtensions, theme, wrapEnabled]);
 
   useImperativeHandle(ref, () => ({
     getSelection: () => {
@@ -262,7 +269,7 @@ const NotepadEditor = forwardRef<NotepadEditorHandle, NotepadEditorProps>(functi
   return (
     <CodeMirror
       ref={codeMirrorRef}
-      className="notepad-codemirror"
+      className={className ? `notepad-codemirror ${className}` : 'notepad-codemirror'}
       value={content}
       height="100%"
       basicSetup={{

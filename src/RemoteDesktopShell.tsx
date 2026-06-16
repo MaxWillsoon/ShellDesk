@@ -121,7 +121,7 @@ const desktopAppIconSources: Record<DesktopAppKey, string> = {
   'git-manager': new URL('./assets/desktop-icons/git-manager.png', import.meta.url).href,
   'web-server-manager': new URL('./assets/desktop-icons/web-server-manager.png', import.meta.url).href,
   'cert-manager': new URL('./assets/desktop-icons/cert-manager.png', import.meta.url).href,
-  'nginx-manager': new URL('./assets/desktop-icons/nginx-manager.svg', import.meta.url).href,
+  'nginx-manager': new URL('./assets/desktop-icons/nginx-manager.png', import.meta.url).href,
   'scheduled-tasks': new URL('./assets/desktop-icons/scheduled-tasks.png', import.meta.url).href,
   postgres: new URL('./assets/desktop-icons/postgres.png', import.meta.url).href,
   mongo: new URL('./assets/desktop-icons/mongo.png', import.meta.url).href,
