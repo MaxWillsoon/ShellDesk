@@ -7,7 +7,7 @@ const nginxFieldMarker = '__SHELLDESK_NGINX_FIELD__';
 const nginxFileMarker = '__SHELLDESK_NGINX_FILE__';
 
 function windowsUnsupported(marker = nginxFieldMarker): RemoteCommandInput {
-  return powershellStdinCommand(`[Console]::Out.WriteLine("${marker}|error|${tCurrent('auto.certManagerProviders.windowsUnsupported')}")`);
+  return powershellStdinCommand(`[Console]::Out.WriteLine("${marker}|error|${tCurrent('auto.remoteNginxManager.windowsUnsupported')}")`);
 }
 
 function sudoCommand(command: string) {
@@ -44,6 +44,22 @@ function createHeredocDelimiter(content: string) {
     delimiter = `SHELLDESK_NGINX_CONFIG_EOF_${index}`;
   }
   return delimiter;
+}
+
+function isPathUnder(filePath: string, directory: string | null | undefined) {
+  if (!directory) return false;
+  const base = directory.replace(/\/+$/g, '');
+  return filePath === base || filePath.startsWith(`${base}/`);
+}
+
+// Provider commands run privileged operations; callers should pass discovered Nginx paths only.
+export function validateNginxConfigPath(filePath: string, installation: NginxInstallation) {
+  return (
+    filePath === installation.configPath
+    || isPathUnder(filePath, installation.configDir)
+    || isPathUnder(filePath, installation.availableDir)
+    || isPathUnder(filePath, installation.confDir)
+  );
 }
 
 export function createNginxDetectCommand(isWindowsHost = false): RemoteCommandInput {
@@ -182,6 +198,7 @@ fi
 export function parseNginxListConfigs(stdout: string): { path: string; enabled: boolean; size: number; mtime: number }[] {
   return stdout
     .split(/\r?\n/)
+    // Marker parsing intentionally treats "|" as a field delimiter; Nginx config paths containing "|" are not supported.
     .map((line) => line.match(/^__SHELLDESK_NGINX_FILE__\|([^|]+)\|(true|false)\|(\d+)\|(\d+)$/))
     .filter((match): match is RegExpMatchArray => Boolean(match))
     .map((match) => ({
@@ -282,12 +299,49 @@ export function createNginxDeleteCommand(filePath: string, installation: NginxIn
   };
 }
 
+export function createNginxMoveConfigToBackupCommand(filePath: string, backupPath: string, installation: NginxInstallation, isWindowsHost = false): RemoteCommandInput {
+  if (isWindowsHost) return windowsUnsupported();
+
+  const safeFilename = basename(filePath).replace(/\.disabled$/i, '');
+  const unlinkEnabled = installation.enabledDir
+    ? `rm -f -- ${shellSingleQuote(`${installation.enabledDir}/${safeFilename}`)}; `
+    : '';
+
+  return {
+    command: sudoCommand(`mkdir -p ${shellSingleQuote(basename(backupPath) === backupPath ? installation.configDir : backupPath.replace(/\/[^/]*$/, ''))}; ${unlinkEnabled}mv -- ${shellSingleQuote(filePath)} ${shellSingleQuote(backupPath)}`),
+  };
+}
+
+export function createNginxRestoreDeletedConfigCommand(backupPath: string, originalPath: string, installation: NginxInstallation, enabled: boolean, isWindowsHost = false): RemoteCommandInput {
+  if (isWindowsHost) return windowsUnsupported();
+
+  const safeFilename = basename(originalPath).replace(/\.disabled$/i, '');
+  const restoreEnabled = enabled && installation.sitesLayout === 'debian' && installation.enabledDir
+    ? `; ln -sf ${shellSingleQuote(originalPath)} ${shellSingleQuote(`${installation.enabledDir}/${safeFilename}`)}`
+    : '';
+
+  return { command: sudoCommand(`mv -- ${shellSingleQuote(backupPath)} ${shellSingleQuote(originalPath)}${restoreEnabled}`) };
+}
+
+export function createNginxCleanupCreatedConfigCommand(filePath: string, installation: NginxInstallation, isWindowsHost = false): RemoteCommandInput {
+  if (isWindowsHost) return windowsUnsupported();
+
+  const safeFilename = basename(filePath).replace(/\.disabled$/i, '');
+  const unlinkEnabled = installation.enabledDir
+    ? `rm -f -- ${shellSingleQuote(`${installation.enabledDir}/${safeFilename}`)}; `
+    : '';
+
+  return { command: sudoCommand(`${unlinkEnabled}rm -f -- ${shellSingleQuote(filePath)}`) };
+}
+
+// Used by backup/restore UI (future)
 export function createNginxListBackupsCommand(configDir: string, isWindowsHost = false): RemoteCommandInput {
   if (isWindowsHost) return windowsUnsupported();
 
   return { command: `ls -la -- ${shellSingleQuote(`${configDir}/.shelldesk-backups`)} 2>&1` };
 }
 
+// Used by backup/restore UI (future)
 export function createNginxRestoreBackupCommand(backupPath: string, originalPath: string, isWindowsHost = false): RemoteCommandInput {
   if (isWindowsHost) return windowsUnsupported();
 

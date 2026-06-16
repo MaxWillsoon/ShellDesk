@@ -201,12 +201,39 @@ server {
   },
 ];
 
+export function sanitizeNginxTemplateValue(name: string, value: string): string {
+  const stripped = value.trim().replace(/[\r\n{};]/g, '');
+  const upperName = name.toUpperCase();
+
+  if (upperName.includes('PORT')) {
+    if (!/^\d+$/.test(stripped)) throw new Error(`${name} must be a numeric port.`);
+    const port = Number(stripped);
+    if (port < 1 || port > 65535) throw new Error(`${name} must be between 1 and 65535.`);
+  }
+
+  if (upperName.includes('PATH') || upperName.endsWith('_LOG')) {
+    if (!stripped.startsWith('/')) throw new Error(`${name} must start with /.`);
+  }
+
+  if (upperName.includes('URL')) {
+    if (!/^https?:\/\//i.test(stripped)) throw new Error(`${name} must start with http:// or https://.`);
+  }
+
+  if (upperName.includes('SERVER_NAME')) {
+    const domains = stripped.split(/\s+/).filter(Boolean);
+    if (!domains.length || !domains.every((domain) => /^(\*\.)?([a-z0-9-]+\.)*[a-z0-9-]+(\.[a-z]{2,})$/i.test(domain))) {
+      throw new Error(`${name} must contain valid domain names.`);
+    }
+  }
+
+  return stripped;
+}
+
 export function renderNginxTemplate(template: NginxConfigTemplate, values: Record<string, string>): string {
   const defaults = new Map(template.variables.map((variable) => [variable.name, variable.default]));
 
   return template.content.replace(/\{\{([A-Z0-9_]+)(?:\|default:([^}]+))?\}\}/g, (_match, name: string, inlineDefault?: string) => {
     const value = values[name]?.trim();
-    if (value) return value;
-    return inlineDefault ?? defaults.get(name) ?? '';
+    return sanitizeNginxTemplateValue(name, value || inlineDefault || defaults.get(name) || '');
   });
 }

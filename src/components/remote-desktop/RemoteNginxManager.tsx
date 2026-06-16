@@ -19,7 +19,10 @@ import {
   createNginxWriteConfigCommand,
   createNginxTestCommand,
   createNginxReloadCommand,
-  createNginxDeleteCommand,
+  createNginxMoveConfigToBackupCommand,
+  createNginxRestoreDeletedConfigCommand,
+  createNginxCleanupCreatedConfigCommand,
+  validateNginxConfigPath,
 } from './nginxManagerProviders';
 import { nginxConfigTemplates, renderNginxTemplate } from './nginxManagerTemplates';
 import type {
@@ -87,6 +90,38 @@ function getTemplateDefaults(template: NginxConfigTemplate) {
   return Object.fromEntries(template.variables.map((variable) => [variable.name, variable.default]));
 }
 
+function renderTemplatePreview(template: NginxConfigTemplate, values: Record<string, string>) {
+  try {
+    return renderNginxTemplate(template, values);
+  } catch (error) {
+    return getErrorMessage(error);
+  }
+}
+
+const templateIcons: Record<string, string> = {
+  FileText: '📄',
+  Shuffle: '🔀',
+  Code2: '💻',
+  ShieldCheck: '🔒',
+  Network: '⚖️',
+  Radio: '🔌',
+};
+
+async function pMap<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex]);
+    }
+  }));
+
+  return results;
+}
+
 function renderLocation(location: NginxLocationBlock, depth = 0) {
   return (
     <details key={location.id} className="nginx-location-node" open={depth === 0}>
@@ -134,6 +169,8 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
   const [lastRefreshedAt, setLastRefreshedAt] = useState('');
   const requestIdRef = useRef(0);
   const dialogRef = useRef<HTMLDivElement | null>(null);
+  const previousSelectedFilePathRef = useRef<string | null>(null);
+  const modalOpenerRef = useRef<HTMLElement | null>(null);
 
   const filteredFiles = useMemo(() => {
     const needle = searchQuery.trim().toLowerCase();
@@ -182,23 +219,22 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
 
       const listResult = await runCommand(createNginxListConfigsCommand(detected, isWindowsHost));
       const listed = parseNginxListConfigs(combineOutput(listResult));
-      const paths = Array.from(new Set([detected.configPath, ...listed.map((item) => item.path)]));
+      const paths = Array.from(new Set([detected.configPath, ...listed.map((item) => item.path)]))
+        .filter((filePath) => validateNginxConfigPath(filePath, detected));
       const metadata = new Map(listed.map((item) => [item.path, item]));
-      const parsedFiles: NginxConfigFile[] = [];
-
-      for (const filePath of paths) {
+      const parsedFiles = await pMap(paths, 4, async (filePath) => {
         const readResult = await runCommand(createNginxReadConfigCommand(filePath, isWindowsHost));
         const content = readResult.stdout ?? '';
         const parsed = parseNginxConfig(content, filePath);
         const info = metadata.get(filePath);
-        parsedFiles.push({
+        return {
           ...parsed,
           isEnabled: filePath === detected.configPath ? true : info?.enabled ?? parsed.isEnabled,
           enabledPath: info?.enabled ? filePath : null,
           lastModified: info?.mtime ?? 0,
           fileSize: info?.size ?? content.length,
-        });
-      }
+        };
+      });
 
       if (requestIdRef.current !== requestId) return;
       setInstallation(detected);
@@ -219,16 +255,21 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
     }
   }, [isWindowsHost, runCommand]);
 
+  const runNginxTest = useCallback(async () => {
+    const result = await runCommand(createNginxTestCommand(isWindowsHost));
+    const parsed = parseNginxTestOutput(combineOutput(result));
+    return result.code === 0 ? parsed : { ...parsed, success: false };
+  }, [isWindowsHost, runCommand]);
+
   const testConfig = useCallback(async () => {
     setActionRunning(true);
     setError('');
     setNotice('');
 
     try {
-      const result = await runCommand(createNginxTestCommand(isWindowsHost));
-      const parsed = parseNginxTestOutput(combineOutput(result));
+      const parsed = await runNginxTest();
       setTestResult(parsed);
-      if (!parsed.success || result.code !== 0) {
+      if (!parsed.success) {
         setError(tCurrent('auto.remoteNginxManager.testFailed'));
         return parsed;
       }
@@ -243,7 +284,7 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
     } finally {
       setActionRunning(false);
     }
-  }, [isWindowsHost, runCommand]);
+  }, [runNginxTest]);
 
   const toggleSite = useCallback(async (filePath: string, enable: boolean) => {
     if (!installation) return;
@@ -258,7 +299,8 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
       const result = await runCommand(command);
       if (result.code !== 0) throw new Error(combineOutput(result) || tCurrent('auto.remoteNginxManager.actionFailed'));
 
-      const testResult = await testConfig();
+      const testResult = await runNginxTest();
+      setTestResult(testResult);
       if (!testResult?.success) {
         const rollbackCommand = enable
           ? createNginxDisableSiteCommand(filePath, installation, isWindowsHost)
@@ -275,7 +317,7 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
     } finally {
       setActionRunning(false);
     }
-  }, [installation, isWindowsHost, refresh, runCommand, testConfig]);
+  }, [installation, isWindowsHost, refresh, runCommand, runNginxTest]);
 
   const saveConfig = useCallback(async () => {
     if (!selectedFile) return;
@@ -290,9 +332,13 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
       const writeResult = await runCommand(createNginxWriteConfigCommand(selectedFile.fullPath, editorContent, isWindowsHost));
       if (writeResult.code !== 0) throw new Error(combineOutput(writeResult) || tCurrent('auto.remoteNginxManager.actionFailed'));
 
-      const parsedTest = await testConfig();
+      const parsedTest = await runNginxTest();
+      setTestResult(parsedTest);
       if (!parsedTest?.success) {
-        await runCommand(createNginxWriteConfigCommand(selectedFile.fullPath, previousContent, isWindowsHost));
+        const rollbackResult = await runCommand(createNginxWriteConfigCommand(selectedFile.fullPath, previousContent, isWindowsHost));
+        if (rollbackResult.code !== 0) {
+          throw new Error(`${tCurrent('auto.remoteNginxManager.rollbackNotice')} ${combineOutput(rollbackResult) || tCurrent('auto.remoteNginxManager.actionFailed')}`);
+        }
         throw new Error(tCurrent('auto.remoteNginxManager.rollbackNotice'));
       }
 
@@ -305,19 +351,27 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
     } finally {
       setActionRunning(false);
     }
-  }, [editorContent, isWindowsHost, refresh, runCommand, selectedFile, testConfig]);
+  }, [editorContent, isWindowsHost, refresh, runCommand, runNginxTest, selectedFile]);
 
   const deleteConfig = useCallback(async (filePath: string) => {
     if (!installation) return;
+    const deletedFile = configFiles.find((file) => file.fullPath === filePath);
+    const backupPath = `${installation.configDir}/.shelldesk-backups/${basename(filePath)}.rollback.${Date.now()}`;
     setActionRunning(true);
     setError('');
     setNotice('');
 
     try {
-      const result = await runCommand(createNginxDeleteCommand(filePath, installation, isWindowsHost));
+      const result = await runCommand(createNginxMoveConfigToBackupCommand(filePath, backupPath, installation, isWindowsHost));
       if (result.code !== 0) throw new Error(combineOutput(result) || tCurrent('auto.remoteNginxManager.actionFailed'));
-      const parsedTest = await testConfig();
-      if (parsedTest?.success) await runCommand(createNginxReloadCommand(isWindowsHost));
+      const parsedTest = await runNginxTest();
+      setTestResult(parsedTest);
+      if (!parsedTest?.success) {
+        const rollbackResult = await runCommand(createNginxRestoreDeletedConfigCommand(backupPath, filePath, installation, deletedFile?.isEnabled ?? true, isWindowsHost));
+        if (rollbackResult.code !== 0) throw new Error(`${tCurrent('auto.remoteNginxManager.testFailed')} ${combineOutput(rollbackResult) || tCurrent('auto.remoteNginxManager.actionFailed')}`);
+        throw new Error(tCurrent('auto.remoteNginxManager.testFailed'));
+      }
+      await runCommand(createNginxReloadCommand(isWindowsHost));
       setNotice(tCurrent('auto.remoteNginxManager.deleteSuccess'));
       setPendingAction(null);
       await refresh();
@@ -326,7 +380,7 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
     } finally {
       setActionRunning(false);
     }
-  }, [installation, isWindowsHost, refresh, runCommand, testConfig]);
+  }, [configFiles, installation, isWindowsHost, refresh, runCommand, runNginxTest]);
 
   const createFromTemplate = useCallback(async (template: NginxConfigTemplate, values: Record<string, string>) => {
     if (!installation) return;
@@ -352,8 +406,12 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
         if (enableResult.code !== 0) throw new Error(combineOutput(enableResult) || tCurrent('auto.remoteNginxManager.actionFailed'));
       }
 
-      const parsedTest = await testConfig();
-      if (!parsedTest?.success) throw new Error(tCurrent('auto.remoteNginxManager.testFailed'));
+      const parsedTest = await runNginxTest();
+      setTestResult(parsedTest);
+      if (!parsedTest?.success) {
+        await runCommand(createNginxCleanupCreatedConfigCommand(targetPath, installation, isWindowsHost));
+        throw new Error(tCurrent('auto.remoteNginxManager.testFailed'));
+      }
       await runCommand(createNginxReloadCommand(isWindowsHost));
       setNotice(tCurrent('auto.remoteNginxManager.createSuccess'));
       setSelectedTemplate(null);
@@ -366,7 +424,7 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
     } finally {
       setActionRunning(false);
     }
-  }, [installation, isWindowsHost, refresh, runCommand, testConfig]);
+  }, [installation, isWindowsHost, refresh, runCommand, runNginxTest]);
 
   const executePendingAction = async () => {
     if (!pendingAction) return;
@@ -383,15 +441,22 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
   }, [refresh]);
 
   useEffect(() => {
-    const file = configFiles.find((item) => item.fullPath === selectedFilePath) ?? filteredFiles[0] ?? null;
+    const file = configFiles.find((item) => item.fullPath === selectedFilePath) ?? configFiles[0] ?? null;
     setSelectedFile(file);
     setSelectedServerBlock(file?.serverBlocks[0] ?? null);
-    setEditorContent(file?.rawContent ?? '');
-    setHasUnsavedChanges(false);
-  }, [configFiles, filteredFiles, selectedFilePath]);
+    if (previousSelectedFilePathRef.current !== (file?.fullPath ?? null)) {
+      previousSelectedFilePathRef.current = file?.fullPath ?? null;
+      setEditorContent(file?.rawContent ?? '');
+      setHasUnsavedChanges(false);
+    }
+  }, [configFiles, selectedFilePath]);
 
   useEffect(() => {
-    if (!modalOpen) return;
+    if (!modalOpen) {
+      modalOpenerRef.current?.focus();
+      modalOpenerRef.current = null;
+      return;
+    }
     window.setTimeout(() => {
       dialogRef.current?.querySelector<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])')?.focus();
     }, 0);
@@ -403,8 +468,24 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
   };
 
   const openTemplate = (template: NginxConfigTemplate) => {
+    modalOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setSelectedTemplate(template);
     setTemplateValues(getTemplateDefaults(template));
+  };
+
+  const handleTabKeyDown = <T extends string>(event: KeyboardEvent<HTMLButtonElement>, tabs: readonly T[], active: T, setActive: (tab: T) => void, idPrefix: string) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const currentIndex = tabs.indexOf(active);
+    const offset = event.key === 'ArrowRight' ? 1 : -1;
+    const next = tabs[(currentIndex + offset + tabs.length) % tabs.length];
+    setActive(next);
+    window.setTimeout(() => document.getElementById(`${idPrefix}-${next}`)?.focus(), 0);
+  };
+
+  const openPendingAction = (action: PendingAction) => {
+    modalOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setPendingAction(action);
   };
 
   const handleDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -465,7 +546,18 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
 
       <div className="nginx-tabs" role="tablist" aria-label={tCurrent('auto.remoteNginxManager.tabsLabel')}>
         {(['sites', 'templates', 'config'] as NginxTab[]).map((tab) => (
-          <button key={tab} type="button" role="tab" className={activeTab === tab ? 'active' : ''} aria-selected={activeTab === tab} onClick={() => setActiveTab(tab)}>
+          <button
+            key={tab}
+            id={`nginx-tab-${tab}`}
+            type="button"
+            role="tab"
+            className={activeTab === tab ? 'active' : ''}
+            aria-selected={activeTab === tab}
+            aria-controls={`nginx-panel-${tab}`}
+            tabIndex={activeTab === tab ? 0 : -1}
+            onClick={() => setActiveTab(tab)}
+            onKeyDown={(event) => handleTabKeyDown(event, ['sites', 'templates', 'config'] as const, activeTab, setActiveTab, 'nginx-tab')}
+          >
             {tCurrent(`auto.remoteNginxManager.${tab}`)}
           </button>
         ))}
@@ -475,7 +567,7 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
       {notice ? <DismissibleAlert className="nginx-alert info" onDismiss={() => setNotice('')}>{notice}</DismissibleAlert> : null}
 
       {activeTab === 'sites' ? (
-        <div className="nginx-layout">
+        <div id="nginx-panel-sites" className="nginx-layout" role="tabpanel" aria-labelledby="nginx-tab-sites">
           <aside className="nginx-site-list">
             <div className="nginx-list-head">
               <strong>{tCurrent('auto.remoteNginxManager.sites')}</strong>
@@ -514,14 +606,25 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
 
             <div className="nginx-sub-tabs" role="tablist" aria-label={tCurrent('auto.remoteNginxManager.detailTabsLabel')}>
               {(['overview', 'locations', 'editor'] as NginxSubTab[]).map((tab) => (
-                <button key={tab} type="button" role="tab" className={activeSubTab === tab ? 'active' : ''} aria-selected={activeSubTab === tab} onClick={() => setActiveSubTab(tab)}>
+                <button
+                  key={tab}
+                  id={`nginx-sub-tab-${tab}`}
+                  type="button"
+                  role="tab"
+                  className={activeSubTab === tab ? 'active' : ''}
+                  aria-selected={activeSubTab === tab}
+                  aria-controls={`nginx-sub-panel-${tab}`}
+                  tabIndex={activeSubTab === tab ? 0 : -1}
+                  onClick={() => setActiveSubTab(tab)}
+                  onKeyDown={(event) => handleTabKeyDown(event, ['overview', 'locations', 'editor'] as const, activeSubTab, setActiveSubTab, 'nginx-sub-tab')}
+                >
                   {tCurrent(`auto.remoteNginxManager.${tab}`)}
                 </button>
               ))}
             </div>
 
             {activeSubTab === 'overview' ? (
-              <dl className="nginx-detail-list">
+              <dl id="nginx-sub-panel-overview" className="nginx-detail-list" role="tabpanel" aria-labelledby="nginx-sub-tab-overview">
                 <div><dt>{tCurrent('auto.remoteNginxManager.serverNames')}</dt><dd>{formatValue(selectedServerBlock?.serverNames)}</dd></div>
                 <div><dt>{tCurrent('auto.remoteNginxManager.listenPorts')}</dt><dd>{formatValue(selectedListenPorts)}</dd></div>
                 <div><dt>{tCurrent('auto.remoteNginxManager.documentRoot')}</dt><dd>{formatValue(selectedServerBlock?.root)}</dd></div>
@@ -533,14 +636,14 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
             ) : null}
 
             {activeSubTab === 'locations' ? (
-              <div className="nginx-location-tree">
+              <div id="nginx-sub-panel-locations" className="nginx-location-tree" role="tabpanel" aria-labelledby="nginx-sub-tab-locations">
                 {selectedServerBlock?.locations.length ? selectedServerBlock.locations.map((location) => renderLocation(location)) : <div className="nginx-empty-state">{tCurrent('auto.remoteNginxManager.noLocations')}</div>}
               </div>
             ) : null}
 
             {activeSubTab === 'editor' ? (
-              <div className="nginx-editor">
-                <textarea value={editorContent} onChange={handleEditorChange} spellCheck={false} />
+              <div id="nginx-sub-panel-editor" className="nginx-editor" role="tabpanel" aria-labelledby="nginx-sub-tab-editor">
+                <textarea aria-label={tCurrent('auto.remoteNginxManager.editor')} value={editorContent} onChange={handleEditorChange} spellCheck={false} />
                 <div className="nginx-editor-actions">
                   {hasUnsavedChanges ? <span>{tCurrent('auto.remoteNginxManager.unsavedChanges')}</span> : <span>{selectedFile?.lastModified ? new Date(selectedFile.lastModified * 1000).toLocaleString(getShellDeskLocale()) : '-'}</span>}
                   <button type="button" onClick={() => { setEditorContent(selectedFile?.rawContent ?? ''); setHasUnsavedChanges(false); }} disabled={!hasUnsavedChanges || actionRunning}>{tCurrent('auto.remoteNginxManager.revert')}</button>
@@ -551,11 +654,11 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
 
             <div className="nginx-actions">
               {selectedFile?.isEnabled ? (
-                <button type="button" onClick={() => selectedFile && setPendingAction({ type: 'disable', filePath: selectedFile.fullPath })} disabled={selectedFileActionsDisabled}>{tCurrent('auto.remoteNginxManager.disable')}</button>
+                <button type="button" onClick={() => selectedFile && openPendingAction({ type: 'disable', filePath: selectedFile.fullPath })} disabled={selectedFileActionsDisabled}>{tCurrent('auto.remoteNginxManager.disable')}</button>
               ) : (
-                <button type="button" className="primary" onClick={() => selectedFile && setPendingAction({ type: 'enable', filePath: selectedFile.fullPath })} disabled={selectedFileActionsDisabled}>{tCurrent('auto.remoteNginxManager.enable')}</button>
+                <button type="button" className="primary" onClick={() => selectedFile && openPendingAction({ type: 'enable', filePath: selectedFile.fullPath })} disabled={selectedFileActionsDisabled}>{tCurrent('auto.remoteNginxManager.enable')}</button>
               )}
-              <button type="button" className="danger" onClick={() => selectedFile && setPendingAction({ type: 'delete', filePath: selectedFile.fullPath })} disabled={selectedFileActionsDisabled}>{tCurrent('auto.remoteNginxManager.delete')}</button>
+              <button type="button" className="danger" onClick={() => selectedFile && openPendingAction({ type: 'delete', filePath: selectedFile.fullPath })} disabled={selectedFileActionsDisabled}>{tCurrent('auto.remoteNginxManager.delete')}</button>
               <button type="button" onClick={saveConfig} disabled={!hasUnsavedChanges || actionRunning}>{tCurrent('auto.remoteNginxManager.save')}</button>
             </div>
 
@@ -569,10 +672,10 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
       ) : null}
 
       {activeTab === 'templates' ? (
-        <div className="nginx-templates-grid">
+        <div id="nginx-panel-templates" className="nginx-templates-grid" role="tabpanel" aria-labelledby="nginx-tab-templates">
           {nginxConfigTemplates.map((template) => (
             <button key={template.id} type="button" className="nginx-template-card" onClick={() => openTemplate(template)} disabled={!installation || actionRunning}>
-              <span>{template.icon}</span>
+              <span>{templateIcons[template.icon] || '📋'}</span>
               <strong>{tCurrent(template.name as MessageId)}</strong>
               <em>{tCurrent(template.description as MessageId)}</em>
             </button>
@@ -581,7 +684,7 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
       ) : null}
 
       {activeTab === 'config' ? (
-        <div className="nginx-global-config">
+        <div id="nginx-panel-config" className="nginx-global-config" role="tabpanel" aria-labelledby="nginx-tab-config">
           <section>
             <div className="nginx-list-head">
               <strong>{installation?.configPath ?? tCurrent('auto.remoteNginxManager.config')}</strong>
@@ -644,7 +747,7 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
                 </label>
               ))}
             </div>
-            <pre>{renderNginxTemplate(selectedTemplate, templateValues)}</pre>
+            <pre>{renderTemplatePreview(selectedTemplate, templateValues)}</pre>
             <div className="nginx-confirm-actions">
               <button type="button" onClick={() => setSelectedTemplate(null)}>{tCurrent('auto.remoteNginxManager.cancel')}</button>
               <button
@@ -652,7 +755,7 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
                 className="primary"
                 onClick={() => {
                   setSelectedTemplate(null);
-                  setPendingAction({ type: 'create-from-template', template: selectedTemplate, values: templateValues });
+                  openPendingAction({ type: 'create-from-template', template: selectedTemplate, values: templateValues });
                 }}
                 disabled={actionRunning}
               >

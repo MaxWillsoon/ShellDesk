@@ -110,6 +110,15 @@ function tokenize(content: string): Token[] {
         continue;
       }
 
+      if (current === '{' && /[~^$*+?\[\]\\]/.test(value)) {
+        while (index < content.length) {
+          value += content[index];
+          index += 1;
+          if (content[index - 1] === '}') break;
+        }
+        continue;
+      }
+
       if (/\s/.test(current) || current === '{' || current === '}' || current === ';' || current === '#') {
         break;
       }
@@ -207,6 +216,7 @@ function collectBlocks(nodes: ParsedNode[], name: string): ParsedNode[] {
 }
 
 function parseListenPort(hostPart: string, params: string[]) {
+  if (hostPart.startsWith('unix:')) return 0;
   if (/^\d+$/.test(hostPart)) return Number(hostPart);
 
   const ipv6Port = hostPart.match(/^\[[^\]]+\]:(\d+)$/)?.[1];
@@ -219,6 +229,7 @@ function parseListenPort(hostPart: string, params: string[]) {
 }
 
 function parseListenAddress(hostPart: string) {
+  if (hostPart.startsWith('unix:')) return hostPart;
   if (/^\d+$/.test(hostPart)) return '*';
   const ipv6 = hostPart.match(/^(\[[^\]]+\])(?::\d+)?$/)?.[1];
   if (ipv6) return ipv6;
@@ -245,6 +256,7 @@ function parseSslConfig(node: ParsedNode): NginxSslConfig | null {
   const certificate = firstDirectiveValue(node, 'ssl_certificate');
   const certificateKey = firstDirectiveValue(node, 'ssl_certificate_key');
 
+  // Certificate directives are parsed separately from listen 443/ssl status.
   if (!certificate && !certificateKey) return null;
 
   return {
@@ -360,6 +372,7 @@ function parseUpstreamBlock(node: ParsedNode, filePath: string): NginxUpstreamBl
 }
 
 export function parseNginxConfig(content: string, filePath: string): NginxConfigFile {
+  // Include directives are not expanded yet; callers see only directives in this file.
   const { nodes } = parseNodes(tokenize(content));
   const serverNodes = collectBlocks(nodes, 'server');
   const upstreamNodes = collectBlocks(nodes, 'upstream');
@@ -381,13 +394,13 @@ export function parseNginxConfig(content: string, filePath: string): NginxConfig
 
 export function parseNginxTestOutput(output: string): NginxTestResult {
   const errors: NginxTestError[] = [];
-  const regex = /\[emerg\].*? in ([^:\s]+):(\d+)|nginx:\s*\[emerg\]\s*(.*?) in ([^:\s]+):(\d+)|"([^"]+)" failed .*? in ([^:\s]+):(\d+)/gi;
+  const regex = /^(.*?)(?: in (.+):(\d+))$/gm;
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(output)) !== null) {
-    const file = match[1] ?? match[4] ?? match[7] ?? '';
-    const line = Number(match[2] ?? match[5] ?? match[8] ?? 0);
-    const message = (match[3] ?? match[6] ?? match[0]).trim();
+    const file = match[2] ?? '';
+    const line = Number(match[3] ?? 0);
+    const message = (match[1] ?? match[0]).trim();
     errors.push({ file, line, message });
   }
 
