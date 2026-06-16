@@ -43,7 +43,7 @@ const maxAiApiBaseUrlLength = 2048;
 const maxAiApiKeyLength = 8192;
 const maxAiModelNameLength = 200;
 const maxAiProviderNameLength = 80;
-const remoteDesktopAppCatalogVersion = 5;
+const remoteDesktopAppCatalogVersion = 6;
 const remoteDesktopAppKeys = [
   'files',
   'terminal',
@@ -67,6 +67,7 @@ const remoteDesktopAppKeys = [
   'git-manager',
   'web-server-manager',
   'cert-manager',
+  'nginx-manager',
   'scheduled-tasks',
   'postgres',
   'mongo',
@@ -85,6 +86,7 @@ const remoteDesktopAppCatalogMigrationKeys = [
   'git-manager',
   'web-server-manager',
   'cert-manager',
+  'nginx-manager',
   'mongo',
   'search-cluster',
   'message-queue',
