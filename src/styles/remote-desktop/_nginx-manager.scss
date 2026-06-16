@@ -40,13 +40,56 @@
 }
 
 .nginx-status-card {
-  display: grid;
-  min-width: 190px;
-  gap: 2px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-shrink: 0;
 }
 
-.nginx-status-card span,
-.nginx-status-card em,
+/* Toolbar status card — single row */
+.nginx-toolbar .nginx-status-label,
+.nginx-toolbar .nginx-status-version {
+  color: var(--nginx-muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 740;
+  white-space: nowrap;
+}
+
+.nginx-toolbar .nginx-status-version {
+  opacity: 0.7;
+}
+
+.nginx-toolbar .nginx-status-value {
+  color: var(--nginx-green);
+  font-size: 13px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.nginx-toolbar .nginx-status-value.warning { color: var(--nginx-yellow); }
+.nginx-toolbar .nginx-status-value.danger { color: var(--nginx-red); }
+
+.nginx-toolbar .nginx-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--nginx-green);
+  flex-shrink: 0;
+}
+
+.nginx-toolbar .nginx-status-dot.warning { background: var(--nginx-yellow); }
+.nginx-toolbar .nginx-status-dot.danger { background: var(--nginx-red); }
+
+.nginx-toolbar .nginx-status-divider {
+  width: 1px;
+  height: 24px;
+  background: var(--nginx-border);
+  flex-shrink: 0;
+}
+
+/* Generic muted spans (non-status-card) */
 .nginx-search span,
 .nginx-list-head span,
 .nginx-detail-hero span,
@@ -62,15 +105,11 @@
   font-weight: 740;
 }
 
-.nginx-status-card strong {
+.nginx-detail-hero strong {
   color: var(--nginx-accent);
-  font-size: 14px;
-  font-weight: 880;
+  font-size: 18px;
+  font-weight: 850;
 }
-
-.nginx-status-card.success strong { color: var(--nginx-green); }
-.nginx-status-card.warning strong { color: var(--nginx-yellow); }
-.nginx-status-card.danger strong { color: var(--nginx-red); }
 
 .nginx-search {
   display: grid;

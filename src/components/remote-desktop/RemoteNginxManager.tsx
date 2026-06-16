@@ -555,11 +555,13 @@ function RemoteNginxManager({ connectionId, systemType }: RemoteNginxManagerProp
   return (
     <section className="nginx-manager">
       <header className="nginx-toolbar">
-        <div className={`nginx-status-card ${installation?.isRunning ? 'success' : installation ? 'warning' : 'danger'}`}>
-          <span>{tCurrent('auto.remoteNginxManager.appName')}</span>
-          <strong>{installation ? (installation.isRunning ? tCurrent('auto.remoteNginxManager.running') : tCurrent('auto.remoteNginxManager.stopped')) : tCurrent('auto.remoteNginxManager.nginxNotDetected')}</strong>
-          <em>{installation?.version || lastRefreshedAt || tCurrent('auto.remoteNginxManager.notScanned')}</em>
+        <div className="nginx-status-card">
+          <span className={`nginx-status-dot ${installation?.isRunning ? '' : installation ? 'warning' : 'danger'}`} />
+          <span className="nginx-status-label">{tCurrent('auto.remoteNginxManager.appName')}</span>
+          <span className={`nginx-status-value ${installation?.isRunning ? '' : installation ? 'warning' : 'danger'}`}>{installation ? (installation.isRunning ? tCurrent('auto.remoteNginxManager.running') : tCurrent('auto.remoteNginxManager.stopped')) : tCurrent('auto.remoteNginxManager.nginxNotDetected')}</span>
+          <span className="nginx-status-version">{installation?.version || lastRefreshedAt || tCurrent('auto.remoteNginxManager.notScanned')}</span>
         </div>
+        <div className="nginx-status-divider" />
         <label className="nginx-search">
           <span>{tCurrent('auto.remoteNginxManager.search')}</span>
           <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder={tCurrent('auto.remoteNginxManager.searchPlaceholder')} />
