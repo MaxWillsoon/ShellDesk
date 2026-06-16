@@ -15,6 +15,7 @@ export { default as RemoteMonitor } from './RemoteMonitor';
 export { default as RemoteMongo } from './RemoteMongo';
 export { default as RemoteMessageQueuePanel } from './RemoteMessageQueuePanel';
 export { default as RemoteMySQL } from './RemoteMySQL';
+export { default as RemoteNginxManager } from './RemoteNginxManager';
 export { default as RemoteNetworkDiagnostics } from './RemoteNetworkDiagnostics';
 export { default as RemoteRedis } from './RemoteRedis';
 export { default as RemotePackageManager } from './RemotePackageManager';
