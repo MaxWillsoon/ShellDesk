@@ -25,6 +25,7 @@
 .caddy-sub-tabs,
 .caddy-actions,
 .caddy-editor-actions,
+.caddy-site-card-actions,
 .caddy-confirm-actions {
   display: flex;
   align-items: center;
@@ -148,6 +149,7 @@
 .caddy-sub-tabs button,
 .caddy-actions button,
 .caddy-editor-actions button,
+.caddy-site-card-actions button,
 .caddy-confirm-actions button {
   height: 30px;
   border: 1px solid var(--caddy-border);
@@ -181,8 +183,8 @@
 .caddy-sub-tabs button:hover,
 .caddy-actions button:hover:not(:disabled),
 .caddy-editor-actions button:hover:not(:disabled),
-.caddy-confirm-actions button:hover:not(:disabled),
-.caddy-site-scroll button:hover {
+.caddy-site-card-actions button:hover:not(:disabled),
+.caddy-confirm-actions button:hover:not(:disabled) {
   border-color: rgba(114, 199, 255, 0.34);
   background: rgba(114, 199, 255, 0.12);
   color: var(--caddy-text);
@@ -198,6 +200,7 @@
 }
 
 .caddy-actions button.danger,
+.caddy-site-card-actions button.danger,
 .caddy-confirm-actions button.danger {
   border-color: rgba(255, 143, 163, 0.28);
   background: rgba(255, 143, 163, 0.12);
@@ -207,6 +210,7 @@
 .caddy-toolbar button:disabled,
 .caddy-actions button:disabled,
 .caddy-editor-actions button:disabled,
+.caddy-site-card-actions button:disabled,
 .caddy-confirm-actions button:disabled,
 .caddy-template-card:disabled {
   opacity: 0.52;
@@ -287,50 +291,127 @@
   min-height: 0;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 7px;
   overflow: auto;
 }
 
-.caddy-site-scroll button {
+.caddy-site-card {
   display: grid;
-  grid-template-columns: 12px minmax(0, 1fr) auto;
-  gap: 3px 8px;
-  border: 1px solid var(--caddy-border);
-  border-radius: 6px;
-  padding: 8px;
-  background: rgba(255, 255, 255, 0.045);
-  color: var(--caddy-muted-strong);
-  cursor: pointer;
-  text-align: left;
+  gap: 7px;
+  border-bottom: 1px solid rgba(128, 184, 220, 0.1);
+  border-left: 2px solid transparent;
+  padding: 10px;
+  background: transparent;
 }
 
-.caddy-site-scroll button.active {
-  border-color: rgba(114, 199, 255, 0.34);
+.caddy-site-card:hover {
+  background: rgba(114, 199, 255, 0.07);
+}
+
+.caddy-site-card.active {
+  border-left-color: var(--caddy-accent);
   background: rgba(114, 199, 255, 0.1);
 }
 
-.caddy-site-scroll strong,
-.caddy-site-scroll em,
-.caddy-site-scroll small {
+.caddy-site-card-select {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--caddy-muted-strong);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.caddy-site-card-select:focus-visible {
+  outline: 2px solid rgba(114, 199, 255, 0.45);
+  outline-offset: 3px;
+}
+
+.caddy-site-card-main {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.caddy-site-card-main .caddy-status-dot {
+  flex: 0 0 auto;
+  margin-top: 0;
+}
+
+.caddy-site-card-main strong {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--caddy-text);
+  font-size: 12.5px;
+  font-weight: 850;
+}
+
+.caddy-site-card-main strong,
+.caddy-site-card-badges em,
+.caddy-site-card-main small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.caddy-site-scroll strong,
-.caddy-site-scroll em,
-.caddy-site-scroll small {
-  grid-column: 2 / 4;
+.caddy-site-card-main small {
+  flex: 0 0 auto;
+  border: 1px solid rgba(137, 223, 163, 0.2);
+  border-radius: 999px;
+  padding: 2px 6px;
+  background: rgba(137, 223, 163, 0.08);
+  color: var(--caddy-green);
+  font-size: 10px;
+  font-weight: 850;
 }
 
-.caddy-site-scroll em,
-.caddy-site-scroll small {
+.caddy-site-card-badges {
+  display: flex;
+  min-width: 0;
+}
+
+.caddy-site-card-badges em {
+  min-width: 0;
   color: var(--caddy-muted);
   font-size: 10.5px;
   font-style: normal;
 }
 
-.caddy-site-scroll small.tls { color: var(--caddy-green); }
+.caddy-site-card-actions {
+  gap: 4px;
+}
+
+.caddy-site-card-actions button {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 10.5px;
+}
+
+.caddy-site-card-test-result {
+  border: 1px solid rgba(128, 184, 220, 0.12);
+  border-radius: 6px;
+  padding: 6px 7px;
+  background: rgba(0, 0, 0, 0.16);
+  font-size: 10.5px;
+  font-weight: 730;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.caddy-site-card-test-result.success {
+  border-color: rgba(137, 223, 163, 0.22);
+  color: var(--caddy-green);
+}
+
+.caddy-site-card-test-result.danger {
+  border-color: rgba(255, 143, 163, 0.22);
+  color: var(--caddy-red);
+}
 
 .caddy-empty-state {
   border: 1px dashed var(--caddy-border);
@@ -609,6 +690,7 @@
 [data-theme="light"] .caddy-template-fields input,
 [data-theme="light"] .caddy-template-fields select,
 [data-theme="light"] .caddy-test-output,
+[data-theme="light"] .caddy-site-card-test-result,
 [data-theme="light"] .caddy-global-config pre,
 [data-theme="light"] .caddy-template-wizard pre,
 [data-theme="light"] .caddy-editor .notepad-codemirror,
@@ -616,6 +698,14 @@
 [data-theme="light"] .caddy-editor .caddy-code-editor .cm-scroller,
 [data-theme="light"] .caddy-editor-loading {
   background: rgba(255, 255, 255, 0.82);
+}
+
+[data-theme="light"] .caddy-site-card:hover {
+  background: rgba(23, 107, 154, 0.08);
+}
+
+[data-theme="light"] .caddy-site-card.active {
+  background: rgba(23, 107, 154, 0.1);
 }
 
 [data-theme="light"] .caddy-confirm-dialog,

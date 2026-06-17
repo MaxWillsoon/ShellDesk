@@ -104,6 +104,7 @@ function RemoteCaddyManager({ connectionId, systemType }: RemoteCaddyManagerProp
   const [loading, setLoading] = useState(false);
   const [actionRunning, setActionRunning] = useState(false);
   const [testResult, setTestResult] = useState<CaddyTestResult | null>(null);
+  const [siteTestResults, setSiteTestResults] = useState<Record<string, CaddyTestResult>>({});
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -116,6 +117,7 @@ function RemoteCaddyManager({ connectionId, systemType }: RemoteCaddyManagerProp
   const previousFilePathRef = useRef<string | null>(null);
   const previousRawContentRef = useRef('');
   const hasUnsavedChangesRef = useRef(false);
+  const siteTestTimerRef = useRef<Map<string, number>>(new Map());
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const modalOpenerRef = useRef<HTMLElement | null>(null);
 
@@ -239,6 +241,26 @@ function RemoteCaddyManager({ connectionId, systemType }: RemoteCaddyManagerProp
     }
   }, [runCaddyTest]);
 
+  const showSiteTestResult = useCallback((siteBlockId: string, result: CaddyTestResult) => {
+    const currentTimer = siteTestTimerRef.current.get(siteBlockId);
+    if (currentTimer !== undefined) window.clearTimeout(currentTimer);
+    setSiteTestResults((current) => ({ ...current, [siteBlockId]: result }));
+    const nextTimer = window.setTimeout(() => {
+      setSiteTestResults((current) => {
+        const next = { ...current };
+        delete next[siteBlockId];
+        return next;
+      });
+      siteTestTimerRef.current.delete(siteBlockId);
+    }, 3000);
+    siteTestTimerRef.current.set(siteBlockId, nextTimer);
+  }, []);
+
+  const quickTestSite = useCallback(async (siteBlock: CaddySiteBlock) => {
+    const parsed = await testConfig();
+    showSiteTestResult(siteBlock.id, parsed);
+  }, [showSiteTestResult, testConfig]);
+
   const saveContent = useCallback(async (nextContent: string, successMessage: string) => {
     if (!installation || !selectedFile) return;
     const previousContent = selectedFile.rawContent;
@@ -340,6 +362,11 @@ function RemoteCaddyManager({ connectionId, systemType }: RemoteCaddyManagerProp
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => () => {
+    siteTestTimerRef.current.forEach((timerId) => window.clearTimeout(timerId));
+    siteTestTimerRef.current.clear();
+  }, []);
 
   useEffect(() => {
     hasUnsavedChangesRef.current = hasUnsavedChanges;
@@ -460,13 +487,27 @@ function RemoteCaddyManager({ connectionId, systemType }: RemoteCaddyManagerProp
             </div>
             <div className="caddy-site-scroll">
               {filteredSiteBlocks.length ? filteredSiteBlocks.map((siteBlock) => (
-                <button key={siteBlock.id} type="button" className={selectedSiteBlock?.id === siteBlock.id ? 'active' : ''} aria-current={selectedSiteBlock?.id === siteBlock.id ? 'true' : undefined} onClick={() => setSelectedSiteBlock(siteBlock)}>
-                  <span className="caddy-status-dot enabled" aria-hidden="true" />
-                  <strong title={siteBlock.matcher}>{siteBlock.matcher}</strong>
-                  <em>{tCurrent('auto.remoteCaddyManager.filter.enabled')}</em>
-                  {siteBlock.tls ? <small className="tls">{tCurrent('auto.remoteCaddyManager.filter.tls')}</small> : <small>{tCurrent('auto.remoteCaddyManager.filter.nonTls')}</small>}
-                  <small title={siteBlock.filePath}>{siteBlock.filePath}</small>
-                </button>
+                <article key={siteBlock.id} className={`caddy-site-card ${selectedSiteBlock?.id === siteBlock.id ? 'active' : ''}`} aria-current={selectedSiteBlock?.id === siteBlock.id ? 'true' : undefined}>
+                  <button type="button" className="caddy-site-card-select" onClick={() => setSelectedSiteBlock(siteBlock)}>
+                    <span className="caddy-site-card-main">
+                      <span className="caddy-status-dot enabled" aria-hidden="true" />
+                      <strong title={siteBlock.matcher}>{siteBlock.matcher}</strong>
+                      {siteBlock.tls ? <small className="tls">{tCurrent('auto.remoteCaddyManager.filter.tls')}</small> : null}
+                    </span>
+                    <span className="caddy-site-card-badges">
+                      <em title={siteBlock.filePath}>{siteBlock.filePath}</em>
+                    </span>
+                  </button>
+                  <div className="caddy-site-card-actions">
+                    <button type="button" onClick={() => void quickTestSite(siteBlock)} disabled={!installation || actionRunning}>{tCurrent('auto.remoteCaddyManager.quickTest')}</button>
+                    <button type="button" className="danger" onClick={() => openPendingAction({ type: 'delete', siteBlock })} disabled={actionRunning || loading}>{tCurrent('auto.remoteCaddyManager.delete')}</button>
+                  </div>
+                  {siteTestResults[siteBlock.id] ? (
+                    <div className={`caddy-site-card-test-result ${siteTestResults[siteBlock.id].success ? 'success' : 'danger'}`} aria-live="polite">
+                      {tCurrent('auto.remoteCaddyManager.globalConfigTest')}{siteTestResults[siteBlock.id].output || (siteTestResults[siteBlock.id].success ? tCurrent('auto.remoteCaddyManager.testSuccess') : tCurrent('auto.remoteCaddyManager.testFailed'))}
+                    </div>
+                  ) : null}
+                </article>
               )) : <div className="caddy-empty-state">{loading ? tCurrent('auto.remoteCaddyManager.loading') : tCurrent('auto.remoteCaddyManager.noSites')}</div>}
             </div>
           </aside>
