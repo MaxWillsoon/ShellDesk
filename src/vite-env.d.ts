@@ -198,6 +198,7 @@ type ShellDeskDesktopAppKey =
   | 'cert-manager'
   | 'nginx-manager'
   | 'caddy-manager'
+  | 'apache-manager'
   | 'scheduled-tasks'
   | 'postgres'
   | 'mongo'
