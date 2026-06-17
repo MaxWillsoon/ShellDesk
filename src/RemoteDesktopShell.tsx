@@ -21,6 +21,7 @@ import { getAppLocale, t, type MessageId } from './i18n';
 const RemoteApiDebugger = lazy(() => import('./components/remote-desktop/RemoteApiDebugger'));
 const RemoteBrowser = lazy(() => import('./components/remote-desktop/RemoteBrowser'));
 const RemoteCertManager = lazy(() => import('./components/remote-desktop/RemoteCertManager'));
+const RemoteCaddyManager = lazy(() => import('./components/remote-desktop/RemoteCaddyManager'));
 const RemoteClickHouse = lazy(() => import('./components/remote-desktop/RemoteClickHouse'));
 const RemoteContainerManager = lazy(() => import('./components/remote-desktop/RemoteContainerManager'));
 const RemoteDiskAnalyzer = lazy(() => import('./components/remote-desktop/RemoteDiskAnalyzer'));
@@ -78,6 +79,7 @@ const desktopApps = [
   { key: 'web-server-manager', labelId: 'desktop.app.webServerManager.label', descriptionId: 'desktop.app.webServerManager.description' },
   { key: 'cert-manager', labelId: 'desktop.app.certManager.label', descriptionId: 'desktop.app.certManager.description' },
   { key: 'nginx-manager', labelId: 'desktop.app.nginxManager.label', descriptionId: 'desktop.app.nginxManager.description' },
+  { key: 'caddy-manager', labelId: 'desktop.app.caddyManager.label', descriptionId: 'desktop.app.caddyManager.description' },
   { key: 'scheduled-tasks', labelId: 'desktop.app.scheduledTasks.label', descriptionId: 'desktop.app.scheduledTasks.description' },
   { key: 'postgres', labelId: 'desktop.app.postgres.label', descriptionId: 'desktop.app.postgres.description' },
   { key: 'mongo', labelId: 'desktop.app.mongo.label', descriptionId: 'desktop.app.mongo.description' },
@@ -122,6 +124,7 @@ const desktopAppIconSources: Record<DesktopAppKey, string> = {
   'web-server-manager': new URL('./assets/desktop-icons/web-server-manager.png', import.meta.url).href,
   'cert-manager': new URL('./assets/desktop-icons/cert-manager.png', import.meta.url).href,
   'nginx-manager': new URL('./assets/desktop-icons/nginx-manager.png', import.meta.url).href,
+  'caddy-manager': new URL('./assets/desktop-icons/caddy-manager.svg', import.meta.url).href,
   'scheduled-tasks': new URL('./assets/desktop-icons/scheduled-tasks.png', import.meta.url).href,
   postgres: new URL('./assets/desktop-icons/postgres.png', import.meta.url).href,
   mongo: new URL('./assets/desktop-icons/mongo.png', import.meta.url).href,
@@ -138,13 +141,14 @@ const desktopAppIconSources: Record<DesktopAppKey, string> = {
 
 const desktopDragMimeType = 'application/x-shelldesk-desktop-item';
 const launchpadAnimationMs = 180;
-const desktopAppCatalogVersion = 6;
+const desktopAppCatalogVersion = 7;
 const defaultDesktopAppKeys: DesktopAppKey[] = ['files', 'terminal', 'browser', 'settings'];
 const appCatalogMigrationKeys: DesktopAppKey[] = [
   'git-manager',
   'web-server-manager',
   'cert-manager',
   'nginx-manager',
+  'caddy-manager',
   'mongo',
   'search-cluster',
   'message-queue',
@@ -318,6 +322,7 @@ const defaultWindowFrames: Record<DesktopAppKey, DesktopWindowFrame> = {
   'web-server-manager': { x: 112, y: 46, width: 1120, height: 660 },
   'cert-manager': { x: 120, y: 48, width: 1000, height: 620 },
   'nginx-manager': { x: 120, y: 48, width: 1100, height: 680 },
+  'caddy-manager': { x: 120, y: 48, width: 1100, height: 680 },
   'scheduled-tasks': { x: 118, y: 50, width: 1080, height: 650 },
   postgres: { x: 100, y: 40, width: 1080, height: 650 },
   mongo: { x: 96, y: 38, width: 1120, height: 660 },
@@ -2543,6 +2548,10 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
 
     if (desktopWindow.appKey === 'nginx-manager') {
       return <RemoteNginxManager connectionId={connection.id} systemType={connection.host.systemType} />;
+    }
+
+    if (desktopWindow.appKey === 'caddy-manager') {
+      return <RemoteCaddyManager connectionId={connection.id} systemType={connection.host.systemType} />;
     }
 
     if (desktopWindow.appKey === 'scheduled-tasks') {
