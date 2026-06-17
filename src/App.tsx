@@ -58,13 +58,14 @@ const themePreloadStorageKey = 'shelldesk:theme-preload';
 const dismissedUpdateReadyVersionStorageKey = 'shelldesk:update-ready-dismissed-version';
 const ungroupedKey = '__ungrouped__';
 const hostPageSize = 20;
-const remoteDesktopAppCatalogVersion = 7;
+const remoteDesktopAppCatalogVersion = 8;
 const remoteDesktopAppCatalogMigrationKeys: ShellDeskDesktopAppKey[] = [
   'git-manager',
   'web-server-manager',
   'cert-manager',
   'nginx-manager',
   'caddy-manager',
+  'apache-manager',
   'mongo',
   'search-cluster',
   'message-queue',

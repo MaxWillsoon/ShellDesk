@@ -23,6 +23,7 @@ const CODEMIRROR_LANGUAGE_LOADERS: Partial<Record<string, CodeMirrorLanguageLoad
   typescript: async () => (await import('@codemirror/lang-javascript')).javascript({ jsx: true, typescript: true }),
   html: async () => (await import('@codemirror/lang-html')).html(),
   xml: async () => (await import('@codemirror/lang-xml')).xml(),
+  apache: async () => (await import('@codemirror/lang-xml')).xml(),
   css: async () => (await import('@codemirror/lang-css')).css(),
   json: async () => (await import('@codemirror/lang-json')).json(),
   yaml: async () => (await import('@codemirror/lang-yaml')).yaml(),
