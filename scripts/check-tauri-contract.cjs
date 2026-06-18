@@ -147,6 +147,10 @@ const updaterEndpoint = 'https://github.com/liubaicai/ShellDesk/releases/latest/
 assert.match(buildWrapper, new RegExp(updaterEndpoint.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 assert.match(buildWrapper, /TAURI_UPDATER_PUBLIC_KEY/);
 assert.match(buildWrapper, /createUpdaterArtifacts: false/);
+assert.match(buildWrapper, /function pnpmCommand\(\)/);
+assert.match(buildWrapper, /pnpm\.cmd/);
+assert.match(buildWrapper, /assertBundleArtifactsCreated/);
+assert.doesNotMatch(buildWrapper, /npm_execpath/);
 assert.match(buildWrapper, /spawnSync\(command, \['tauri', 'build'/);
 assert.match(updaterSource, new RegExp(updaterEndpoint.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 assert.match(updaterSource, /option_env!\("TAURI_UPDATER_PUBLIC_KEY"\)/);

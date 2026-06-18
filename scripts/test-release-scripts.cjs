@@ -115,24 +115,32 @@ try {
   assert.match(buildWrapper, /TAURI_UPDATER_PUBLIC_KEY/);
   assert.match(buildWrapper, /createUpdaterArtifacts: false/);
   assert.match(buildWrapper, /releases\/latest\/download\/latest\.json/);
+  assert.match(buildWrapper, /function pnpmCommand\(\)/);
+  assert.match(buildWrapper, /pnpm\.cmd/);
+  assert.match(buildWrapper, /assertBundleArtifactsCreated/);
+  assert.doesNotMatch(buildWrapper, /npm_execpath/);
   assert.match(buildWrapper, /spawnSync\(command, \['tauri', 'build'/);
 
   const debugBuild = JSON.parse(runNode(['scripts/run-tauri-build.cjs', '--debug'], {
     SHELLDESK_TAURI_BUILD_DRY_RUN: '1',
     TAURI_UPDATER_PUBLIC_KEY: '',
+    npm_execpath: 'C:\\broken\\pnpm.cjs',
   }).stdout);
   assert.deepEqual(debugBuild.config, { bundle: { createUpdaterArtifacts: false } });
   assert.ok(debugBuild.args.includes('--debug'));
+  assert.equal(debugBuild.command, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm');
 
   const signedBuild = JSON.parse(runNode(['scripts/run-tauri-build.cjs', '--target', 'x86_64-pc-windows-msvc'], {
     SHELLDESK_TAURI_BUILD_DRY_RUN: '1',
     TAURI_UPDATER_PUBLIC_KEY: 'public-key-content',
+    npm_execpath: 'C:\\broken\\pnpm.cjs',
   }).stdout);
   assert.equal(signedBuild.config.plugins.updater.pubkey, 'public-key-content');
   assert.deepEqual(signedBuild.config.plugins.updater.endpoints, [
     'https://github.com/liubaicai/ShellDesk/releases/latest/download/latest.json',
   ]);
   assert.ok(signedBuild.args.includes('x86_64-pc-windows-msvc'));
+  assert.equal(signedBuild.command, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm');
 
   const updaterSource = fs.readFileSync(path.join(repoRoot, 'src-tauri/src/updater.rs'), 'utf8');
   assert.match(updaterSource, /const TAURI_UPDATER_ENDPOINT: &str =\s*"https:\/\/github\.com\/liubaicai\/ShellDesk\/releases\/latest\/download\/latest\.json"/);
