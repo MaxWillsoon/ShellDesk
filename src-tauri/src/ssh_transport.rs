@@ -615,8 +615,7 @@ fn proxy_command_for_profile(profile: &SshProfile) -> Option<String> {
         let mut parts = if should_use_sshpass(jump) {
             vec![
                 "sshpass".to_string(),
-                "-p".to_string(),
-                shell_arg(&jump.password),
+                "-e".to_string(),
                 "ssh".to_string(),
             ]
         } else {
@@ -686,11 +685,17 @@ fn apply_proxy_helper_env_tokio(command: &mut Command, profile: &SshProfile) {
     for (name, value) in proxy_helper_envs(profile) {
         command.env(name, value);
     }
+    if let Some(password) = jump_sshpass_password(profile) {
+        command.env("SSHPASS", password);
+    }
 }
 
 pub(crate) fn apply_proxy_helper_env_pty(command: &mut CommandBuilder, profile: &SshProfile) {
     for (name, value) in proxy_helper_envs(profile) {
         command.env(name, value);
+    }
+    if let Some(password) = jump_sshpass_password(profile) {
+        command.env("SSHPASS", password);
     }
 }
 
@@ -720,6 +725,15 @@ fn collect_proxy_helper_envs(profile: &SshProfile, envs: &mut Vec<(String, Strin
     }
     if let Some(jump) = profile.jump.as_deref() {
         collect_proxy_helper_envs(jump, envs);
+    }
+}
+
+fn jump_sshpass_password(profile: &SshProfile) -> Option<&str> {
+    let jump = profile.jump.as_deref()?;
+    if should_use_sshpass(jump) {
+        Some(jump.password.as_str())
+    } else {
+        jump_sshpass_password(jump)
     }
 }
 

@@ -869,8 +869,8 @@ async fn run_redis_cli_with_mode(
         db
     );
     if !password.is_empty() {
-        base.push_str(&format!(" -a {} --no-auth-warning", shell_quote(&password)));
-        ps_base.push_str(&format!(" -a {} --no-auth-warning", ps_quote(&password)));
+        base = format!("REDISCLI_AUTH={} {base}", shell_quote(&password));
+        ps_base = format!("$env:REDISCLI_AUTH = {}; {ps_base}", ps_quote(&password));
     }
     for arg in command_args {
         base.push(' ');
@@ -1513,7 +1513,7 @@ async fn run_mysql_cli(
         shell_quote(&user)
     );
     if !password.is_empty() {
-        command.push_str(&format!(" --password={}", shell_quote(&password)));
+        command = format!("MYSQL_PWD={} {command}", shell_quote(&password));
     }
     if !database.is_empty() {
         command.push(' ');
