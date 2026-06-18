@@ -177,11 +177,23 @@ for (const expected of [
   'TAURI_UPDATER_PUBLIC_KEY is required',
   'node scripts/set-release-version.cjs "${VERSION}" --check',
   'node .github/scripts/generate-tauri-updater-manifest.js artifacts artifacts/latest.json',
+  'src-tauri/target/*/release/bundle/**/*.exe',
+  'if-no-files-found: error',
+  'artifacts/**/*.AppImage.tar.gz',
   'artifacts/**/*.sig',
   'artifacts/latest.json',
 ]) {
   assert.ok(releaseWorkflow.includes(expected), `release workflow must include ${expected}`);
 }
+
+assert.ok(
+  !/^\s*artifacts\/\*\*\/\*\.tar\.gz\s*$/m.test(releaseWorkflow),
+  'release workflow must not upload generic tar.gz patterns that overlap app/AppImage archives',
+);
+assert.ok(
+  !/^\s*artifacts\/latest\.json\s*$/m.test(releaseWorkflow),
+  'release workflow must not upload latest.json twice',
+);
 
 assert.match(versionSyncScript, /updateJsonVersion\('package\.json'\)/);
 assert.match(versionSyncScript, /updateJsonVersion\('src-tauri\/tauri\.conf\.json'\)/);

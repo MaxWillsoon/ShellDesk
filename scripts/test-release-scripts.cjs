@@ -88,8 +88,14 @@ try {
   const releaseWorkflow = fs.readFileSync(path.join(repoRoot, '.github/workflows/release.yml'), 'utf8');
   assert.match(releaseWorkflow, /artifacts\/\*\*\/\*\.exe/);
   assert.match(releaseWorkflow, /artifacts\/\*\*\/\*\.app\.tar\.gz/);
+  assert.match(releaseWorkflow, /artifacts\/\*\*\/\*\.AppImage\.tar\.gz/);
   assert.match(releaseWorkflow, /artifacts\/\*\*\/\*\.AppImage/);
   assert.match(releaseWorkflow, /artifacts\/\*\*\/\*\.json/);
+  assert.match(releaseWorkflow, /src-tauri\/target\/\*\/release\/bundle\/\*\*\/\*\.exe/);
+  assert.match(releaseWorkflow, /if-no-files-found: error/);
+  assert.doesNotMatch(releaseWorkflow, /^\s*artifacts\/\*\*\/\*\.tar\.gz\s*$/m);
+  assert.doesNotMatch(releaseWorkflow, /^\s*artifacts\/\*\*\/\*\.app\.tar\.gz\.sig\s*$/m);
+  assert.doesNotMatch(releaseWorkflow, /^\s*artifacts\/latest\.json\s*$/m);
   assert.match(releaseWorkflow, /name: windows-arm64/);
   assert.match(releaseWorkflow, /pack_script: pack:win-arm64/);
   assert.match(releaseWorkflow, /rust_target: aarch64-pc-windows-msvc/);
