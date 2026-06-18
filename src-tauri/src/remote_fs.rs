@@ -735,10 +735,7 @@ fn sanitize_local_file_name(file_name: &str, fallback: &str) -> String {
 }
 
 fn upload_remote_name(item: &Value, local_path: &Path) -> String {
-    let fallback_name = local_path
-        .file_name()
-        .map(|value| value.to_string_lossy().to_string())
-        .unwrap_or_else(|| "upload".to_string());
+    let fallback_name = remote_file_name(&local_path.to_string_lossy(), "upload");
     let raw_name = item
         .get("remoteName")
         .and_then(Value::as_str)
