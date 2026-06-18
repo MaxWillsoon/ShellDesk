@@ -1,0 +1,99 @@
+use crate::{browser_proxy, proxy::SshProxyConfig, terminal, updater::update_status, zmodem};
+use serde_json::Value;
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    process::Child as StdChild,
+    sync::{Arc, Mutex},
+};
+use tokio::sync::oneshot;
+
+#[derive(Clone)]
+pub(crate) struct AppState {
+    pub(crate) data_dir: PathBuf,
+    pub(crate) connections: Arc<Mutex<HashMap<String, ActiveConnection>>>,
+    pub(crate) terminals: Arc<Mutex<HashMap<String, terminal::TerminalSession>>>,
+    pub(crate) vnc_proxies: Arc<Mutex<HashMap<String, VncProxySession>>>,
+    pub(crate) browser_proxies: Arc<Mutex<HashMap<String, browser_proxy::BrowserProxySession>>>,
+    pub(crate) transfer_cancellations: Arc<Mutex<HashSet<String>>>,
+    pub(crate) active_transfers: Arc<Mutex<HashMap<String, ActiveTransfer>>>,
+    pub(crate) zmodem_upload_selections: Arc<Mutex<HashMap<String, zmodem::ZmodemUploadSelection>>>,
+    pub(crate) database_sessions: Arc<Mutex<HashMap<String, Value>>>,
+    pub(crate) update_state: Arc<Mutex<Value>>,
+    pub(crate) sync_schedule_generation: Arc<Mutex<u64>>,
+    pub(crate) ui_window: Arc<Mutex<Option<tauri::Window>>>,
+    pub(crate) host_key_responses: Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>,
+    pub(crate) keyboard_interactive_responses: Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>,
+}
+
+impl AppState {
+    pub(crate) fn new(data_dir: PathBuf) -> Self {
+        Self {
+            update_state: Arc::new(Mutex::new(update_status("idle", &data_dir, "1.0.0", None))),
+            data_dir,
+            connections: Arc::new(Mutex::new(HashMap::new())),
+            terminals: Arc::new(Mutex::new(HashMap::new())),
+            vnc_proxies: Arc::new(Mutex::new(HashMap::new())),
+            browser_proxies: Arc::new(Mutex::new(HashMap::new())),
+            transfer_cancellations: Arc::new(Mutex::new(HashSet::new())),
+            active_transfers: Arc::new(Mutex::new(HashMap::new())),
+            zmodem_upload_selections: Arc::new(Mutex::new(HashMap::new())),
+            database_sessions: Arc::new(Mutex::new(HashMap::new())),
+            sync_schedule_generation: Arc::new(Mutex::new(0)),
+            ui_window: Arc::new(Mutex::new(None)),
+            host_key_responses: Arc::new(Mutex::new(HashMap::new())),
+            keyboard_interactive_responses: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ActiveTransfer {
+    pub(crate) connection_id: String,
+    pub(crate) client_id: Option<String>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ActiveConnection {
+    pub(crate) id: String,
+    pub(crate) kind: ConnectionKind,
+    pub(crate) partition: String,
+    pub(crate) proxy_port: u16,
+    pub(crate) browser_certificate_trust: HashSet<String>,
+    pub(crate) connected_at: String,
+    pub(crate) host: Value,
+    pub(crate) ssh: Option<SshProfile>,
+    pub(crate) privilege: Option<PrivilegeConfig>,
+}
+
+#[derive(Clone)]
+pub(crate) struct SshProfile {
+    pub(crate) address: String,
+    pub(crate) port: u16,
+    pub(crate) username: String,
+    pub(crate) auth_method: String,
+    pub(crate) password: String,
+    pub(crate) key_path: String,
+    pub(crate) known_hosts_path: String,
+    pub(crate) proxy_helper_exe: String,
+    pub(crate) proxy: Option<SshProxyConfig>,
+    pub(crate) jump: Option<Box<SshProfile>>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) enum ConnectionKind {
+    Local,
+    Ssh,
+}
+
+pub(crate) struct VncProxySession {
+    pub(crate) connection_id: String,
+    pub(crate) shutdown: Option<oneshot::Sender<()>>,
+    pub(crate) ssh_forward: Option<StdChild>,
+}
+
+#[derive(Clone)]
+pub(crate) struct PrivilegeConfig {
+    pub(crate) mode: String,
+    pub(crate) password: String,
+}
