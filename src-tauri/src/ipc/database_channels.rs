@@ -12,11 +12,12 @@ pub(crate) fn is_database_channel(channel: &str) -> bool {
 
 pub(crate) async fn dispatch(
     state: &AppState,
+    window: &tauri::Window,
     channel: &str,
     args: Vec<Value>,
 ) -> Option<Result<Value, String>> {
     let result = match channel {
-        "connection:mysql-connect" => database::mysql_connect(state, args).await,
+        "connection:mysql-connect" => database::mysql_connect(state, window, args).await,
         "connection:mysql-disconnect" => {
             database::disconnect_db_session_any(state, args, "mysql").await
         }
@@ -26,7 +27,7 @@ pub(crate) async fn dispatch(
         "connection:mysql-query" => database::mysql_query(state, args).await,
         "connection:mysql-update-cell" => database::mysql_update_cell(state, args).await,
 
-        "connection:postgres-connect" => database::postgres_connect(state, args).await,
+        "connection:postgres-connect" => database::postgres_connect(state, window, args).await,
         "connection:postgres-disconnect" => {
             database::disconnect_db_session_any(state, args, "postgres").await
         }
@@ -36,7 +37,7 @@ pub(crate) async fn dispatch(
         "connection:postgres-columns" => database::postgres_columns(state, args).await,
         "connection:postgres-query" => database::postgres_query(state, args).await,
 
-        "connection:redis-connect" => database::redis_connect(state, args).await,
+        "connection:redis-connect" => database::redis_connect(state, window, args).await,
         "connection:redis-disconnect" => {
             database::disconnect_db_session_any(state, args, "redis").await
         }
@@ -56,7 +57,7 @@ pub(crate) async fn dispatch(
         "connection:sqlite-query" => database::sqlite_query(state, args).await,
         "connection:sqlite-update-cell" => database::sqlite_update_cell(state, args).await,
 
-        "connection:clickhouse-connect" => database::clickhouse_connect(state, args).await,
+        "connection:clickhouse-connect" => database::clickhouse_connect(state, window, args).await,
         "connection:clickhouse-disconnect" => {
             database::disconnect_db_session_any(state, args, "clickhouse").await
         }
@@ -65,7 +66,7 @@ pub(crate) async fn dispatch(
         "connection:clickhouse-columns" => database::clickhouse_columns(state, args).await,
         "connection:clickhouse-query" => database::clickhouse_query(state, args).await,
 
-        "connection:mongo-connect" => database::mongo_connect(state, args).await,
+        "connection:mongo-connect" => database::mongo_connect(state, window, args).await,
         "connection:mongo-disconnect" => {
             database::disconnect_db_session_any(state, args, "mongo").await
         }

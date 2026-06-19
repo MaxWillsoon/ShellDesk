@@ -1,7 +1,8 @@
 use crate::{
     error_string, get_connection, now, random_id,
     ssh_tunnel::{
-        config_from_connection, create_tunnel, SshTunnel, SshTunnelConfig, SshTunnelError,
+        config_from_connection_with_window, create_tunnel, SshTunnel, SshTunnelConfig,
+        SshTunnelError,
     },
     string_arg, AppState, ConnectionKind,
 };
@@ -302,7 +303,7 @@ struct MongoConnectConfig {
 }
 
 fn default_mode() -> String {
-    "cli".to_string()
+    "auto".to_string()
 }
 
 fn default_host() -> String {
@@ -388,7 +389,11 @@ pub(crate) async fn disconnect(
     Ok(json!(true))
 }
 
-pub(crate) async fn mysql_connect(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+pub(crate) async fn mysql_connect(
+    state: &AppState,
+    window: &tauri::Window,
+    args: Vec<Value>,
+) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let config_value = args.get(1).cloned().unwrap_or_else(|| json!({}));
     let config: MysqlConnectConfig = serde_json::from_value(config_value)
@@ -415,7 +420,8 @@ pub(crate) async fn mysql_connect(state: &AppState, args: Vec<Value>) -> Result<
             "direct",
         )
     } else {
-        let tunnel_config = tunnel_config_from_options(state, &connection_id, &tunnel_options)?;
+        let tunnel_config =
+            tunnel_config_from_options(state, window, &connection_id, &tunnel_options).await?;
         let tunnel = create_tunnel(tunnel_config)
             .await
             .map_err(|error| error.user_message())?;
@@ -582,7 +588,11 @@ pub(crate) async fn mysql_update_cell(state: &AppState, args: Vec<Value>) -> Res
     Ok(json!({ "affectedRows": result.rows_affected() }))
 }
 
-pub(crate) async fn postgres_connect(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+pub(crate) async fn postgres_connect(
+    state: &AppState,
+    window: &tauri::Window,
+    args: Vec<Value>,
+) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let config_value = args.get(1).cloned().unwrap_or_else(|| json!({}));
     let config: PostgresConnectConfig = serde_json::from_value(config_value)
@@ -609,7 +619,8 @@ pub(crate) async fn postgres_connect(state: &AppState, args: Vec<Value>) -> Resu
             "direct",
         )
     } else {
-        let tunnel_config = tunnel_config_from_options(state, &connection_id, &tunnel_options)?;
+        let tunnel_config =
+            tunnel_config_from_options(state, window, &connection_id, &tunnel_options).await?;
         let tunnel = create_tunnel(tunnel_config)
             .await
             .map_err(|error| error.user_message())?;
@@ -756,7 +767,11 @@ pub(crate) async fn postgres_query(state: &AppState, args: Vec<Value>) -> Result
     Ok(rows_to_json_pg(rows))
 }
 
-pub(crate) async fn redis_connect(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+pub(crate) async fn redis_connect(
+    state: &AppState,
+    window: &tauri::Window,
+    args: Vec<Value>,
+) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let config_value = args.get(1).cloned().unwrap_or_else(|| json!({}));
     let config: RedisConnectConfig = serde_json::from_value(config_value)
@@ -780,7 +795,8 @@ pub(crate) async fn redis_connect(state: &AppState, args: Vec<Value>) -> Result<
             "direct",
         )
     } else {
-        let tunnel_config = tunnel_config_from_options(state, &connection_id, &tunnel_options)?;
+        let tunnel_config =
+            tunnel_config_from_options(state, window, &connection_id, &tunnel_options).await?;
         let tunnel = create_tunnel(tunnel_config)
             .await
             .map_err(|error| error.user_message())?;
@@ -812,6 +828,7 @@ pub(crate) async fn redis_connect(state: &AppState, args: Vec<Value>) -> Result<
 
 pub(crate) async fn clickhouse_connect(
     state: &AppState,
+    window: &tauri::Window,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
@@ -841,7 +858,8 @@ pub(crate) async fn clickhouse_connect(
             "direct",
         )
     } else {
-        let tunnel_config = tunnel_config_from_options(state, &connection_id, &tunnel_options)?;
+        let tunnel_config =
+            tunnel_config_from_options(state, window, &connection_id, &tunnel_options).await?;
         let tunnel = create_tunnel(tunnel_config)
             .await
             .map_err(|error| error.user_message())?;
@@ -928,7 +946,11 @@ pub(crate) async fn clickhouse_query(state: &AppState, args: Vec<Value>) -> Resu
     clickhouse_query_sql(state, &args, &sql, database).await
 }
 
-pub(crate) async fn mongo_connect(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+pub(crate) async fn mongo_connect(
+    state: &AppState,
+    window: &tauri::Window,
+    args: Vec<Value>,
+) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let config_value = args.get(1).cloned().unwrap_or_else(|| json!({}));
     let config: MongoConnectConfig = serde_json::from_value(config_value)
@@ -952,7 +974,8 @@ pub(crate) async fn mongo_connect(state: &AppState, args: Vec<Value>) -> Result<
             "direct",
         )
     } else {
-        let tunnel_config = tunnel_config_from_options(state, &connection_id, &tunnel_options)?;
+        let tunnel_config =
+            tunnel_config_from_options(state, window, &connection_id, &tunnel_options).await?;
         let tunnel = create_tunnel(tunnel_config)
             .await
             .map_err(|error| error.user_message())?;
@@ -1642,7 +1665,7 @@ fn pg_row_to_json(row: PgRow) -> Value {
 }
 
 async fn fetch_mysql_rows_limited(pool: &MySqlPool, sql: &str) -> Result<Vec<MySqlRow>, String> {
-    let mut stream = sqlx::query(sql).fetch_many(pool);
+    let mut stream = sqlx::raw_sql(sql).fetch_many(pool);
     let mut rows = Vec::new();
     while let Some(result) = stream
         .try_next()
@@ -1660,7 +1683,7 @@ async fn fetch_mysql_rows_limited(pool: &MySqlPool, sql: &str) -> Result<Vec<MyS
 }
 
 async fn fetch_pg_rows_limited(pool: &PgPool, sql: &str) -> Result<Vec<PgRow>, String> {
-    let mut stream = sqlx::query(sql).fetch_many(pool);
+    let mut stream = sqlx::raw_sql(sql).fetch_many(pool);
     let mut rows = Vec::new();
     while let Some(result) = stream
         .try_next()
@@ -1725,8 +1748,9 @@ fn pg_value_to_json(row: &PgRow, index: usize, type_name: &str) -> Value {
     json!(format!("<unsupported:{type_name}>"))
 }
 
-fn tunnel_config_from_options(
+async fn tunnel_config_from_options(
     state: &AppState,
+    window: &tauri::Window,
     connection_id: &str,
     options: &TunnelOptions,
 ) -> Result<SshTunnelConfig, String> {
@@ -1743,13 +1767,15 @@ fn tunnel_config_from_options(
         "sshKeyPath": options.ssh_key_path.as_deref().unwrap_or(""),
         "knownHostsPath": options.known_hosts_path.as_deref().unwrap_or("")
     });
-    config_from_connection(
+    config_from_connection_with_window(
         state,
+        window,
         connection_id,
         &options.remote_host,
         options.remote_port,
         Some(&overrides),
     )
+    .await
 }
 
 fn validate_database_endpoint(host: &str, port: u16) -> Result<(), String> {

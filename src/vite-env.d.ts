@@ -783,7 +783,7 @@ interface ShellDeskConnectionControls {
   postgresTables: (connectionId: string, postgresId: string, schema: string) => Promise<ShellDeskPostgresTable[]>;
   postgresColumns: (connectionId: string, postgresId: string, schema: string, table: string) => Promise<ShellDeskPostgresColumn[]>;
   postgresQuery: (connectionId: string, postgresId: string, sql: string) => Promise<ShellDeskPostgresQueryResult>;
-  mongoConnect: (connectionId: string, config: ShellDeskMongoConnectConfig) => Promise<{ mongoId: string; alreadyConnected?: boolean }>;
+  mongoConnect: (connectionId: string, config: ShellDeskMongoConnectConfig) => Promise<ShellDeskMongoConnectResult>;
   mongoDisconnect: (connectionId: string, mongoId: string) => Promise<boolean>;
   mongoDatabases: (connectionId: string, mongoId: string) => Promise<ShellDeskMongoDatabase[]>;
   mongoCollections: (connectionId: string, mongoId: string, database: string) => Promise<ShellDeskMongoCollection[]>;
@@ -818,7 +818,7 @@ interface ShellDeskConnectionControls {
   ) => Promise<{ affectedRows: number }>;
 }
 
-type ShellDeskDatabaseTransportMode = 'cli' | 'tunnel';
+type ShellDeskDatabaseTransportMode = 'auto' | 'cli' | 'tunnel';
 type ShellDeskDatabaseTransport = 'ssh-tunnel' | 'ssh-exec' | 'direct';
 
 interface ShellDeskDatabaseTunnelConfig {
@@ -951,12 +951,20 @@ interface ShellDeskPostgresQueryResult {
 }
 
 interface ShellDeskMongoConnectConfig {
+  mode?: ShellDeskDatabaseTransportMode;
   host?: string;
   port?: number;
   username?: string;
   password?: string;
   authSource?: string;
+  tunnel?: ShellDeskDatabaseTunnelConfig;
   mongoId?: string;
+}
+
+interface ShellDeskMongoConnectResult {
+  mongoId: string;
+  alreadyConnected?: boolean;
+  transport?: ShellDeskDatabaseTransport;
 }
 
 interface ShellDeskMongoDatabase {

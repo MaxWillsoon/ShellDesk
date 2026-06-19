@@ -422,6 +422,7 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
 
     try {
       const result = await api.connections.clickhouseConnect(connectionId, {
+        mode: 'auto',
         host: host || '127.0.0.1',
         port: displayPort,
         user: user || 'default',
@@ -470,9 +471,11 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
       setMessage({
         type: 'success',
         text: tCurrent('clickhouse.connection.success', {
-          transport: result.transport === 'ssh-exec'
-            ? tCurrent('clickhouse.connection.transportProxy')
-            : tCurrent('clickhouse.connection.transportTunnel'),
+          transport: result.transport === 'direct'
+            ? tCurrent('db.transport.direct')
+            : result.transport === 'ssh-exec'
+              ? tCurrent('clickhouse.connection.transportProxy')
+              : tCurrent('clickhouse.connection.transportTunnel'),
           user: user || 'default',
           host: host || '127.0.0.1',
           port: displayPort,

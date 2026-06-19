@@ -445,6 +445,69 @@ fn ensure_ssh_host_key_trusted<'a>(
     })
 }
 
+pub(crate) async fn ensure_ssh_profile_host_key_trusted(
+    state: &AppState,
+    window: &tauri::Window,
+    profile: &mut SshProfile,
+) -> Result<(), String> {
+    ensure_ssh_host_key_trusted(state, window, profile).await
+}
+
+pub(crate) async fn confirm_ssh_host_public_key_trusted(
+    state: &AppState,
+    window: &tauri::Window,
+    hostname: &str,
+    port: u16,
+    username: &str,
+    public_key: &str,
+) -> Result<bool, String> {
+    let store = read_store(state)?;
+    let known_hosts = store
+        .get("knownHosts")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let scanned = scanned_host_key_from_public_key(public_key)?;
+    let decision = classify_scanned_host_key(&known_hosts, hostname, port, &scanned);
+    match decision
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+    {
+        "trusted" => Ok(true),
+        "unknown" | "changed" => {
+            let profile = SshProfile {
+                address: hostname.to_string(),
+                port,
+                username: username.to_string(),
+                auth_method: String::new(),
+                password: String::new(),
+                key_path: String::new(),
+                known_hosts_path: String::new(),
+                proxy_helper_exe: String::new(),
+                proxy: None,
+                jump: None,
+            };
+            let response =
+                request_host_key_decision(state, window, &profile, &scanned, &decision).await?;
+            let accept = response
+                .get("accept")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if accept
+                && response
+                    .get("addToKnownHosts")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            {
+                upsert_known_host_from_scan(state, &profile, &scanned, &decision)?;
+            }
+            Ok(accept)
+        }
+        _ => Ok(false),
+    }
+}
+
 async fn ensure_direct_ssh_host_key_trusted(
     state: &AppState,
     window: &tauri::Window,
@@ -584,13 +647,7 @@ async fn scan_ssh_host_key(
             format!("未能扫描 SSH 主机密钥：{stderr}")
         });
     };
-    let key_type = public_key.split_whitespace().next().unwrap_or("unknown");
-    let fingerprint = fingerprint_from_public_key(&public_key)?;
-    Ok(json!({
-        "keyType": key_type,
-        "publicKey": public_key,
-        "fingerprint": fingerprint
-    }))
+    scanned_host_key_from_public_key(&public_key)
 }
 
 async fn scan_ssh_host_key_via_jump(
@@ -626,8 +683,16 @@ async fn scan_ssh_host_key_via_jump(
             format!("未能通过跳板机读取目标主机 SSH 公钥：{stderr}")
         });
     };
+    scanned_host_key_from_public_key(&public_key)
+}
+
+fn scanned_host_key_from_public_key(public_key: &str) -> Result<Value, String> {
+    let public_key = public_key.trim();
+    if public_key.is_empty() {
+        return Err("SSH 主机公钥为空。".to_string());
+    }
     let key_type = public_key.split_whitespace().next().unwrap_or("unknown");
-    let fingerprint = fingerprint_from_public_key(&public_key)?;
+    let fingerprint = fingerprint_from_public_key(public_key)?;
     Ok(json!({
         "keyType": key_type,
         "publicKey": public_key,

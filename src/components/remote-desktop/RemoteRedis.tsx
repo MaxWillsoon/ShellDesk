@@ -2,7 +2,6 @@ import { type KeyboardEvent, useCallback, useMemo, useRef, useState, useEffect }
 import { createPortal } from 'react-dom';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
-import { DatabaseTunnelFields, createDefaultTunnelValue, parseTunnelValue } from './DatabaseTunnelFields';
 import DismissibleAlert from './DismissibleAlert';
 import { loadRemoteConnectionProfile, readProfileString, saveRemoteConnectionProfile } from './remoteConnectionProfiles';
 import { tCurrent } from '../../i18n';
@@ -243,7 +242,6 @@ function RemoteRedis({ connectionId, hostId }: RemoteRedisProps) {
   const [port, setPort] = useState(String(defaultPort));
   const [password, setPassword] = useState('');
   const [dbNum, setDbNum] = useState('0');
-  const [tunnel, setTunnel] = useState(() => createDefaultTunnelValue(defaultPort));
   const [keyPattern, setKeyPattern] = useState('*');
   const [favoritePatterns, setFavoritePatterns] = useState<string[]>(['*', 'session:*', 'user:*']);
   const [keys, setKeys] = useState<RedisKeyEntry[]>([]);
@@ -363,12 +361,11 @@ function RemoteRedis({ connectionId, hostId }: RemoteRedisProps) {
       const nextPort = parseInt(port, 10) || defaultPort;
       const nextDb = parseInt(dbNum, 10) || 0;
       const result = await api.connections.redisConnect(connectionId, {
-        mode: tunnel.enabled ? 'tunnel' : 'cli',
+        mode: 'auto',
         host: host || '127.0.0.1',
         port: nextPort,
         password,
         db: nextDb,
-        tunnel: parseTunnelValue(tunnel, nextPort),
       });
 
       redisIdRef.current = result.redisId;
@@ -398,7 +395,7 @@ function RemoteRedis({ connectionId, hostId }: RemoteRedisProps) {
       setStatus('error');
       setErrorMessage(getErrorMessage(error));
     }
-  }, [api, connectionId, dbNum, host, hostId, password, port, scanKeys, tunnel]);
+  }, [api, connectionId, dbNum, host, hostId, password, port, scanKeys]);
 
   const handleDisconnect = useCallback(async () => {
     if (!api?.connections || !redisId) return;
@@ -633,7 +630,6 @@ function RemoteRedis({ connectionId, hostId }: RemoteRedisProps) {
             <strong>{host || '127.0.0.1'}:{parseInt(port, 10) || defaultPort} · DB {parseInt(dbNum, 10) || 0}</strong>
             <em>{tCurrent('auto.remoteRedis.1urpodq')}</em>
           </div>
-          <DatabaseTunnelFields value={tunnel} defaultPort={defaultPort} onChange={setTunnel} />
           <button type="submit" className="redis-connect-btn" disabled={status === 'connecting'}>
             {status === 'connecting' ? tCurrent('auto.remoteRedis.1i0m8cf') : tCurrent('auto.remoteRedis.fuxatj')}
           </button>

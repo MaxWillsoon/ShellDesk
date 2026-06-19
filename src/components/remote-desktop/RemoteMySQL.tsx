@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import { exportDatabaseRows, type DatabaseExportFormat } from './databaseExport';
-import { DatabaseTunnelFields, createDefaultTunnelValue, parseTunnelValue } from './DatabaseTunnelFields';
 import DismissibleAlert from './DismissibleAlert';
 import { loadRemoteConnectionProfile, readProfileString, saveRemoteConnectionProfile } from './remoteConnectionProfiles';
 import { tCurrent } from '../../i18n';
@@ -192,7 +191,6 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
     password: '',
     initialDatabase: '',
   });
-  const [tunnel, setTunnel] = useState(() => createDefaultTunnelValue(defaultPort));
   const { host, port, user, password, initialDatabase } = connectionForm;
   const updateConnectionFormField = useCallback(<Key extends keyof MysqlConnectionForm,>(
     key: Key,
@@ -408,13 +406,12 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
     try {
       const nextPort = parseInt(port, 10) || defaultPort;
       const result = await api.connections.mysqlConnect(connectionId, {
-        mode: tunnel.enabled ? 'tunnel' : 'cli',
+        mode: 'auto',
         host: host || '127.0.0.1',
         port: nextPort,
         user: user || 'root',
         password,
         database: initialDatabase.trim() || undefined,
-        tunnel: parseTunnelValue(tunnel, nextPort),
       });
 
       setMysqlId(result.mysqlId);
@@ -468,7 +465,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
     } finally {
       setSchemaLoading(false);
     }
-  }, [api, connectionId, host, hostId, initialDatabase, password, port, tunnel, user]);
+  }, [api, connectionId, host, hostId, initialDatabase, password, port, user]);
 
   const handleDisconnect = useCallback(async () => {
     if (!api?.connections || !mysqlId) return;
@@ -934,7 +931,6 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
             <strong>{host || '127.0.0.1'}:{parseInt(port, 10) || defaultPort}</strong>
             <em>{tCurrent('auto.remoteMySQL.rbi1mz')}</em>
           </div>
-          <DatabaseTunnelFields value={tunnel} defaultPort={defaultPort} onChange={setTunnel} />
           <button
             type="submit"
             className="mysql-connect-btn"

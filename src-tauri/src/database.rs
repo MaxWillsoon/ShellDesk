@@ -7,11 +7,49 @@ use crate::{
     run_connection_command, shell_quote, string_arg, AppState, ConnectionKind,
 };
 
-pub(crate) async fn mysql_connect(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+fn database_transport_mode(config: &Value) -> String {
+    config
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("auto")
+        .trim()
+        .to_ascii_lowercase()
+}
+
+fn should_try_database_tunnel(
+    state: &AppState,
+    connection_id: &str,
+    config: &Value,
+) -> Result<bool, String> {
+    let mode = database_transport_mode(config);
+    if crate::database_tunnel::is_tunnel_mode(config) {
+        return Ok(true);
+    }
+    if mode == "cli" {
+        return Ok(false);
+    }
+    Ok(get_connection(state, connection_id)?.kind != ConnectionKind::Local)
+}
+
+fn should_fallback_to_database_cli(config: &Value) -> bool {
+    database_transport_mode(config) != "tunnel"
+}
+
+pub(crate) async fn mysql_connect(
+    state: &AppState,
+    window: &tauri::Window,
+    args: Vec<Value>,
+) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let config = args.get(1).cloned().unwrap_or_else(|| json!({}));
-    if crate::database_tunnel::is_tunnel_mode(&config) {
-        return crate::database_tunnel::mysql_connect(state, args).await;
+    if should_try_database_tunnel(state, &connection_id, &config)? {
+        match crate::database_tunnel::mysql_connect(state, window, args.clone()).await {
+            Ok(result) => return Ok(result),
+            Err(error) if should_fallback_to_database_cli(&config) => {
+                eprintln!("[database] MySQL SSH tunnel unavailable, falling back to CLI: {error}");
+            }
+            Err(error) => return Err(error),
+        }
     }
     let mysql_id = encode_config_id("mysql", &config)?;
     let _ = run_mysql_cli(state, &connection_id, &config, "SELECT 1 AS ok;", None).await?;
@@ -320,11 +358,23 @@ pub(crate) async fn mysql_update_cell(state: &AppState, args: Vec<Value>) -> Res
     Ok(json!({ "affectedRows": affected_rows }))
 }
 
-pub(crate) async fn postgres_connect(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+pub(crate) async fn postgres_connect(
+    state: &AppState,
+    window: &tauri::Window,
+    args: Vec<Value>,
+) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let config = args.get(1).cloned().unwrap_or_else(|| json!({}));
-    if crate::database_tunnel::is_tunnel_mode(&config) {
-        return crate::database_tunnel::postgres_connect(state, args).await;
+    if should_try_database_tunnel(state, &connection_id, &config)? {
+        match crate::database_tunnel::postgres_connect(state, window, args.clone()).await {
+            Ok(result) => return Ok(result),
+            Err(error) if should_fallback_to_database_cli(&config) => {
+                eprintln!(
+                    "[database] PostgreSQL SSH tunnel unavailable, falling back to CLI: {error}"
+                );
+            }
+            Err(error) => return Err(error),
+        }
     }
     let postgres_id = encode_config_id("postgres", &config)?;
     let _ = run_postgres_cli(state, &connection_id, &config, "SELECT 1 AS ok;").await?;
@@ -499,11 +549,21 @@ async fn run_postgres_cli(
     .await
 }
 
-pub(crate) async fn redis_connect(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+pub(crate) async fn redis_connect(
+    state: &AppState,
+    window: &tauri::Window,
+    args: Vec<Value>,
+) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let config = args.get(1).cloned().unwrap_or_else(|| json!({}));
-    if crate::database_tunnel::is_tunnel_mode(&config) {
-        return crate::database_tunnel::redis_connect(state, args).await;
+    if should_try_database_tunnel(state, &connection_id, &config)? {
+        match crate::database_tunnel::redis_connect(state, window, args.clone()).await {
+            Ok(result) => return Ok(result),
+            Err(error) if should_fallback_to_database_cli(&config) => {
+                eprintln!("[database] Redis SSH tunnel unavailable, falling back to CLI: {error}");
+            }
+            Err(error) => return Err(error),
+        }
     }
     let redis_id = encode_config_id("redis", &config)?;
     let _ = run_redis_cli(state, &connection_id, &config, &["PING".to_string()]).await?;
@@ -1212,12 +1272,21 @@ fn sqlite_use_windows_command(connection: &crate::ActiveConnection) -> bool {
 
 pub(crate) async fn clickhouse_connect(
     state: &AppState,
+    window: &tauri::Window,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let config = args.get(1).cloned().unwrap_or_else(|| json!({}));
-    if crate::database_tunnel::is_tunnel_mode(&config) {
-        return crate::database_tunnel::clickhouse_connect(state, args).await;
+    if should_try_database_tunnel(state, &connection_id, &config)? {
+        match crate::database_tunnel::clickhouse_connect(state, window, args.clone()).await {
+            Ok(result) => return Ok(result),
+            Err(error) if should_fallback_to_database_cli(&config) => {
+                eprintln!(
+                    "[database] ClickHouse SSH tunnel unavailable, falling back to CLI: {error}"
+                );
+            }
+            Err(error) => return Err(error),
+        }
     }
     let clickhouse_id = encode_config_id("clickhouse", &config)?;
     let _ = run_clickhouse_query(state, &connection_id, &config, "SELECT 1 AS ok", None).await?;
@@ -1438,11 +1507,23 @@ fn parse_clickhouse_response(output: &str) -> Value {
     })
 }
 
-pub(crate) async fn mongo_connect(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+pub(crate) async fn mongo_connect(
+    state: &AppState,
+    window: &tauri::Window,
+    args: Vec<Value>,
+) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let config = args.get(1).cloned().unwrap_or_else(|| json!({}));
-    if crate::database_tunnel::is_tunnel_mode(&config) {
-        return crate::database_tunnel::mongo_connect(state, args).await;
+    if should_try_database_tunnel(state, &connection_id, &config)? {
+        match crate::database_tunnel::mongo_connect(state, window, args.clone()).await {
+            Ok(result) => return Ok(result),
+            Err(error) if should_fallback_to_database_cli(&config) => {
+                eprintln!(
+                    "[database] MongoDB SSH tunnel unavailable, falling back to CLI: {error}"
+                );
+            }
+            Err(error) => return Err(error),
+        }
     }
     let mongo_id = encode_config_id("mongo", &config)?;
     let _ = run_mongo_eval(

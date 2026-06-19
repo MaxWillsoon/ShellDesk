@@ -2,7 +2,6 @@ import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState }
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import { exportDatabaseRows, type DatabaseExportFormat } from './databaseExport';
-import { DatabaseTunnelFields, createDefaultTunnelValue, parseTunnelValue } from './DatabaseTunnelFields';
 import DismissibleAlert from './DismissibleAlert';
 import { loadRemoteConnectionProfile, readProfileString, saveRemoteConnectionProfile } from './remoteConnectionProfiles';
 import { tCurrent } from '../../i18n';
@@ -79,7 +78,6 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
   const [user, setUser] = useState('postgres');
   const [password, setPassword] = useState('');
   const [database, setDatabase] = useState('postgres');
-  const [tunnel, setTunnel] = useState(() => createDefaultTunnelValue(defaultPort));
   const [databases, setDatabases] = useState<string[]>([]);
   const [schemas, setSchemas] = useState<string[]>([]);
   const [expandedSchemas, setExpandedSchemas] = useState<Set<string>>(new Set());
@@ -171,13 +169,12 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
       const nextPort = Number.parseInt(port, 10) || defaultPort;
       const nextDb = database || 'postgres';
       const result = await api.postgresConnect(connectionId, {
-        mode: tunnel.enabled ? 'tunnel' : 'cli',
+        mode: 'auto',
         host: host || '127.0.0.1',
         port: nextPort,
         user,
         password,
         database: nextDb,
-        tunnel: parseTunnelValue(tunnel, nextPort),
       });
       postgresIdRef.current = result.postgresId;
       setPostgresId(result.postgresId);
@@ -370,7 +367,6 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
               <label><span>{tCurrent('auto.remotePostgres.tnjvy8')}</span><input value={database} onChange={(event) => setDatabase(event.target.value)} /></label>
               <label className="wide"><span>{tCurrent('auto.remotePostgres.1aph6eg')}</span><input value={password} type="password" onChange={(event) => setPassword(event.target.value)} /></label>
             </div>
-            <DatabaseTunnelFields value={tunnel} defaultPort={defaultPort} onChange={setTunnel} />
             <button type="button" className="postgres-connect-btn" onClick={connect} disabled={status === 'connecting'}>
               {status === 'connecting' ? tCurrent('auto.remotePostgres.h7vocz') : tCurrent('auto.remotePostgres.8l8re4')}
             </button>

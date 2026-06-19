@@ -19,6 +19,7 @@ interface SelectedMongoCollection {
 }
 
 const defaultLimit = 100;
+const defaultMongoPort = 27017;
 
 function formatBytes(value?: number) {
   if (!value || value < 0) return '0 B';
@@ -81,7 +82,7 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
   const [notice, setNotice] = useState('');
   const [mongoId, setMongoId] = useState('');
   const [host, setHost] = useState('127.0.0.1');
-  const [port, setPort] = useState('27017');
+  const [port, setPort] = useState(String(defaultMongoPort));
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [authSource, setAuthSource] = useState('admin');
@@ -200,9 +201,11 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
     setNotice('');
 
     try {
+      const nextPort = Number.parseInt(port, 10) || defaultMongoPort;
       const result = await api.mongoConnect(connectionId, {
+        mode: 'auto',
         host,
-        port: Number.parseInt(port, 10) || 27017,
+        port: nextPort,
         username,
         password,
         authSource,
@@ -212,14 +215,19 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
       setMongoId(result.mongoId);
       void saveRemoteConnectionProfile(hostId, 'mongo', {
         host: host || '127.0.0.1',
-        port: String(Number.parseInt(port, 10) || 27017),
+        port: String(nextPort),
         username,
         password,
         authSource: authSource || 'admin',
       }).catch(() => undefined);
       await loadDatabases(result.mongoId);
       setStatus('connected');
-      setNotice(result.alreadyConnected ? tCurrent('auto.remoteMongo.ghif5z') : tCurrent('auto.remoteMongo.1jlva9o'));
+      const transport = result.transport === 'direct'
+        ? tCurrent('db.transport.direct')
+        : result.transport === 'ssh-exec'
+          ? tCurrent('db.transport.remoteTcpProxy')
+          : tCurrent('db.transport.sshTunnel');
+      setNotice(result.alreadyConnected ? tCurrent('auto.remoteMongo.ghif5z') : `${tCurrent('auto.remoteMongo.1jlva9o')} (${transport})`);
     } catch (error) {
       setStatus('error');
       setError(getErrorMessage(error));
@@ -392,7 +400,6 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
                 <input value={authSource} onChange={(event) => setAuthSource(event.target.value)} placeholder="admin" />
               </label>
             </div>
-
             {error ? <DismissibleAlert className="mongo-alert danger" onDismiss={() => setError('')} role="alert">{error}</DismissibleAlert> : null}
             {notice ? <DismissibleAlert className="mongo-alert info" onDismiss={() => setNotice('')}>{notice}</DismissibleAlert> : null}
 

@@ -14,7 +14,7 @@ pub(crate) async fn dispatch(
     args: Vec<Value>,
 ) -> Option<Result<Value, String>> {
     if database_channels::is_database_channel(channel) {
-        return database_channels::dispatch(state, channel, args).await;
+        return database_channels::dispatch(state, &window, channel, args).await;
     }
 
     let result = match channel {

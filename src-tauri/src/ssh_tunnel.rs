@@ -22,8 +22,10 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    error_string, get_connection, prevent_tokio_process_window, proxy::SshProxyConfig, shell_quote,
-    AppState, ConnectionKind, SshProfile,
+    connection::{confirm_ssh_host_public_key_trusted, ensure_ssh_profile_host_key_trusted},
+    error_string, get_connection, prevent_tokio_process_window,
+    proxy::SshProxyConfig,
+    shell_quote, AppState, ConnectionKind, SshProfile,
 };
 use serde_json::Value;
 
@@ -37,6 +39,10 @@ pub(crate) struct SshTunnelConfig {
     pub(crate) ssh_key_path: Option<String>,
     pub(crate) ssh_key_passphrase: Option<String>,
     pub(crate) known_hosts_path: Option<String>,
+    #[serde(skip)]
+    pub(crate) trust_state: Option<AppState>,
+    #[serde(skip)]
+    pub(crate) trust_window: Option<tauri::Window>,
     #[serde(skip)]
     pub(crate) proxy_helper_exe: String,
     #[serde(skip)]
@@ -66,6 +72,14 @@ impl fmt::Debug for SshTunnelConfig {
                 &self.ssh_key_passphrase.as_ref().map(|_| "<redacted>"),
             )
             .field("known_hosts_path", &self.known_hosts_path)
+            .field(
+                "trust_state",
+                &self.trust_state.as_ref().map(|_| "<available>"),
+            )
+            .field(
+                "trust_window",
+                &self.trust_window.as_ref().map(|_| "<available>"),
+            )
             .field("proxy_helper_exe", &self.proxy_helper_exe)
             .field("proxy", &self.proxy)
             .field("jump", &self.jump)
@@ -197,7 +211,10 @@ impl SshTunnel {
 struct TunnelHandler {
     host: String,
     port: u16,
+    username: String,
     known_hosts_path: Option<String>,
+    trust_state: Option<AppState>,
+    trust_window: Option<tauri::Window>,
 }
 
 impl client::Handler for TunnelHandler {
@@ -207,29 +224,67 @@ impl client::Handler for TunnelHandler {
         &mut self,
         server_public_key: &russh::keys::PublicKey,
     ) -> Result<bool, Self::Error> {
-        let Some(path) = self
+        if let Some(path) = self
             .known_hosts_path
             .as_deref()
             .filter(|value| !value.trim().is_empty())
-        else {
+        {
+            match russh::keys::check_known_hosts_path(
+                &self.host,
+                self.port,
+                server_public_key,
+                path,
+            ) {
+                Ok(true) => return Ok(true),
+                Ok(false) => {
+                    eprintln!(
+                        "[ssh-tunnel] host key is not trusted for {}:{}",
+                        self.host, self.port
+                    );
+                }
+                Err(error) => {
+                    eprintln!(
+                        "[ssh-tunnel] host key verification failed for {}:{}: {}",
+                        self.host, self.port, error
+                    );
+                }
+            }
+        } else {
             eprintln!(
                 "[ssh-tunnel] known_hosts path is empty for {}:{}",
                 self.host, self.port
             );
+        }
+
+        let (Some(state), Some(window)) = (self.trust_state.as_ref(), self.trust_window.as_ref())
+        else {
             return Ok(false);
         };
-        match russh::keys::check_known_hosts_path(&self.host, self.port, server_public_key, path) {
-            Ok(true) => Ok(true),
-            Ok(false) => {
-                eprintln!(
-                    "[ssh-tunnel] host key is not trusted for {}:{}",
-                    self.host, self.port
-                );
-                Ok(false)
-            }
+        let public_key = match server_public_key.to_openssh() {
+            Ok(value) => value,
             Err(error) => {
                 eprintln!(
-                    "[ssh-tunnel] host key verification failed for {}:{}: {}",
+                    "[ssh-tunnel] failed to encode host key for {}:{}: {}",
+                    self.host, self.port, error
+                );
+                return Ok(false);
+            }
+        };
+        match confirm_ssh_host_public_key_trusted(
+            state,
+            window,
+            &self.host,
+            self.port,
+            &self.username,
+            &public_key,
+        )
+        .await
+        {
+            Ok(true) => Ok(true),
+            Ok(false) => Ok(false),
+            Err(error) => {
+                eprintln!(
+                    "[ssh-tunnel] host key confirmation failed for {}:{}: {}",
                     self.host, self.port, error
                 );
                 Ok(false)
@@ -319,7 +374,10 @@ async fn connect_profile(
     let handler = TunnelHandler {
         host: config.ssh_host.clone(),
         port: config.ssh_port,
+        username: config.ssh_user.clone(),
         known_hosts_path: config.known_hosts_path.clone(),
+        trust_state: config.trust_state.clone(),
+        trust_window: config.trust_window.clone(),
     };
 
     let transport = open_transport(config, timeout).await?;
@@ -491,13 +549,30 @@ fn network_proxy_command(
 }
 
 fn proxy_command_arg(value: &str) -> String {
-    if value.chars().all(|ch| {
-        ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '/' | ':' | '@' | '%' | '=')
-    }) {
+    let safe_unquoted = value.chars().all(|ch| {
+        ch.is_ascii_alphanumeric()
+            || matches!(ch, '.' | '_' | '-' | '/' | ':' | '@' | '=')
+            || (!cfg!(windows) && ch == '%')
+    });
+    if safe_unquoted {
         value.to_string()
+    } else if cfg!(windows) {
+        cmd_quote(value)
     } else {
         shell_quote(value)
     }
+}
+
+fn cmd_quote(value: &str) -> String {
+    let escaped = value
+        .replace('%', "%%")
+        .replace('"', "\\\"")
+        .replace('^', "^^")
+        .replace('&', "^&")
+        .replace('|', "^|")
+        .replace('<', "^<")
+        .replace('>', "^>");
+    format!("\"{escaped}\"")
 }
 
 enum TunnelTransport {
@@ -602,30 +677,31 @@ impl AsyncWrite for TunnelTransport {
     }
 }
 
-pub(crate) fn config_from_connection(
+pub(crate) async fn config_from_connection_with_window(
     state: &AppState,
+    window: &tauri::Window,
     connection_id: &str,
     remote_host: &str,
     remote_port: u16,
     overrides: Option<&Value>,
 ) -> Result<SshTunnelConfig, String> {
     let connection = get_connection(state, connection_id)?;
-    let local_profile;
+    let mut local_profile;
     let profile = if connection.kind == ConnectionKind::Local {
         local_profile = profile_from_overrides(overrides)?;
-        &local_profile
+        &mut local_profile
     } else {
-        connection
+        local_profile = connection
             .ssh
-            .as_ref()
-            .ok_or_else(|| "当前连接缺少 SSH 配置。".to_string())?
+            .clone()
+            .ok_or_else(|| "当前连接缺少 SSH 配置。".to_string())?;
+        &mut local_profile
     };
-    Ok(config_from_profile(
-        profile,
-        remote_host,
-        remote_port,
-        overrides,
-    ))
+    ensure_ssh_profile_host_key_trusted(state, window, profile).await?;
+    let mut config = config_from_profile(profile, remote_host, remote_port, overrides);
+    config.trust_state = Some(state.clone());
+    config.trust_window = Some(window.clone());
+    Ok(config)
 }
 
 fn config_from_profile(
@@ -662,6 +738,8 @@ fn config_from_profile(
         ssh_key_path,
         ssh_key_passphrase,
         known_hosts_path: Some(profile.known_hosts_path.clone()).filter(|value| !value.is_empty()),
+        trust_state: None,
+        trust_window: None,
         proxy_helper_exe: profile.proxy_helper_exe.clone(),
         proxy: profile.proxy.clone(),
         jump: profile.jump.clone(),
