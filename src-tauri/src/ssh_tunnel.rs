@@ -15,6 +15,9 @@ use tokio::{
     task::JoinHandle,
 };
 
+use crate::{get_connection, AppState, ConnectionKind, SshProfile};
+use serde_json::Value;
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SshTunnelConfig {
@@ -254,6 +257,72 @@ pub(crate) async fn create_tunnel(config: SshTunnelConfig) -> Result<SshTunnel, 
         shutdown_tx,
         accept_task,
     })
+}
+
+pub(crate) fn config_from_connection(
+    state: &AppState,
+    connection_id: &str,
+    remote_host: &str,
+    remote_port: u16,
+    overrides: Option<&Value>,
+) -> Result<SshTunnelConfig, String> {
+    let connection = get_connection(state, connection_id)?;
+    if connection.kind != ConnectionKind::Ssh {
+        return Err("SSH 隧道模式需要一个 SSH 连接，本地连接不支持该模式。".to_string());
+    }
+    let profile = connection
+        .ssh
+        .as_ref()
+        .ok_or_else(|| "当前连接缺少 SSH 配置。".to_string())?;
+    if profile.proxy.is_some() || profile.jump.is_some() {
+        return Err("SSH 隧道原生模式暂不支持代理或跳板机连接，请使用 CLI 模式。".to_string());
+    }
+    Ok(config_from_profile(
+        profile,
+        remote_host,
+        remote_port,
+        overrides,
+    ))
+}
+
+fn config_from_profile(
+    profile: &SshProfile,
+    remote_host: &str,
+    remote_port: u16,
+    overrides: Option<&Value>,
+) -> SshTunnelConfig {
+    let ssh_password = if profile.auth_method == "password" {
+        Some(profile.password.clone())
+    } else {
+        None
+    };
+    let ssh_key_path = if profile.auth_method == "key" {
+        Some(profile.key_path.clone())
+    } else {
+        None
+    };
+    let ssh_key_passphrase = if profile.auth_method == "key" && !profile.password.is_empty() {
+        Some(profile.password.clone())
+    } else {
+        None
+    };
+    let connect_timeout_ms = overrides
+        .and_then(|value| value.get("connectTimeoutMs"))
+        .and_then(Value::as_u64)
+        .unwrap_or(15_000);
+
+    SshTunnelConfig {
+        ssh_host: profile.address.clone(),
+        ssh_port: profile.port,
+        ssh_user: profile.username.clone(),
+        ssh_password,
+        ssh_key_path,
+        ssh_key_passphrase,
+        known_hosts_path: Some(profile.known_hosts_path.clone()).filter(|value| !value.is_empty()),
+        remote_host: remote_host.to_string(),
+        remote_port,
+        connect_timeout_ms,
+    }
 }
 
 async fn forward_one(

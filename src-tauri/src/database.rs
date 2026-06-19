@@ -10,6 +10,9 @@ use crate::{
 pub(crate) async fn mysql_connect(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let config = args.get(1).cloned().unwrap_or_else(|| json!({}));
+    if crate::database_tunnel::is_tunnel_mode(&config) {
+        return crate::database_tunnel::mysql_connect(state, args).await;
+    }
     let mysql_id = encode_config_id("mysql", &config)?;
     let _ = run_mysql_cli(state, &connection_id, &config, "SELECT 1 AS ok;", None).await?;
     register_db_session(state, "mysql", &connection_id, &mysql_id, config)?;
@@ -47,6 +50,17 @@ pub(crate) fn disconnect_db_session(
         .map_err(error_string)?
         .remove(&db_session_key(kind, &connection_id, &session_id));
     Ok(json!(true))
+}
+
+pub(crate) async fn disconnect_db_session_any(
+    state: &AppState,
+    args: Vec<Value>,
+    kind: &'static str,
+) -> Result<Value, String> {
+    if crate::database_tunnel::has_session(state, kind, &args)? {
+        return crate::database_tunnel::disconnect(state, args, kind).await;
+    }
+    disconnect_db_session(state, args, kind)
 }
 
 fn decode_active_db_session_args(
@@ -133,6 +147,9 @@ fn parse_csv_objects(output: &str) -> Result<Vec<HashMap<String, String>>, Strin
 }
 
 pub(crate) async fn mysql_databases(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+    if crate::database_tunnel::has_session(state, "mysql", &args)? {
+        return crate::database_tunnel::mysql_databases(state, args).await;
+    }
     let (connection_id, config) = decode_active_db_session_args(state, "mysql", &args, 0, 1)?;
     let output = run_mysql_cli(state, &connection_id, &config, "SHOW DATABASES;", None).await?;
     Ok(json!(parse_tsv_rows(&output)
@@ -143,6 +160,9 @@ pub(crate) async fn mysql_databases(state: &AppState, args: Vec<Value>) -> Resul
 }
 
 pub(crate) async fn mysql_tables(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+    if crate::database_tunnel::has_session(state, "mysql", &args)? {
+        return crate::database_tunnel::mysql_tables(state, args).await;
+    }
     let (connection_id, config) = decode_active_db_session_args(state, "mysql", &args, 0, 1)?;
     let database = string_arg(&args, 2)?;
     let sql = format!("SHOW TABLES FROM `{}`;", database.replace('`', "``"));
@@ -155,6 +175,9 @@ pub(crate) async fn mysql_tables(state: &AppState, args: Vec<Value>) -> Result<V
 }
 
 pub(crate) async fn mysql_columns(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+    if crate::database_tunnel::has_session(state, "mysql", &args)? {
+        return crate::database_tunnel::mysql_columns(state, args).await;
+    }
     let (connection_id, config) = decode_active_db_session_args(state, "mysql", &args, 0, 1)?;
     let database = string_arg(&args, 2)?;
     let table = string_arg(&args, 3)?;
@@ -184,6 +207,9 @@ pub(crate) async fn mysql_columns(state: &AppState, args: Vec<Value>) -> Result<
 }
 
 pub(crate) async fn mysql_query(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+    if crate::database_tunnel::has_session(state, "mysql", &args)? {
+        return crate::database_tunnel::mysql_query(state, args).await;
+    }
     let (connection_id, config) = decode_active_db_session_args(state, "mysql", &args, 0, 1)?;
     let sql = string_arg(&args, 2)?;
     let database = args.get(3).and_then(Value::as_str);
@@ -229,6 +255,9 @@ pub(crate) async fn mysql_query(state: &AppState, args: Vec<Value>) -> Result<Va
 }
 
 pub(crate) async fn mysql_update_cell(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+    if crate::database_tunnel::has_session(state, "mysql", &args)? {
+        return crate::database_tunnel::mysql_update_cell(state, args).await;
+    }
     let (connection_id, config) = decode_active_db_session_args(state, "mysql", &args, 0, 1)?;
     let database = string_arg(&args, 2)?;
     let table = string_arg(&args, 3)?;
@@ -294,6 +323,9 @@ pub(crate) async fn mysql_update_cell(state: &AppState, args: Vec<Value>) -> Res
 pub(crate) async fn postgres_connect(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let config = args.get(1).cloned().unwrap_or_else(|| json!({}));
+    if crate::database_tunnel::is_tunnel_mode(&config) {
+        return crate::database_tunnel::postgres_connect(state, args).await;
+    }
     let postgres_id = encode_config_id("postgres", &config)?;
     let _ = run_postgres_cli(state, &connection_id, &config, "SELECT 1 AS ok;").await?;
     register_db_session(state, "postgres", &connection_id, &postgres_id, config)?;
@@ -304,6 +336,9 @@ pub(crate) async fn postgres_databases(
     state: &AppState,
     args: Vec<Value>,
 ) -> Result<Value, String> {
+    if crate::database_tunnel::has_session(state, "postgres", &args)? {
+        return crate::database_tunnel::postgres_databases(state, args).await;
+    }
     let (connection_id, config) = decode_active_db_session_args(state, "postgres", &args, 0, 1)?;
     let output = run_postgres_cli(
         state,
@@ -320,6 +355,9 @@ pub(crate) async fn postgres_databases(
 }
 
 pub(crate) async fn postgres_schemas(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+    if crate::database_tunnel::has_session(state, "postgres", &args)? {
+        return crate::database_tunnel::postgres_schemas(state, args).await;
+    }
     let (connection_id, config) = decode_active_db_session_args(state, "postgres", &args, 0, 1)?;
     let output = run_postgres_cli(
         state,
@@ -336,6 +374,9 @@ pub(crate) async fn postgres_schemas(state: &AppState, args: Vec<Value>) -> Resu
 }
 
 pub(crate) async fn postgres_tables(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+    if crate::database_tunnel::has_session(state, "postgres", &args)? {
+        return crate::database_tunnel::postgres_tables(state, args).await;
+    }
     let (connection_id, config) = decode_active_db_session_args(state, "postgres", &args, 0, 1)?;
     let schema = string_arg(&args, 2)?;
     let sql = format!(
@@ -355,6 +396,9 @@ pub(crate) async fn postgres_tables(state: &AppState, args: Vec<Value>) -> Resul
 }
 
 pub(crate) async fn postgres_columns(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+    if crate::database_tunnel::has_session(state, "postgres", &args)? {
+        return crate::database_tunnel::postgres_columns(state, args).await;
+    }
     let (connection_id, config) = decode_active_db_session_args(state, "postgres", &args, 0, 1)?;
     let schema = string_arg(&args, 2)?;
     let table = string_arg(&args, 3)?;
@@ -399,6 +443,9 @@ ORDER BY c.ordinal_position;
 }
 
 pub(crate) async fn postgres_query(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+    if crate::database_tunnel::has_session(state, "postgres", &args)? {
+        return crate::database_tunnel::postgres_query(state, args).await;
+    }
     let (connection_id, config) = decode_active_db_session_args(state, "postgres", &args, 0, 1)?;
     let sql = string_arg(&args, 2)?;
     let output = run_postgres_cli(state, &connection_id, &config, &sql).await?;
@@ -455,6 +502,9 @@ async fn run_postgres_cli(
 pub(crate) async fn redis_connect(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let config = args.get(1).cloned().unwrap_or_else(|| json!({}));
+    if crate::database_tunnel::is_tunnel_mode(&config) {
+        return crate::database_tunnel::redis_connect(state, args).await;
+    }
     let redis_id = encode_config_id("redis", &config)?;
     let _ = run_redis_cli(state, &connection_id, &config, &["PING".to_string()]).await?;
     register_db_session(state, "redis", &connection_id, &redis_id, config)?;
@@ -462,6 +512,9 @@ pub(crate) async fn redis_connect(state: &AppState, args: Vec<Value>) -> Result<
 }
 
 pub(crate) async fn redis_scan(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+    if crate::database_tunnel::has_session(state, "redis", &args)? {
+        return crate::database_tunnel::redis_scan(state, args).await;
+    }
     let (connection_id, config) = decode_active_db_session_args(state, "redis", &args, 0, 1)?;
     let options = args.get(2).cloned().unwrap_or_else(|| json!({}));
     let cursor = read_string_field(&options, "cursor", "0");
@@ -497,6 +550,9 @@ pub(crate) async fn redis_scan(state: &AppState, args: Vec<Value>) -> Result<Val
 }
 
 pub(crate) async fn redis_keys(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+    if crate::database_tunnel::has_session(state, "redis", &args)? {
+        return crate::database_tunnel::redis_keys(state, args).await;
+    }
     let (connection_id, config) = decode_active_db_session_args(state, "redis", &args, 0, 1)?;
     let pattern = args
         .get(2)
@@ -518,6 +574,9 @@ pub(crate) async fn redis_keys(state: &AppState, args: Vec<Value>) -> Result<Val
 }
 
 pub(crate) async fn redis_get_value(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+    if crate::database_tunnel::has_session(state, "redis", &args)? {
+        return crate::database_tunnel::redis_get_value(state, args).await;
+    }
     let (connection_id, config) = decode_active_db_session_args(state, "redis", &args, 0, 1)?;
     let key = string_arg(&args, 2)?;
     let key_args = vec![key.clone()];
@@ -636,6 +695,9 @@ pub(crate) async fn redis_get_value(state: &AppState, args: Vec<Value>) -> Resul
 }
 
 pub(crate) async fn redis_set_value(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+    if crate::database_tunnel::has_session(state, "redis", &args)? {
+        return crate::database_tunnel::redis_set_value(state, args).await;
+    }
     let (connection_id, config) = decode_active_db_session_args(state, "redis", &args, 0, 1)?;
     let key = string_arg(&args, 2)?;
     let value = args.get(3).cloned().unwrap_or(Value::Null);
@@ -731,6 +793,9 @@ fn redis_set_value_commands(
 }
 
 pub(crate) async fn redis_delete_key(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+    if crate::database_tunnel::has_session(state, "redis", &args)? {
+        return crate::database_tunnel::redis_delete_key(state, args).await;
+    }
     let (connection_id, config) = decode_active_db_session_args(state, "redis", &args, 0, 1)?;
     let key = string_arg(&args, 2)?;
     let _ = run_redis_cli(state, &connection_id, &config, &["DEL".to_string(), key]).await?;
@@ -738,6 +803,9 @@ pub(crate) async fn redis_delete_key(state: &AppState, args: Vec<Value>) -> Resu
 }
 
 pub(crate) async fn redis_command(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
+    if crate::database_tunnel::has_session(state, "redis", &args)? {
+        return crate::database_tunnel::redis_command(state, args).await;
+    }
     let (connection_id, config) = decode_active_db_session_args(state, "redis", &args, 0, 1)?;
     let command = string_arg(&args, 2)?;
     let mut parts = vec![command];
