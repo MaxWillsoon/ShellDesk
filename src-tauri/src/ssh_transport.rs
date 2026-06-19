@@ -499,13 +499,19 @@ async fn run_ssh_command_for_profile_with_broker(
     let stdout_task = tokio::spawn(async move {
         let mut reader = stdout;
         let mut output = Vec::new();
-        reader.read_to_end(&mut output).await.map_err(error_string)?;
+        reader
+            .read_to_end(&mut output)
+            .await
+            .map_err(error_string)?;
         Ok::<Vec<u8>, String>(output)
     });
     let stderr_task = tokio::spawn(async move {
         let mut reader = stderr;
         let mut output = Vec::new();
-        reader.read_to_end(&mut output).await.map_err(error_string)?;
+        reader
+            .read_to_end(&mut output)
+            .await
+            .map_err(error_string)?;
         Ok::<Vec<u8>, String>(output)
     });
     let status = match time::timeout(Duration::from_secs(90), child.wait()).await {
@@ -642,11 +648,7 @@ pub(crate) fn ssh_destination(profile: &SshProfile) -> String {
 fn proxy_command_for_profile(profile: &SshProfile) -> Option<String> {
     if let Some(jump) = profile.jump.as_deref() {
         let mut parts = if should_use_sshpass(jump) {
-            vec![
-                "sshpass".to_string(),
-                "-e".to_string(),
-                "ssh".to_string(),
-            ]
+            vec!["sshpass".to_string(), "-e".to_string(), "ssh".to_string()]
         } else {
             vec!["ssh".to_string()]
         };

@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 #[cfg(windows)]
 use std::process::Command as StdCommand;
-use std::{collections::HashSet, fs, process::Stdio, time::Duration};
+use std::{collections::HashSet, fs, future::Future, pin::Pin, process::Stdio, time::Duration};
 use tauri::Emitter;
 use tokio::{process::Command, sync::oneshot, time};
 pub(crate) fn open_local_connection(state: &AppState) -> Result<Value, String> {
@@ -432,15 +432,17 @@ pub(crate) fn respond_keyboard_interactive(
     Ok(json!(true))
 }
 
-async fn ensure_ssh_host_key_trusted(
-    state: &AppState,
-    window: &tauri::Window,
-    profile: &mut SshProfile,
-) -> Result<(), String> {
-    if let Some(jump) = profile.jump.as_deref_mut() {
-        ensure_direct_ssh_host_key_trusted(state, window, jump).await?;
-    }
-    ensure_direct_ssh_host_key_trusted(state, window, profile).await
+fn ensure_ssh_host_key_trusted<'a>(
+    state: &'a AppState,
+    window: &'a tauri::Window,
+    profile: &'a mut SshProfile,
+) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+    Box::pin(async move {
+        if let Some(jump) = profile.jump.as_deref_mut() {
+            ensure_ssh_host_key_trusted(state, window, jump).await?;
+        }
+        ensure_direct_ssh_host_key_trusted(state, window, profile).await
+    })
 }
 
 async fn ensure_direct_ssh_host_key_trusted(
