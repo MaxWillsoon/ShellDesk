@@ -17,7 +17,9 @@ pub(crate) async fn dispatch(
 ) -> Option<Result<Value, String>> {
     let result = match channel {
         "connection:mysql-connect" => database::mysql_connect(state, args).await,
-        "connection:mysql-disconnect" => database::disconnect_db_session_any(state, args, "mysql").await,
+        "connection:mysql-disconnect" => {
+            database::disconnect_db_session_any(state, args, "mysql").await
+        }
         "connection:mysql-databases" => database::mysql_databases(state, args).await,
         "connection:mysql-tables" => database::mysql_tables(state, args).await,
         "connection:mysql-columns" => database::mysql_columns(state, args).await,
@@ -35,7 +37,9 @@ pub(crate) async fn dispatch(
         "connection:postgres-query" => database::postgres_query(state, args).await,
 
         "connection:redis-connect" => database::redis_connect(state, args).await,
-        "connection:redis-disconnect" => database::disconnect_db_session_any(state, args, "redis").await,
+        "connection:redis-disconnect" => {
+            database::disconnect_db_session_any(state, args, "redis").await
+        }
         "connection:redis-scan" => database::redis_scan(state, args).await,
         "connection:redis-keys" => database::redis_keys(state, args).await,
         "connection:redis-get-value" => database::redis_get_value(state, args).await,

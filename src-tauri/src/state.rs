@@ -71,7 +71,7 @@ pub(crate) struct ActiveConnection {
     pub(crate) privilege: Option<PrivilegeConfig>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct SshProfile {
     pub(crate) address: String,
     pub(crate) port: u16,

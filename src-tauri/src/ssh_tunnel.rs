@@ -1,24 +1,32 @@
+use base64::Engine;
 use russh::{client, keys::key::PrivateKeyWithHashAlg};
 use serde::Deserialize;
 use std::{
     fmt,
     net::{Ipv4Addr, SocketAddr},
     path::Path,
+    pin::Pin,
+    process::Stdio,
     sync::Arc,
+    task::{Context, Poll},
     time::Duration,
 };
 use thiserror::Error;
 use tokio::{
-    io,
+    io::{self, AsyncRead, AsyncWrite, ReadBuf},
     net::{TcpListener, TcpStream},
+    process::{Child, ChildStdin, ChildStdout, Command},
     sync::mpsc,
     task::JoinHandle,
 };
 
-use crate::{get_connection, AppState, ConnectionKind, SshProfile};
+use crate::{
+    error_string, get_connection, prevent_tokio_process_window, proxy::SshProxyConfig, shell_quote,
+    AppState, ConnectionKind, SshProfile,
+};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SshTunnelConfig {
     pub(crate) ssh_host: String,
@@ -28,6 +36,12 @@ pub(crate) struct SshTunnelConfig {
     pub(crate) ssh_key_path: Option<String>,
     pub(crate) ssh_key_passphrase: Option<String>,
     pub(crate) known_hosts_path: Option<String>,
+    #[serde(skip)]
+    pub(crate) proxy_helper_exe: String,
+    #[serde(skip)]
+    pub(crate) proxy: Option<SshProxyConfig>,
+    #[serde(skip)]
+    pub(crate) jump: Option<Box<SshProfile>>,
     pub(crate) remote_host: String,
     pub(crate) remote_port: u16,
     #[serde(default = "default_connect_timeout_ms")]
@@ -56,6 +70,12 @@ pub(crate) enum SshTunnelError {
     SshConnect(String),
     #[error("SSH 认证失败：{0}")]
     SshAuth(String),
+    #[error("SSH 主机密钥校验失败：{0}")]
+    HostKeyVerification(String),
+    #[error("SSH 代理连接失败：{0}")]
+    ProxyConnect(String),
+    #[error("SSH 跳板机连接失败：{0}")]
+    JumpConnect(String),
     #[error("绑定本地隧道端口失败：{0}")]
     BindLocal(#[source] std::io::Error),
     #[error("获取本地隧道地址失败：{0}")]
@@ -146,6 +166,8 @@ impl SshTunnel {
 }
 
 struct TunnelHandler {
+    host: String,
+    port: u16,
     known_hosts_path: Option<String>,
 }
 
@@ -154,12 +176,36 @@ impl client::Handler for TunnelHandler {
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &russh::keys::PublicKey,
+        server_public_key: &russh::keys::PublicKey,
     ) -> Result<bool, Self::Error> {
-        // Phase 1 deliberately accepts the server key. This is replaced with
-        // ShellDesk known_hosts integration before exposing the mode broadly.
-        let _ = &self.known_hosts_path;
-        Ok(true)
+        let Some(path) = self
+            .known_hosts_path
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            eprintln!(
+                "[ssh-tunnel] known_hosts path is empty for {}:{}",
+                self.host, self.port
+            );
+            return Ok(false);
+        };
+        match russh::keys::check_known_hosts_path(&self.host, self.port, server_public_key, path) {
+            Ok(true) => Ok(true),
+            Ok(false) => {
+                eprintln!(
+                    "[ssh-tunnel] host key is not trusted for {}:{}",
+                    self.host, self.port
+                );
+                Ok(false)
+            }
+            Err(error) => {
+                eprintln!(
+                    "[ssh-tunnel] host key verification failed for {}:{}: {}",
+                    self.host, self.port, error
+                );
+                Ok(false)
+            }
+        }
     }
 }
 
@@ -167,54 +213,22 @@ pub(crate) async fn create_tunnel(config: SshTunnelConfig) -> Result<SshTunnel, 
     config.validate()?;
 
     let timeout = Duration::from_millis(config.connect_timeout_ms.max(1_000));
-    let ssh_config = Arc::new(client::Config {
-        inactivity_timeout: Some(Duration::from_secs(300)),
-        ..Default::default()
-    });
-    let handler = TunnelHandler {
-        known_hosts_path: config.known_hosts_path.clone(),
-    };
-
-    let mut session = tokio::time::timeout(
-        timeout,
-        client::connect(
-            ssh_config,
-            (config.ssh_host.as_str(), config.ssh_port),
-            handler,
-        ),
-    )
-    .await
-    .map_err(|_| SshTunnelError::SshConnect("连接超时。".to_string()))?
-    .map_err(|error| SshTunnelError::SshConnect(error.to_string()))?;
+    let mut session = connect_profile(&config, timeout, "SSH").await?;
 
     if let Some(key_path) = config
         .ssh_key_path
         .as_deref()
         .filter(|value| !value.trim().is_empty())
     {
-        let passphrase = config.ssh_key_passphrase.as_deref();
-        let key = russh::keys::load_secret_key(key_path, passphrase)
-            .map_err(|error| SshTunnelError::SshAuth(error.to_string()))?;
-        let key = PrivateKeyWithHashAlg::new(Arc::new(key), None);
-        let auth_result = session
-            .authenticate_publickey(&config.ssh_user, key)
-            .await
-            .map_err(|error| SshTunnelError::SshAuth(error.to_string()))?;
-        if !auth_result.success() {
-            return Err(SshTunnelError::SshAuth(
-                "服务器拒绝私钥认证。".to_string(),
-            ));
-        }
+        authenticate_key(
+            &mut session,
+            &config.ssh_user,
+            key_path,
+            config.ssh_key_passphrase.as_deref(),
+        )
+        .await?;
     } else if let Some(password) = config.ssh_password.as_deref() {
-        let auth_result = session
-            .authenticate_password(&config.ssh_user, password)
-            .await
-            .map_err(|error| SshTunnelError::SshAuth(error.to_string()))?;
-        if !auth_result.success() {
-            return Err(SshTunnelError::SshAuth(
-                "服务器拒绝密码认证。".to_string(),
-            ));
-        }
+        authenticate_password(&mut session, &config.ssh_user, password).await?;
     }
 
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
@@ -259,6 +273,300 @@ pub(crate) async fn create_tunnel(config: SshTunnelConfig) -> Result<SshTunnel, 
     })
 }
 
+async fn connect_profile(
+    config: &SshTunnelConfig,
+    timeout: Duration,
+    label: &str,
+) -> Result<client::Handle<TunnelHandler>, SshTunnelError> {
+    let ssh_config = Arc::new(client::Config {
+        inactivity_timeout: Some(Duration::from_secs(300)),
+        ..Default::default()
+    });
+    let handler = TunnelHandler {
+        host: config.ssh_host.clone(),
+        port: config.ssh_port,
+        known_hosts_path: config.known_hosts_path.clone(),
+    };
+
+    let transport = open_transport(config, timeout).await?;
+    tokio::time::timeout(
+        timeout,
+        client::connect_stream(ssh_config, transport, handler),
+    )
+    .await
+    .map_err(|_| SshTunnelError::SshConnect(format!("{label} 连接超时。")))?
+    .map_err(|error| {
+        let message = error.to_string();
+        if message.to_ascii_lowercase().contains("key") {
+            SshTunnelError::HostKeyVerification(format!(
+                "{}:{} 未通过 known_hosts 校验，请先在连接中信任该主机密钥。",
+                config.ssh_host, config.ssh_port
+            ))
+        } else {
+            SshTunnelError::SshConnect(message)
+        }
+    })
+}
+
+async fn authenticate_key(
+    session: &mut client::Handle<TunnelHandler>,
+    user: &str,
+    key_path: &str,
+    passphrase: Option<&str>,
+) -> Result<(), SshTunnelError> {
+    let key = russh::keys::load_secret_key(key_path, passphrase)
+        .map_err(|error| SshTunnelError::SshAuth(error.to_string()))?;
+    let key = PrivateKeyWithHashAlg::new(Arc::new(key), None);
+    let auth_result = session
+        .authenticate_publickey(user, key)
+        .await
+        .map_err(|error| SshTunnelError::SshAuth(error.to_string()))?;
+    if !auth_result.success() {
+        return Err(SshTunnelError::SshAuth("服务器拒绝私钥认证。".to_string()));
+    }
+    Ok(())
+}
+
+async fn authenticate_password(
+    session: &mut client::Handle<TunnelHandler>,
+    user: &str,
+    password: &str,
+) -> Result<(), SshTunnelError> {
+    let auth_result = session
+        .authenticate_password(user, password)
+        .await
+        .map_err(|error| SshTunnelError::SshAuth(error.to_string()))?;
+    if !auth_result.success() {
+        return Err(SshTunnelError::SshAuth("服务器拒绝密码认证。".to_string()));
+    }
+    Ok(())
+}
+
+async fn open_transport(
+    config: &SshTunnelConfig,
+    timeout: Duration,
+) -> Result<TunnelTransport, SshTunnelError> {
+    if let Some(jump) = config.jump.as_deref() {
+        return open_jump_transport(config, jump, timeout).await;
+    }
+    if let Some(proxy) = config.proxy.as_ref() {
+        return open_proxy_transport(config, proxy).await;
+    }
+    let stream = tokio::time::timeout(
+        timeout,
+        TcpStream::connect((config.ssh_host.as_str(), config.ssh_port)),
+    )
+    .await
+    .map_err(|_| SshTunnelError::SshConnect("连接超时。".to_string()))?
+    .map_err(|error| SshTunnelError::SshConnect(error.to_string()))?;
+    Ok(TunnelTransport::Tcp(stream))
+}
+
+async fn open_jump_transport(
+    target: &SshTunnelConfig,
+    jump: &SshProfile,
+    timeout: Duration,
+) -> Result<TunnelTransport, SshTunnelError> {
+    let jump_config = config_from_profile(jump, &target.ssh_host, target.ssh_port, None);
+    let mut jump_session = Box::pin(connect_profile(&jump_config, timeout, "跳板机"))
+        .await
+        .map_err(|error| SshTunnelError::JumpConnect(error.user_message()))?;
+    if jump.auth_method == "key" && !jump.key_path.trim().is_empty() {
+        authenticate_key(
+            &mut jump_session,
+            &jump.username,
+            &jump.key_path,
+            (!jump.password.is_empty()).then_some(jump.password.as_str()),
+        )
+        .await
+        .map_err(|error| SshTunnelError::JumpConnect(error.user_message()))?;
+    } else if jump.auth_method == "password" && !jump.password.is_empty() {
+        authenticate_password(&mut jump_session, &jump.username, &jump.password)
+            .await
+            .map_err(|error| SshTunnelError::JumpConnect(error.user_message()))?;
+    }
+    let channel = jump_session
+        .channel_open_direct_tcpip(
+            target.ssh_host.as_str(),
+            u32::from(target.ssh_port),
+            "127.0.0.1",
+            0,
+        )
+        .await
+        .map_err(|error| SshTunnelError::JumpConnect(error.to_string()))?;
+    Ok(TunnelTransport::Jump(JumpTransport {
+        stream: channel.into_stream(),
+        _session: jump_session,
+    }))
+}
+
+async fn open_proxy_transport(
+    config: &SshTunnelConfig,
+    proxy: &SshProxyConfig,
+) -> Result<TunnelTransport, SshTunnelError> {
+    let (command_line, envs) = match proxy.proxy_type.as_str() {
+        "command" => (
+            proxy
+                .command
+                .replace("{host}", &config.ssh_host)
+                .replace("%h", &config.ssh_host)
+                .replace("{port}", &config.ssh_port.to_string())
+                .replace("%p", &config.ssh_port.to_string()),
+            Vec::new(),
+        ),
+        "http" | "socks5" => {
+            network_proxy_command(config, proxy).map_err(SshTunnelError::ProxyConnect)?
+        }
+        _ => return Err(SshTunnelError::ProxyConnect("代理类型无效。".to_string())),
+    };
+    ProxyCommandTransport::spawn(&command_line, envs)
+        .map(TunnelTransport::ProxyCommand)
+        .map_err(SshTunnelError::ProxyConnect)
+}
+
+fn network_proxy_command(
+    config: &SshTunnelConfig,
+    proxy: &SshProxyConfig,
+) -> Result<(String, Vec<(String, String)>), String> {
+    if config.proxy_helper_exe.trim().is_empty() {
+        return Err("代理 helper 路径为空。".to_string());
+    }
+    let payload = serde_json::json!({
+        "type": proxy.proxy_type,
+        "host": proxy.host,
+        "port": proxy.port,
+        "username": proxy.username,
+        "password": proxy.password
+    });
+    let encoded = base64::engine::general_purpose::STANDARD
+        .encode(serde_json::to_vec(&payload).map_err(error_string)?);
+    let command = format!(
+        "{} --shelldesk-proxy-helper {} {} {}",
+        proxy_command_arg(&config.proxy_helper_exe),
+        proxy_command_arg(&proxy.helper_id),
+        proxy_command_arg(&config.ssh_host),
+        config.ssh_port
+    );
+    Ok((
+        command,
+        vec![(
+            crate::proxy::proxy_helper_env_name(&proxy.helper_id),
+            encoded,
+        )],
+    ))
+}
+
+fn proxy_command_arg(value: &str) -> String {
+    if value.chars().all(|ch| {
+        ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '/' | ':' | '@' | '%' | '=')
+    }) {
+        value.to_string()
+    } else {
+        shell_quote(value)
+    }
+}
+
+enum TunnelTransport {
+    Tcp(TcpStream),
+    ProxyCommand(ProxyCommandTransport),
+    Jump(JumpTransport),
+}
+
+struct ProxyCommandTransport {
+    stdin: ChildStdin,
+    stdout: ChildStdout,
+    _child: Child,
+}
+
+impl ProxyCommandTransport {
+    fn spawn(command_line: &str, envs: Vec<(String, String)>) -> Result<Self, String> {
+        if command_line.trim().is_empty() {
+            return Err("ProxyCommand 不能为空。".to_string());
+        }
+        let mut command = if cfg!(windows) {
+            let mut command = Command::new("cmd");
+            command.args(["/C", command_line]);
+            command
+        } else {
+            let mut command = Command::new("sh");
+            command.args(["-c", command_line]);
+            command
+        };
+        for (name, value) in envs {
+            command.env(name, value);
+        }
+        prevent_tokio_process_window(&mut command);
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(error_string)?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "ProxyCommand 标准输入不可写。".to_string())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "ProxyCommand 标准输出不可读。".to_string())?;
+        Ok(Self {
+            stdin,
+            stdout,
+            _child: child,
+        })
+    }
+}
+
+struct JumpTransport {
+    stream: russh::ChannelStream<client::Msg>,
+    _session: client::Handle<TunnelHandler>,
+}
+
+impl AsyncRead for TunnelTransport {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match &mut *self {
+            Self::Tcp(stream) => Pin::new(stream).poll_read(cx, buf),
+            Self::ProxyCommand(stream) => Pin::new(&mut stream.stdout).poll_read(cx, buf),
+            Self::Jump(stream) => Pin::new(&mut stream.stream).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for TunnelTransport {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        match &mut *self {
+            Self::Tcp(stream) => Pin::new(stream).poll_write(cx, buf),
+            Self::ProxyCommand(stream) => Pin::new(&mut stream.stdin).poll_write(cx, buf),
+            Self::Jump(stream) => Pin::new(&mut stream.stream).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match &mut *self {
+            Self::Tcp(stream) => Pin::new(stream).poll_flush(cx),
+            Self::ProxyCommand(stream) => Pin::new(&mut stream.stdin).poll_flush(cx),
+            Self::Jump(stream) => Pin::new(&mut stream.stream).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match &mut *self {
+            Self::Tcp(stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::ProxyCommand(stream) => Pin::new(&mut stream.stdin).poll_shutdown(cx),
+            Self::Jump(stream) => Pin::new(&mut stream.stream).poll_shutdown(cx),
+        }
+    }
+}
+
 pub(crate) fn config_from_connection(
     state: &AppState,
     connection_id: &str,
@@ -267,16 +575,16 @@ pub(crate) fn config_from_connection(
     overrides: Option<&Value>,
 ) -> Result<SshTunnelConfig, String> {
     let connection = get_connection(state, connection_id)?;
-    if connection.kind != ConnectionKind::Ssh {
-        return Err("SSH 隧道模式需要一个 SSH 连接，本地连接不支持该模式。".to_string());
-    }
-    let profile = connection
-        .ssh
-        .as_ref()
-        .ok_or_else(|| "当前连接缺少 SSH 配置。".to_string())?;
-    if profile.proxy.is_some() || profile.jump.is_some() {
-        return Err("SSH 隧道原生模式暂不支持代理或跳板机连接，请使用 CLI 模式。".to_string());
-    }
+    let local_profile;
+    let profile = if connection.kind == ConnectionKind::Local {
+        local_profile = profile_from_overrides(overrides)?;
+        &local_profile
+    } else {
+        connection
+            .ssh
+            .as_ref()
+            .ok_or_else(|| "当前连接缺少 SSH 配置。".to_string())?
+    };
     Ok(config_from_profile(
         profile,
         remote_host,
@@ -319,10 +627,62 @@ fn config_from_profile(
         ssh_key_path,
         ssh_key_passphrase,
         known_hosts_path: Some(profile.known_hosts_path.clone()).filter(|value| !value.is_empty()),
+        proxy_helper_exe: profile.proxy_helper_exe.clone(),
+        proxy: profile.proxy.clone(),
+        jump: profile.jump.clone(),
         remote_host: remote_host.to_string(),
         remote_port,
         connect_timeout_ms,
     }
+}
+
+fn profile_from_overrides(overrides: Option<&Value>) -> Result<SshProfile, String> {
+    let value =
+        overrides.ok_or_else(|| "本地连接使用 SSH 隧道时必须提供 SSH 配置。".to_string())?;
+    let ssh_host = string_override(value, "sshHost");
+    let ssh_user = string_override(value, "sshUser");
+    if ssh_host.trim().is_empty() {
+        return Err("本地连接使用 SSH 隧道时 SSH 主机不能为空。".to_string());
+    }
+    if ssh_user.trim().is_empty() {
+        return Err("本地连接使用 SSH 隧道时 SSH 用户名不能为空。".to_string());
+    }
+    let ssh_port = value
+        .get("sshPort")
+        .and_then(Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok())
+        .filter(|port| *port > 0)
+        .unwrap_or(22);
+    let ssh_password = string_override(value, "sshPassword");
+    let ssh_key_path = string_override(value, "sshKeyPath");
+    let auth_method = if !ssh_key_path.trim().is_empty() {
+        "key"
+    } else {
+        "password"
+    };
+    Ok(SshProfile {
+        address: ssh_host,
+        port: ssh_port,
+        username: ssh_user,
+        auth_method: auth_method.to_string(),
+        password: ssh_password,
+        key_path: ssh_key_path,
+        known_hosts_path: string_override(value, "knownHostsPath"),
+        proxy_helper_exe: std::env::current_exe()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "shelldesk".to_string()),
+        proxy: None,
+        jump: None,
+    })
+}
+
+fn string_override(value: &Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 
 async fn forward_one(
@@ -356,6 +716,9 @@ mod tests {
             ssh_key_path: None,
             ssh_key_passphrase: None,
             known_hosts_path: None,
+            proxy_helper_exe: String::new(),
+            proxy: None,
+            jump: None,
             remote_host: "127.0.0.1".to_string(),
             remote_port: 3306,
             connect_timeout_ms: 1_000,

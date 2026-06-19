@@ -1,7 +1,9 @@
 use crate::{
-    error_string, now, random_id, string_arg,
-    ssh_tunnel::{config_from_connection, create_tunnel, SshTunnel, SshTunnelConfig, SshTunnelError},
-    AppState,
+    error_string, now, random_id,
+    ssh_tunnel::{
+        config_from_connection, create_tunnel, SshTunnel, SshTunnelConfig, SshTunnelError,
+    },
+    string_arg, AppState,
 };
 use fred::{
     prelude::{Client as RedisClient, ClientLike, Config as RedisConfig, Value as RedisValue},
@@ -117,6 +119,37 @@ pub(crate) struct TunnelOptions {
     pub(crate) remote_port: u16,
     #[serde(default)]
     pub(crate) connect_timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub(crate) ssh_host: Option<String>,
+    #[serde(default)]
+    pub(crate) ssh_port: Option<u16>,
+    #[serde(default)]
+    pub(crate) ssh_user: Option<String>,
+    #[serde(default)]
+    pub(crate) ssh_password: Option<String>,
+    #[serde(default)]
+    pub(crate) ssh_key_path: Option<String>,
+    #[serde(default)]
+    pub(crate) ssh_key_passphrase: Option<String>,
+    #[serde(default)]
+    pub(crate) known_hosts_path: Option<String>,
+}
+
+impl TunnelOptions {
+    fn for_database_endpoint(remote_host: String, remote_port: u16) -> Self {
+        Self {
+            remote_host,
+            remote_port,
+            connect_timeout_ms: None,
+            ssh_host: None,
+            ssh_port: None,
+            ssh_user: None,
+            ssh_password: None,
+            ssh_key_path: None,
+            ssh_key_passphrase: None,
+            known_hosts_path: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -254,11 +287,10 @@ pub(crate) async fn mysql_connect(state: &AppState, args: Vec<Value>) -> Result<
     let config_value = args.get(1).cloned().unwrap_or_else(|| json!({}));
     let config: MysqlConnectConfig = serde_json::from_value(config_value)
         .map_err(|error| format!("MySQL 隧道配置无效：{error}"))?;
-    let tunnel_options = config.tunnel.clone().unwrap_or(TunnelOptions {
-        remote_host: config.host.clone(),
-        remote_port: config.port,
-        connect_timeout_ms: None,
-    });
+    let tunnel_options = config
+        .tunnel
+        .clone()
+        .unwrap_or_else(|| TunnelOptions::for_database_endpoint(config.host.clone(), config.port));
     validate_database_endpoint(&tunnel_options.remote_host, tunnel_options.remote_port)?;
     if config.user.trim().is_empty() {
         return Err("MySQL 用户名不能为空。".to_string());
@@ -455,11 +487,10 @@ pub(crate) async fn postgres_connect(state: &AppState, args: Vec<Value>) -> Resu
     let config_value = args.get(1).cloned().unwrap_or_else(|| json!({}));
     let config: PostgresConnectConfig = serde_json::from_value(config_value)
         .map_err(|error| format!("PostgreSQL 隧道配置无效：{error}"))?;
-    let tunnel_options = config.tunnel.clone().unwrap_or(TunnelOptions {
-        remote_host: config.host.clone(),
-        remote_port: config.port,
-        connect_timeout_ms: None,
-    });
+    let tunnel_options = config
+        .tunnel
+        .clone()
+        .unwrap_or_else(|| TunnelOptions::for_database_endpoint(config.host.clone(), config.port));
     validate_database_endpoint(&tunnel_options.remote_host, tunnel_options.remote_port)?;
     if config.user.trim().is_empty() {
         return Err("PostgreSQL 用户名不能为空。".to_string());
@@ -517,22 +548,18 @@ pub(crate) async fn postgres_databases(
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let pool = postgres_pool(state, &args)?;
-    let rows = sqlx::query(
-        "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname",
-    )
-    .fetch_all(&pool)
-    .await
-    .map_err(|error| DbTunnelError::PostgresQuery(error).user_message())?;
+    let rows =
+        sqlx::query("SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname")
+            .fetch_all(&pool)
+            .await
+            .map_err(|error| DbTunnelError::PostgresQuery(error).user_message())?;
     Ok(json!(rows
         .into_iter()
         .filter_map(|row| row.try_get::<String, _>("datname").ok())
         .collect::<Vec<_>>()))
 }
 
-pub(crate) async fn postgres_schemas(
-    state: &AppState,
-    args: Vec<Value>,
-) -> Result<Value, String> {
+pub(crate) async fn postgres_schemas(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
     let pool = postgres_pool(state, &args)?;
     let rows = sqlx::query(
         "SELECT schema_name FROM information_schema.schemata \
@@ -639,11 +666,10 @@ pub(crate) async fn redis_connect(state: &AppState, args: Vec<Value>) -> Result<
     let config_value = args.get(1).cloned().unwrap_or_else(|| json!({}));
     let config: RedisConnectConfig = serde_json::from_value(config_value)
         .map_err(|error| format!("Redis 隧道配置无效：{error}"))?;
-    let tunnel_options = config.tunnel.clone().unwrap_or(TunnelOptions {
-        remote_host: config.host.clone(),
-        remote_port: config.port,
-        connect_timeout_ms: None,
-    });
+    let tunnel_options = config
+        .tunnel
+        .clone()
+        .unwrap_or_else(|| TunnelOptions::for_database_endpoint(config.host.clone(), config.port));
     validate_database_endpoint(&tunnel_options.remote_host, tunnel_options.remote_port)?;
 
     let tunnel_config = tunnel_config_from_options(state, &connection_id, &tunnel_options)?;
@@ -759,8 +785,9 @@ pub(crate) async fn redis_keys(state: &AppState, args: Vec<Value>) -> Result<Val
 
 pub(crate) async fn redis_get_value(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
     let key = string_arg(&args, 2)?;
-    let redis_type = redis_string(redis_command_values(state, &args, "TYPE", vec![key.clone()]).await?)
-        .unwrap_or_else(|| "none".to_string());
+    let redis_type =
+        redis_string(redis_command_values(state, &args, "TYPE", vec![key.clone()]).await?)
+            .unwrap_or_else(|| "none".to_string());
     if redis_type == "none" {
         return Err(format!("键 \"{key}\" 不存在。"));
     }
@@ -801,13 +828,23 @@ pub(crate) async fn redis_get_value(state: &AppState, args: Vec<Value>) -> Resul
                 state,
                 &args,
                 "XRANGE",
-                vec![key.clone(), "-".to_string(), "+".to_string(), "COUNT".to_string(), "100".to_string()],
+                vec![
+                    key.clone(),
+                    "-".to_string(),
+                    "+".to_string(),
+                    "COUNT".to_string(),
+                    "100".to_string()
+                ],
             )
             .await?,
         )),
-        _ => redis_value_to_json(redis_command_values(state, &args, "GET", vec![key.clone()]).await?),
+        _ => {
+            redis_value_to_json(redis_command_values(state, &args, "GET", vec![key.clone()]).await?)
+        }
     };
-    let size = redis_size(state, &args, &redis_type, &key).await.unwrap_or(0);
+    let size = redis_size(state, &args, &redis_type, &key)
+        .await
+        .unwrap_or(0);
     let truncated = if redis_type == "stream" {
         size > 100
     } else {
@@ -863,7 +900,10 @@ pub(crate) async fn redis_command(state: &AppState, args: Vec<Value>) -> Result<
 fn mysql_pool(state: &AppState, args: &[Value]) -> Result<MySqlPool, String> {
     let connection_id = string_arg(args, 0)?;
     let session_id = string_arg(args, 1)?;
-    let guard = state.database_tunnel_sessions.lock().map_err(error_string)?;
+    let guard = state
+        .database_tunnel_sessions
+        .lock()
+        .map_err(error_string)?;
     let session = guard
         .get(&session_key("mysql", &connection_id, &session_id))
         .ok_or_else(|| DbTunnelError::SessionNotFound.user_message())?;
@@ -880,7 +920,10 @@ fn mysql_pool(state: &AppState, args: &[Value]) -> Result<MySqlPool, String> {
 fn postgres_pool(state: &AppState, args: &[Value]) -> Result<PgPool, String> {
     let connection_id = string_arg(args, 0)?;
     let session_id = string_arg(args, 1)?;
-    let guard = state.database_tunnel_sessions.lock().map_err(error_string)?;
+    let guard = state
+        .database_tunnel_sessions
+        .lock()
+        .map_err(error_string)?;
     let session = guard
         .get(&session_key("postgres", &connection_id, &session_id))
         .ok_or_else(|| DbTunnelError::SessionNotFound.user_message())?;
@@ -897,7 +940,10 @@ fn postgres_pool(state: &AppState, args: &[Value]) -> Result<PgPool, String> {
 fn redis_client(state: &AppState, args: &[Value]) -> Result<RedisClient, String> {
     let connection_id = string_arg(args, 0)?;
     let session_id = string_arg(args, 1)?;
-    let guard = state.database_tunnel_sessions.lock().map_err(error_string)?;
+    let guard = state
+        .database_tunnel_sessions
+        .lock()
+        .map_err(error_string)?;
     let session = guard
         .get(&session_key("redis", &connection_id, &session_id))
         .ok_or_else(|| DbTunnelError::SessionNotFound.user_message())?;
@@ -931,9 +977,8 @@ async fn redis_key_summary(state: &AppState, args: &[Value], key: &str) -> Resul
     let redis_type =
         redis_string(redis_command_values(state, args, "TYPE", vec![key.to_string()]).await?)
             .unwrap_or_else(|| "none".to_string());
-    let ttl =
-        redis_i64(redis_command_values(state, args, "TTL", vec![key.to_string()]).await?)
-            .unwrap_or(-1);
+    let ttl = redis_i64(redis_command_values(state, args, "TTL", vec![key.to_string()]).await?)
+        .unwrap_or(-1);
     let size = redis_size(state, args, &redis_type, key).await.unwrap_or(0);
     Ok(json!({ "name": key, "type": redis_type, "ttl": ttl, "size": size, "scannedAt": now() }))
 }
@@ -953,15 +998,14 @@ async fn redis_size(
         "stream" => "XLEN",
         _ => return Ok(0),
     };
-    Ok(redis_i64(redis_command_values(state, args, command, vec![key.to_string()]).await?)
-        .unwrap_or(0))
+    Ok(
+        redis_i64(redis_command_values(state, args, command, vec![key.to_string()]).await?)
+            .unwrap_or(0),
+    )
 }
 
 fn rows_to_json_mysql(rows: Vec<MySqlRow>) -> Value {
-    let columns = rows
-        .first()
-        .map(row_column_names)
-        .unwrap_or_default();
+    let columns = rows.first().map(row_column_names).unwrap_or_default();
     let rows = rows.into_iter().map(mysql_row_to_json).collect::<Vec<_>>();
     json!({ "columns": columns, "rows": rows, "affectedRows": 0 })
 }
@@ -978,10 +1022,7 @@ fn mysql_row_to_json(row: MySqlRow) -> Value {
 }
 
 fn rows_to_json_pg(rows: Vec<PgRow>) -> Value {
-    let columns = rows
-        .first()
-        .map(row_column_names)
-        .unwrap_or_default();
+    let columns = rows.first().map(row_column_names).unwrap_or_default();
     let row_count = rows.len();
     let rows = rows.into_iter().map(pg_row_to_json).collect::<Vec<_>>();
     json!({ "columns": columns, "rows": rows, "rowCount": row_count })
@@ -1046,7 +1087,17 @@ fn tunnel_config_from_options(
     options: &TunnelOptions,
 ) -> Result<SshTunnelConfig, String> {
     let overrides = json!({
-        "connectTimeoutMs": options.connect_timeout_ms.unwrap_or(15_000)
+        "connectTimeoutMs": options.connect_timeout_ms.unwrap_or(15_000),
+        "sshHost": options.ssh_host.as_deref().unwrap_or(""),
+        "sshPort": options.ssh_port.unwrap_or(22),
+        "sshUser": options.ssh_user.as_deref().unwrap_or(""),
+        "sshPassword": options
+            .ssh_key_passphrase
+            .as_deref()
+            .or(options.ssh_password.as_deref())
+            .unwrap_or(""),
+        "sshKeyPath": options.ssh_key_path.as_deref().unwrap_or(""),
+        "knownHostsPath": options.known_hosts_path.as_deref().unwrap_or("")
     });
     config_from_connection(
         state,
