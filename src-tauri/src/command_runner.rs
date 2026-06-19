@@ -58,12 +58,18 @@ pub(crate) async fn run_shell(
         .ok_or_else(|| "Process stderr is unavailable.".to_string())?;
     let stdout_task = tokio::spawn(async move {
         let mut output = Vec::new();
-        stdout.read_to_end(&mut output).await.map_err(error_string)?;
+        stdout
+            .read_to_end(&mut output)
+            .await
+            .map_err(error_string)?;
         Ok::<Vec<u8>, String>(output)
     });
     let stderr_task = tokio::spawn(async move {
         let mut output = Vec::new();
-        stderr.read_to_end(&mut output).await.map_err(error_string)?;
+        stderr
+            .read_to_end(&mut output)
+            .await
+            .map_err(error_string)?;
         Ok::<Vec<u8>, String>(output)
     });
     let status = match time::timeout(timeout, child.wait()).await {
