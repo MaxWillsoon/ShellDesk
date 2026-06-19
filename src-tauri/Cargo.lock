@@ -5519,6 +5519,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
+ "tokio-util",
  "url",
  "windows-sys 0.59.0",
 ]

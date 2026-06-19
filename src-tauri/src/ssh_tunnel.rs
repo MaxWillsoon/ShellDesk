@@ -19,6 +19,7 @@ use tokio::{
     sync::mpsc,
     task::JoinHandle,
 };
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     error_string, get_connection, prevent_tokio_process_window, proxy::SshProxyConfig, shell_quote,
@@ -26,7 +27,7 @@ use crate::{
 };
 use serde_json::Value;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SshTunnelConfig {
     pub(crate) ssh_host: String,
@@ -48,12 +49,40 @@ pub(crate) struct SshTunnelConfig {
     pub(crate) connect_timeout_ms: u64,
 }
 
+impl fmt::Debug for SshTunnelConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SshTunnelConfig")
+            .field("ssh_host", &self.ssh_host)
+            .field("ssh_port", &self.ssh_port)
+            .field("ssh_user", &self.ssh_user)
+            .field(
+                "ssh_password",
+                &self.ssh_password.as_ref().map(|_| "<redacted>"),
+            )
+            .field("ssh_key_path", &self.ssh_key_path)
+            .field(
+                "ssh_key_passphrase",
+                &self.ssh_key_passphrase.as_ref().map(|_| "<redacted>"),
+            )
+            .field("known_hosts_path", &self.known_hosts_path)
+            .field("proxy_helper_exe", &self.proxy_helper_exe)
+            .field("proxy", &self.proxy)
+            .field("jump", &self.jump)
+            .field("remote_host", &self.remote_host)
+            .field("remote_port", &self.remote_port)
+            .field("connect_timeout_ms", &self.connect_timeout_ms)
+            .finish()
+    }
+}
+
 fn default_connect_timeout_ms() -> u64 {
     15_000
 }
 
 #[derive(Debug, Error)]
 pub(crate) enum SshTunnelError {
+    // TODO(i18n): Return stable error codes here and localize backend messages in the frontend.
     #[error("SSH 主机不能为空。")]
     MissingSshHost,
     #[error("SSH 用户名不能为空。")]
@@ -84,8 +113,6 @@ pub(crate) enum SshTunnelError {
     OpenChannel(String),
     #[error("隧道转发失败：{0}")]
     Forward(#[source] std::io::Error),
-    #[error("关闭隧道失败：{0}")]
-    Shutdown(String),
 }
 
 impl SshTunnelError {
@@ -141,6 +168,7 @@ impl SshTunnelConfig {
 pub(crate) struct SshTunnel {
     local_addr: SocketAddr,
     shutdown_tx: mpsc::Sender<()>,
+    cancellation_token: CancellationToken,
     accept_task: JoinHandle<()>,
 }
 
@@ -159,6 +187,7 @@ impl SshTunnel {
     }
 
     pub(crate) async fn shutdown(self) -> Result<(), SshTunnelError> {
+        self.cancellation_token.cancel();
         let _ = self.shutdown_tx.send(()).await;
         self.accept_task.abort();
         Ok(())
@@ -237,21 +266,25 @@ pub(crate) async fn create_tunnel(config: SshTunnelConfig) -> Result<SshTunnel, 
     let local_addr = listener.local_addr().map_err(SshTunnelError::LocalAddr)?;
     let session = Arc::new(session);
     let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
+    let cancellation_token = CancellationToken::new();
     let remote_host = config.remote_host.clone();
     let remote_port = config.remote_port;
+    let accept_cancellation_token = cancellation_token.clone();
 
     let accept_task = tokio::spawn(async move {
         loop {
             tokio::select! {
                 biased;
+                _ = accept_cancellation_token.cancelled() => break,
                 _ = shutdown_rx.recv() => break,
                 accepted = listener.accept() => {
                     match accepted {
                         Ok((local_stream, _peer)) => {
                             let session = Arc::clone(&session);
                             let remote_host = remote_host.clone();
+                            let cancellation_token = accept_cancellation_token.child_token();
                             tokio::spawn(async move {
-                                if let Err(error) = forward_one(session, local_stream, remote_host, remote_port).await {
+                                if let Err(error) = forward_one(session, local_stream, remote_host, remote_port, cancellation_token).await {
                                     eprintln!("[ssh-tunnel] {}", error.user_message());
                                 }
                             });
@@ -269,6 +302,7 @@ pub(crate) async fn create_tunnel(config: SshTunnelConfig) -> Result<SshTunnel, 
     Ok(SshTunnel {
         local_addr,
         shutdown_tx,
+        cancellation_token,
         accept_task,
     })
 }
@@ -499,7 +533,8 @@ impl ProxyCommandTransport {
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
             .spawn()
             .map_err(error_string)?;
         let stdin = child
@@ -690,6 +725,7 @@ async fn forward_one(
     mut local_stream: TcpStream,
     remote_host: String,
     remote_port: u16,
+    cancellation_token: CancellationToken,
 ) -> Result<(), SshTunnelError> {
     let channel = session
         .channel_open_direct_tcpip(remote_host.as_str(), u32::from(remote_port), "127.0.0.1", 0)
@@ -697,9 +733,12 @@ async fn forward_one(
         .map_err(|error| SshTunnelError::OpenChannel(error.to_string()))?;
 
     let mut ssh_stream = channel.into_stream();
-    io::copy_bidirectional(&mut local_stream, &mut ssh_stream)
-        .await
-        .map_err(SshTunnelError::Forward)?;
+    tokio::select! {
+        result = io::copy_bidirectional(&mut local_stream, &mut ssh_stream) => {
+            result.map_err(SshTunnelError::Forward)?;
+        }
+        _ = cancellation_token.cancelled() => {}
+    }
     Ok(())
 }
 

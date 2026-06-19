@@ -18,17 +18,18 @@ use mongodb::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sqlx::{
-    mysql::{MySqlPoolOptions, MySqlRow},
+    mysql::{MySqlArguments, MySqlPoolOptions, MySqlRow},
     postgres::{PgPoolOptions, PgRow},
-    Column, Executor, MySqlPool, PgPool, Row, TypeInfo,
+    Column, Executor, MySql, MySqlPool, PgPool, Row, TypeInfo,
 };
 use std::time::Duration;
 use thiserror::Error;
 
+const MAX_QUERY_ROWS: usize = 10_000;
+
 #[derive(Debug, Error)]
 pub(crate) enum DbTunnelError {
-    #[error("{0}")]
-    InvalidConfig(String),
+    // TODO(i18n): Return stable error codes here and localize backend messages in the frontend.
     #[error(transparent)]
     Tunnel(#[from] SshTunnelError),
     #[error("MySQL 连接失败：{0}")]
@@ -62,7 +63,7 @@ pub(crate) enum DbTunnelError {
 
 impl DbTunnelError {
     pub(crate) fn user_message(&self) -> String {
-        self.to_string()
+        redact_credentials(&self.to_string())
     }
 }
 
@@ -85,7 +86,7 @@ impl DatabaseTunnelSession {
         }
     }
 
-    async fn shutdown(self) {
+    pub(crate) async fn shutdown(self) {
         match self {
             Self::Mysql(session) => session.shutdown().await,
             Self::Postgres(session) => session.shutdown().await,
@@ -254,7 +255,7 @@ struct RedisConnectConfig {
     port: u16,
     #[serde(default)]
     password: String,
-    #[serde(default)]
+    #[serde(default, alias = "db")]
     database: u8,
     #[serde(default)]
     tunnel: Option<TunnelOptions>,
@@ -500,7 +501,7 @@ pub(crate) async fn mysql_columns(state: &AppState, args: Vec<Value>) -> Result<
 pub(crate) async fn mysql_query(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
     let pool = mysql_pool(state, &args)?;
     let sql = string_arg(&args, 2)?;
-    if is_write_statement(&sql) {
+    if is_write_statement(&sql) && !has_returning_clause(&sql) {
         let result = pool
             .execute(sql.as_str())
             .await
@@ -516,10 +517,7 @@ pub(crate) async fn mysql_query(state: &AppState, args: Vec<Value>) -> Result<Va
         }
         return Ok(value);
     }
-    let rows = sqlx::query(&sql)
-        .fetch_all(&pool)
-        .await
-        .map_err(|error| DbTunnelError::MysqlQuery(error).user_message())?;
+    let rows = fetch_mysql_rows_limited(&pool, &sql).await?;
     Ok(rows_to_json_mysql(rows))
 }
 
@@ -541,43 +539,44 @@ pub(crate) async fn mysql_update_cell(state: &AppState, args: Vec<Value>) -> Res
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let where_clause = if !pk_columns.is_empty() && pk_columns.len() == pk_values.len() {
+    let where_values = if !pk_columns.is_empty() && pk_columns.len() == pk_values.len() {
         pk_columns
             .iter()
             .zip(pk_values.iter())
             .filter_map(|(name, value)| {
-                name.as_str().map(|name| {
-                    format!(
-                        "{} = {}",
-                        mysql_identifier(name),
-                        mysql_value_literal(value)
-                    )
-                })
+                name.as_str()
+                    .map(|name| (format!("{} = ?", mysql_identifier(name)), value.clone()))
             })
             .collect::<Vec<_>>()
-            .join(" AND ")
     } else if !pk_column.is_empty() {
-        format!(
-            "{} = {}",
-            mysql_identifier(pk_column),
-            mysql_value_literal(&pk_value)
-        )
+        vec![(
+            format!("{} = ?", mysql_identifier(pk_column)),
+            pk_value.clone(),
+        )]
     } else {
         return Err("无法定位要更新的 MySQL 行。".to_string());
     };
+    let where_clause = where_values
+        .iter()
+        .map(|(clause, _)| clause.as_str())
+        .collect::<Vec<_>>()
+        .join(" AND ");
     if where_clause.trim().is_empty() {
         return Err("无法定位要更新的 MySQL 行。".to_string());
     }
     let sql = format!(
-        "UPDATE {}.{} SET {} = {} WHERE {}",
+        "UPDATE {}.{} SET {} = ? WHERE {}",
         mysql_identifier(&database),
         mysql_identifier(&table),
         mysql_identifier(&column),
-        mysql_value_literal(&new_value),
         where_clause
     );
-    let result = pool
-        .execute(sql.as_str())
+    let mut query = bind_mysql_value(sqlx::query(&sql), new_value);
+    for (_, value) in where_values {
+        query = bind_mysql_value(query, value);
+    }
+    let result = query
+        .execute(&pool)
         .await
         .map_err(|error| DbTunnelError::MysqlQuery(error).user_message())?;
     Ok(json!({ "affectedRows": result.rows_affected() }))
@@ -742,7 +741,7 @@ ORDER BY c.ordinal_position
 pub(crate) async fn postgres_query(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
     let pool = postgres_pool(state, &args)?;
     let sql = string_arg(&args, 2)?;
-    if is_write_statement(&sql) {
+    if is_write_statement(&sql) && !has_returning_clause(&sql) {
         let result = pool
             .execute(sql.as_str())
             .await
@@ -753,10 +752,7 @@ pub(crate) async fn postgres_query(state: &AppState, args: Vec<Value>) -> Result
             "rowCount": result.rows_affected()
         }));
     }
-    let rows = sqlx::query(&sql)
-        .fetch_all(&pool)
-        .await
-        .map_err(|error| DbTunnelError::PostgresQuery(error).user_message())?;
+    let rows = fetch_pg_rows_limited(&pool, &sql).await?;
     Ok(rows_to_json_pg(rows))
 }
 
@@ -1167,6 +1163,7 @@ pub(crate) async fn redis_keys(state: &AppState, args: Vec<Value>) -> Result<Val
         .and_then(Value::as_str)
         .unwrap_or("*")
         .to_string();
+    // WARNING: KEYS can block large Redis instances. Prefer redis_scan for new callers.
     let response = redis_command_values(state, &args, "KEYS", vec![pattern]).await?;
     let mut keys = Vec::new();
     for key in redis_string_list(response) {
@@ -1644,6 +1641,42 @@ fn pg_row_to_json(row: PgRow) -> Value {
     Value::Object(object)
 }
 
+async fn fetch_mysql_rows_limited(pool: &MySqlPool, sql: &str) -> Result<Vec<MySqlRow>, String> {
+    let mut stream = sqlx::query(sql).fetch_many(pool);
+    let mut rows = Vec::new();
+    while let Some(result) = stream
+        .try_next()
+        .await
+        .map_err(|error| DbTunnelError::MysqlQuery(error).user_message())?
+    {
+        if let sqlx::Either::Right(row) = result {
+            rows.push(row);
+            if rows.len() >= MAX_QUERY_ROWS {
+                break;
+            }
+        }
+    }
+    Ok(rows)
+}
+
+async fn fetch_pg_rows_limited(pool: &PgPool, sql: &str) -> Result<Vec<PgRow>, String> {
+    let mut stream = sqlx::query(sql).fetch_many(pool);
+    let mut rows = Vec::new();
+    while let Some(result) = stream
+        .try_next()
+        .await
+        .map_err(|error| DbTunnelError::PostgresQuery(error).user_message())?
+    {
+        if let sqlx::Either::Right(row) = result {
+            rows.push(row);
+            if rows.len() >= MAX_QUERY_ROWS {
+                break;
+            }
+        }
+    }
+    Ok(rows)
+}
+
 fn row_column_names<R>(row: &R) -> Vec<String>
 where
     R: Row,
@@ -1667,6 +1700,9 @@ fn mysql_value_to_json(row: &MySqlRow, index: usize, type_name: &str) -> Value {
     if let Ok(value) = row.try_get::<Option<String>, _>(index) {
         return value.map_or(Value::Null, |value| json!(value));
     }
+    if let Ok(value) = row.try_get::<String, _>(index) {
+        return json!(value);
+    }
     json!(format!("<unsupported:{type_name}>"))
 }
 
@@ -1682,6 +1718,9 @@ fn pg_value_to_json(row: &PgRow, index: usize, type_name: &str) -> Value {
     }
     if let Ok(value) = row.try_get::<Option<String>, _>(index) {
         return value.map_or(Value::Null, |value| json!(value));
+    }
+    if let Ok(value) = row.try_get::<String, _>(index) {
+        return json!(value);
     }
     json!(format!("<unsupported:{type_name}>"))
 }
@@ -1727,23 +1766,26 @@ fn mysql_identifier(value: &str) -> String {
     format!("`{}`", value.replace('`', "``"))
 }
 
-fn mysql_string_literal(value: &str) -> String {
-    format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
-}
-
-fn mysql_value_literal(value: &Value) -> String {
+fn bind_mysql_value<'q>(
+    query: sqlx::query::Query<'q, MySql, MySqlArguments>,
+    value: Value,
+) -> sqlx::query::Query<'q, MySql, MySqlArguments> {
     match value {
-        Value::Null => "NULL".to_string(),
-        Value::Bool(value) => {
-            if *value {
-                "1".to_string()
+        Value::Null => query.bind(Option::<String>::None),
+        Value::Bool(value) => query.bind(value),
+        Value::Number(number) => {
+            if let Some(value) = number.as_i64() {
+                query.bind(value)
+            } else if let Some(value) = number.as_u64() {
+                query.bind(value.to_string())
+            } else if let Some(value) = number.as_f64() {
+                query.bind(value)
             } else {
-                "0".to_string()
+                query.bind(number.to_string())
             }
         }
-        Value::Number(number) => number.to_string(),
-        Value::String(value) => mysql_string_literal(value),
-        other => mysql_string_literal(&other.to_string()),
+        Value::String(value) => query.bind(value),
+        other => query.bind(other.to_string()),
     }
 }
 
@@ -1771,6 +1813,68 @@ fn is_write_statement(sql: &str) -> bool {
             | "grant"
             | "revoke"
     )
+}
+
+fn has_returning_clause(sql: &str) -> bool {
+    contains_sql_keyword(sql, "returning")
+}
+
+fn contains_sql_keyword(sql: &str, keyword: &str) -> bool {
+    sql.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .any(|token| token.eq_ignore_ascii_case(keyword))
+}
+
+fn redact_credentials(message: &str) -> String {
+    let schemes = ["mysql://", "postgres://", "postgresql://", "redis://"];
+    let mut output = String::with_capacity(message.len());
+    let mut cursor = 0;
+
+    while cursor < message.len() {
+        let next_match = schemes
+            .iter()
+            .filter_map(|scheme| message[cursor..].find(scheme).map(|index| cursor + index))
+            .min();
+        let Some(start) = next_match else {
+            output.push_str(&message[cursor..]);
+            break;
+        };
+        output.push_str(&message[cursor..start]);
+        let end = message[start..]
+            .find(|character: char| character.is_whitespace() || matches!(character, '"' | '\''))
+            .map(|index| start + index)
+            .unwrap_or(message.len());
+        let candidate = &message[start..end];
+        output.push_str(&redact_url_credentials(candidate));
+        cursor = end;
+    }
+
+    output
+}
+
+fn redact_url_credentials(candidate: &str) -> String {
+    let mut trimmed_end = candidate.len();
+    while trimmed_end > 0
+        && matches!(
+            candidate.as_bytes()[trimmed_end - 1] as char,
+            '.' | ',' | ';' | ')' | ']'
+        )
+    {
+        trimmed_end -= 1;
+    }
+    let (url_part, suffix) = candidate.split_at(trimmed_end);
+    let Ok(mut url) = url::Url::parse(url_part) else {
+        return candidate.to_string();
+    };
+    if url.username().is_empty() && url.password().is_none() {
+        return candidate.to_string();
+    }
+    if !url.username().is_empty() {
+        let _ = url.set_username("redacted");
+    }
+    if url.password().is_some() {
+        let _ = url.set_password(Some("redacted"));
+    }
+    format!("{url}{suffix}")
 }
 
 fn redis_value_to_json(value: RedisValue) -> Value {

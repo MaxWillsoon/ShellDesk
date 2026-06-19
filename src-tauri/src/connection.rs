@@ -1101,6 +1101,32 @@ pub(crate) fn close_connection_by_id(state: &AppState, connection_id: &str) -> R
             let _kind = parts.next();
             !matches!(parts.next(), Some(value) if value == connection_id)
         });
+    let tunnel_sessions = {
+        let mut sessions = state
+            .database_tunnel_sessions
+            .lock()
+            .map_err(error_string)?;
+        let keys = sessions
+            .keys()
+            .filter_map(|key| {
+                let mut parts = key.splitn(3, ':');
+                let _kind = parts.next();
+                if matches!(parts.next(), Some(value) if value == connection_id) {
+                    Some(key.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        keys.into_iter()
+            .filter_map(|key| sessions.remove(&key))
+            .collect::<Vec<_>>()
+    };
+    for session in tunnel_sessions {
+        tokio::spawn(async move {
+            session.shutdown().await;
+        });
+    }
     Ok(())
 }
 

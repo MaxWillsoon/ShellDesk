@@ -5,6 +5,7 @@ use crate::{
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
+    fmt,
     path::PathBuf,
     process::Child as StdChild,
     sync::{Arc, Mutex},
@@ -71,7 +72,7 @@ pub(crate) struct ActiveConnection {
     pub(crate) privilege: Option<PrivilegeConfig>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct SshProfile {
     pub(crate) address: String,
     pub(crate) port: u16,
@@ -83,6 +84,24 @@ pub(crate) struct SshProfile {
     pub(crate) proxy_helper_exe: String,
     pub(crate) proxy: Option<SshProxyConfig>,
     pub(crate) jump: Option<Box<SshProfile>>,
+}
+
+impl fmt::Debug for SshProfile {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SshProfile")
+            .field("address", &self.address)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("auth_method", &self.auth_method)
+            .field("password", &"<redacted>")
+            .field("key_path", &self.key_path)
+            .field("known_hosts_path", &self.known_hosts_path)
+            .field("proxy_helper_exe", &self.proxy_helper_exe)
+            .field("proxy", &self.proxy)
+            .field("jump", &self.jump)
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
