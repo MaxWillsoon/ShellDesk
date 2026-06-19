@@ -404,9 +404,11 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
     setMessage(null);
 
     try {
+      const nextPort = parseInt(port, 10) || defaultPort;
       const result = await api.connections.mysqlConnect(connectionId, {
+        mode: 'auto',
         host: host || '127.0.0.1',
-        port: parseInt(port, 10) || defaultPort,
+        port: nextPort,
         user: user || 'root',
         password,
         database: initialDatabase.trim() || undefined,
@@ -416,7 +418,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
       setStatus('connected');
       void saveRemoteConnectionProfile(hostId, 'mysql', {
         host: host || '127.0.0.1',
-        port: String(parseInt(port, 10) || defaultPort),
+        port: String(nextPort),
         user: user || 'root',
         password,
         initialDatabase: initialDatabase.trim(),
@@ -446,7 +448,16 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
       setDbTables(nextTables);
       setMessage({
         type: 'success',
-        text: tCurrent('auto.remoteMySQL.1ltkkjj', { value0: result.transport === 'ssh-exec' ? tCurrent('mysql.transport.remoteTcpProxy') : tCurrent('mysql.transport.sshTunnel'), value1: user || 'root', value2: host || '127.0.0.1', value3: parseInt(port, 10) || defaultPort }),
+        text: tCurrent('auto.remoteMySQL.1ltkkjj', {
+          value0: result.transport === 'direct'
+            ? tCurrent('mysql.transport.direct')
+            : result.transport === 'ssh-exec'
+              ? tCurrent('mysql.transport.remoteTcpProxy')
+              : tCurrent('mysql.transport.sshTunnel'),
+          value1: user || 'root',
+          value2: host || '127.0.0.1',
+          value3: nextPort,
+        }),
       });
     } catch (error) {
       setStatus('error');

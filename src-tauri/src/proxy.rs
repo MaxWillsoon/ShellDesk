@@ -15,7 +15,7 @@ use tokio::{
 
 use crate::{error_string, now, prevent_tokio_process_window, read_string_field};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct SshProxyConfig {
     pub(crate) proxy_type: String,
     pub(crate) host: String,

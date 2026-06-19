@@ -1,7 +1,11 @@
-use crate::{browser_proxy, proxy::SshProxyConfig, terminal, updater::update_status, zmodem};
+use crate::{
+    browser_proxy, database_tunnel::DatabaseTunnelSession, proxy::SshProxyConfig, terminal,
+    updater::update_status, zmodem,
+};
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
+    fmt,
     path::PathBuf,
     process::Child as StdChild,
     sync::{Arc, Mutex},
@@ -19,6 +23,7 @@ pub(crate) struct AppState {
     pub(crate) active_transfers: Arc<Mutex<HashMap<String, ActiveTransfer>>>,
     pub(crate) zmodem_upload_selections: Arc<Mutex<HashMap<String, zmodem::ZmodemUploadSelection>>>,
     pub(crate) database_sessions: Arc<Mutex<HashMap<String, Value>>>,
+    pub(crate) database_tunnel_sessions: Arc<Mutex<HashMap<String, DatabaseTunnelSession>>>,
     pub(crate) update_state: Arc<Mutex<Value>>,
     pub(crate) sync_schedule_generation: Arc<Mutex<u64>>,
     pub(crate) ui_window: Arc<Mutex<Option<tauri::Window>>>,
@@ -39,6 +44,7 @@ impl AppState {
             active_transfers: Arc::new(Mutex::new(HashMap::new())),
             zmodem_upload_selections: Arc::new(Mutex::new(HashMap::new())),
             database_sessions: Arc::new(Mutex::new(HashMap::new())),
+            database_tunnel_sessions: Arc::new(Mutex::new(HashMap::new())),
             sync_schedule_generation: Arc::new(Mutex::new(0)),
             ui_window: Arc::new(Mutex::new(None)),
             host_key_responses: Arc::new(Mutex::new(HashMap::new())),
@@ -78,6 +84,24 @@ pub(crate) struct SshProfile {
     pub(crate) proxy_helper_exe: String,
     pub(crate) proxy: Option<SshProxyConfig>,
     pub(crate) jump: Option<Box<SshProfile>>,
+}
+
+impl fmt::Debug for SshProfile {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SshProfile")
+            .field("address", &self.address)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("auth_method", &self.auth_method)
+            .field("password", &"<redacted>")
+            .field("key_path", &self.key_path)
+            .field("known_hosts_path", &self.known_hosts_path)
+            .field("proxy_helper_exe", &self.proxy_helper_exe)
+            .field("proxy", &self.proxy)
+            .field("jump", &self.jump)
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]

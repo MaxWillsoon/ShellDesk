@@ -12,21 +12,24 @@ pub(crate) fn is_database_channel(channel: &str) -> bool {
 
 pub(crate) async fn dispatch(
     state: &AppState,
+    window: &tauri::Window,
     channel: &str,
     args: Vec<Value>,
 ) -> Option<Result<Value, String>> {
     let result = match channel {
-        "connection:mysql-connect" => database::mysql_connect(state, args).await,
-        "connection:mysql-disconnect" => database::disconnect_db_session(state, args, "mysql"),
+        "connection:mysql-connect" => database::mysql_connect(state, window, args).await,
+        "connection:mysql-disconnect" => {
+            database::disconnect_db_session_any(state, args, "mysql").await
+        }
         "connection:mysql-databases" => database::mysql_databases(state, args).await,
         "connection:mysql-tables" => database::mysql_tables(state, args).await,
         "connection:mysql-columns" => database::mysql_columns(state, args).await,
         "connection:mysql-query" => database::mysql_query(state, args).await,
         "connection:mysql-update-cell" => database::mysql_update_cell(state, args).await,
 
-        "connection:postgres-connect" => database::postgres_connect(state, args).await,
+        "connection:postgres-connect" => database::postgres_connect(state, window, args).await,
         "connection:postgres-disconnect" => {
-            database::disconnect_db_session(state, args, "postgres")
+            database::disconnect_db_session_any(state, args, "postgres").await
         }
         "connection:postgres-databases" => database::postgres_databases(state, args).await,
         "connection:postgres-schemas" => database::postgres_schemas(state, args).await,
@@ -34,8 +37,10 @@ pub(crate) async fn dispatch(
         "connection:postgres-columns" => database::postgres_columns(state, args).await,
         "connection:postgres-query" => database::postgres_query(state, args).await,
 
-        "connection:redis-connect" => database::redis_connect(state, args).await,
-        "connection:redis-disconnect" => database::disconnect_db_session(state, args, "redis"),
+        "connection:redis-connect" => database::redis_connect(state, window, args).await,
+        "connection:redis-disconnect" => {
+            database::disconnect_db_session_any(state, args, "redis").await
+        }
         "connection:redis-scan" => database::redis_scan(state, args).await,
         "connection:redis-keys" => database::redis_keys(state, args).await,
         "connection:redis-get-value" => database::redis_get_value(state, args).await,
@@ -52,17 +57,19 @@ pub(crate) async fn dispatch(
         "connection:sqlite-query" => database::sqlite_query(state, args).await,
         "connection:sqlite-update-cell" => database::sqlite_update_cell(state, args).await,
 
-        "connection:clickhouse-connect" => database::clickhouse_connect(state, args).await,
+        "connection:clickhouse-connect" => database::clickhouse_connect(state, window, args).await,
         "connection:clickhouse-disconnect" => {
-            database::disconnect_db_session(state, args, "clickhouse")
+            database::disconnect_db_session_any(state, args, "clickhouse").await
         }
         "connection:clickhouse-databases" => database::clickhouse_databases(state, args).await,
         "connection:clickhouse-tables" => database::clickhouse_tables(state, args).await,
         "connection:clickhouse-columns" => database::clickhouse_columns(state, args).await,
         "connection:clickhouse-query" => database::clickhouse_query(state, args).await,
 
-        "connection:mongo-connect" => database::mongo_connect(state, args).await,
-        "connection:mongo-disconnect" => database::disconnect_db_session(state, args, "mongo"),
+        "connection:mongo-connect" => database::mongo_connect(state, window, args).await,
+        "connection:mongo-disconnect" => {
+            database::disconnect_db_session_any(state, args, "mongo").await
+        }
         "connection:mongo-databases" => database::mongo_databases(state, args).await,
         "connection:mongo-collections" => database::mongo_collections(state, args).await,
         "connection:mongo-indexes" => database::mongo_indexes(state, args).await,

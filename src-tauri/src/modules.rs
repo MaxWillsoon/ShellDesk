@@ -18,6 +18,8 @@ pub(crate) mod connection;
 pub(crate) mod connection_monitor;
 #[path = "database.rs"]
 pub(crate) mod database;
+#[path = "database_tunnel.rs"]
+pub(crate) mod database_tunnel;
 #[path = "ipc.rs"]
 pub(crate) mod ipc;
 #[path = "local_fs.rs"]
@@ -30,6 +32,8 @@ pub(crate) mod proxy;
 pub(crate) mod remote_fs;
 #[path = "ssh_transport.rs"]
 pub(crate) mod ssh_transport;
+#[path = "ssh_tunnel.rs"]
+pub(crate) mod ssh_tunnel;
 #[path = "state.rs"]
 pub(crate) mod state;
 #[path = "sync_backend.rs"]

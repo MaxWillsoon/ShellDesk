@@ -358,11 +358,14 @@ function RemoteRedis({ connectionId, hostId }: RemoteRedisProps) {
     setMessage(null);
 
     try {
+      const nextPort = parseInt(port, 10) || defaultPort;
+      const nextDb = parseInt(dbNum, 10) || 0;
       const result = await api.connections.redisConnect(connectionId, {
+        mode: 'auto',
         host: host || '127.0.0.1',
-        port: parseInt(port, 10) || defaultPort,
+        port: nextPort,
         password,
-        db: parseInt(dbNum, 10) || 0,
+        db: nextDb,
       });
 
       redisIdRef.current = result.redisId;
@@ -370,11 +373,24 @@ function RemoteRedis({ connectionId, hostId }: RemoteRedisProps) {
       setStatus('connected');
       void saveRemoteConnectionProfile(hostId, 'redis', {
         host: host || '127.0.0.1',
-        port: String(parseInt(port, 10) || defaultPort),
+        port: String(nextPort),
         password,
-        dbNum: String(parseInt(dbNum, 10) || 0),
+        dbNum: String(nextDb),
       }).catch(() => undefined);
       await scanKeys({ reset: true, redisIdOverride: result.redisId });
+      setMessage({
+        type: 'success',
+        text: tCurrent('redis.connection.success', {
+          transport: result.transport === 'direct'
+            ? tCurrent('db.transport.direct')
+            : result.transport === 'ssh-exec'
+              ? tCurrent('db.transport.remoteTcpProxy')
+              : tCurrent('db.transport.sshTunnel'),
+          host: host || '127.0.0.1',
+          port: nextPort,
+          database: nextDb,
+        }),
+      });
     } catch (error) {
       setStatus('error');
       setErrorMessage(getErrorMessage(error));

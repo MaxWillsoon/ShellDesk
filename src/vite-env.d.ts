@@ -776,20 +776,20 @@ interface ShellDeskConnectionControls {
   clickhouseTables: (connectionId: string, clickhouseId: string, database: string) => Promise<ShellDeskClickHouseTable[]>;
   clickhouseColumns: (connectionId: string, clickhouseId: string, database: string, table: string) => Promise<ShellDeskClickHouseColumn[]>;
   clickhouseQuery: (connectionId: string, clickhouseId: string, sql: string, database?: string) => Promise<ShellDeskClickHouseQueryResult>;
-  postgresConnect: (connectionId: string, config: ShellDeskPostgresConnectConfig) => Promise<{ postgresId: string; alreadyConnected?: boolean }>;
+  postgresConnect: (connectionId: string, config: ShellDeskPostgresConnectConfig) => Promise<ShellDeskPostgresConnectResult>;
   postgresDisconnect: (connectionId: string, postgresId: string) => Promise<boolean>;
   postgresDatabases: (connectionId: string, postgresId: string) => Promise<string[]>;
   postgresSchemas: (connectionId: string, postgresId: string) => Promise<string[]>;
   postgresTables: (connectionId: string, postgresId: string, schema: string) => Promise<ShellDeskPostgresTable[]>;
   postgresColumns: (connectionId: string, postgresId: string, schema: string, table: string) => Promise<ShellDeskPostgresColumn[]>;
   postgresQuery: (connectionId: string, postgresId: string, sql: string) => Promise<ShellDeskPostgresQueryResult>;
-  mongoConnect: (connectionId: string, config: ShellDeskMongoConnectConfig) => Promise<{ mongoId: string; alreadyConnected?: boolean }>;
+  mongoConnect: (connectionId: string, config: ShellDeskMongoConnectConfig) => Promise<ShellDeskMongoConnectResult>;
   mongoDisconnect: (connectionId: string, mongoId: string) => Promise<boolean>;
   mongoDatabases: (connectionId: string, mongoId: string) => Promise<ShellDeskMongoDatabase[]>;
   mongoCollections: (connectionId: string, mongoId: string, database: string) => Promise<ShellDeskMongoCollection[]>;
   mongoIndexes: (connectionId: string, mongoId: string, database: string, collection: string) => Promise<ShellDeskMongoIndex[]>;
   mongoQuery: (connectionId: string, mongoId: string, request: ShellDeskMongoQueryRequest) => Promise<ShellDeskMongoQueryResult>;
-  redisConnect: (connectionId: string, config: ShellDeskRedisConnectConfig) => Promise<{ redisId: string; alreadyConnected?: boolean }>;
+  redisConnect: (connectionId: string, config: ShellDeskRedisConnectConfig) => Promise<ShellDeskRedisConnectResult>;
   redisDisconnect: (connectionId: string, redisId: string) => Promise<boolean>;
   redisScan: (connectionId: string, redisId: string, options?: ShellDeskRedisScanOptions) => Promise<ShellDeskRedisScanResult>;
   redisKeys: (connectionId: string, redisId: string, pattern?: string) => Promise<{ name: string; type: string; ttl: number }[]>;
@@ -818,16 +818,27 @@ interface ShellDeskConnectionControls {
   ) => Promise<{ affectedRows: number }>;
 }
 
+type ShellDeskDatabaseTransportMode = 'auto' | 'cli' | 'tunnel';
+type ShellDeskDatabaseTransport = 'ssh-tunnel' | 'ssh-exec' | 'direct';
+
+interface ShellDeskDatabaseTunnelConfig {
+  remoteHost: string;
+  remotePort: number;
+  connectTimeoutMs?: number;
+}
+
 interface ShellDeskMysqlConnectConfig {
+  mode?: ShellDeskDatabaseTransportMode;
   host?: string;
   port?: number;
   user?: string;
   password?: string;
   database?: string;
+  tunnel?: ShellDeskDatabaseTunnelConfig;
   mysqlId?: string;
 }
 
-type ShellDeskMysqlTransport = 'ssh-tunnel' | 'ssh-exec';
+type ShellDeskMysqlTransport = ShellDeskDatabaseTransport;
 
 interface ShellDeskMysqlConnectResult {
   mysqlId: string;
@@ -853,16 +864,18 @@ interface ShellDeskMysqlQueryResult {
 }
 
 interface ShellDeskClickHouseConnectConfig {
+  mode?: ShellDeskDatabaseTransportMode;
   host?: string;
   port?: number;
   user?: string;
   password?: string;
   database?: string;
   secure?: boolean;
+  tunnel?: ShellDeskDatabaseTunnelConfig;
   clickhouseId?: string;
 }
 
-type ShellDeskClickHouseTransport = 'ssh-tunnel' | 'ssh-exec';
+type ShellDeskClickHouseTransport = ShellDeskDatabaseTransport;
 
 interface ShellDeskClickHouseConnectResult {
   clickhouseId: string;
@@ -901,12 +914,20 @@ interface ShellDeskClickHouseQueryResult {
 }
 
 interface ShellDeskPostgresConnectConfig {
+  mode?: ShellDeskDatabaseTransportMode;
   host?: string;
   port?: number;
   user?: string;
   password?: string;
   database?: string;
+  tunnel?: ShellDeskDatabaseTunnelConfig;
   postgresId?: string;
+}
+
+interface ShellDeskPostgresConnectResult {
+  postgresId: string;
+  alreadyConnected?: boolean;
+  transport?: ShellDeskDatabaseTransport;
 }
 
 interface ShellDeskPostgresTable {
@@ -930,12 +951,20 @@ interface ShellDeskPostgresQueryResult {
 }
 
 interface ShellDeskMongoConnectConfig {
+  mode?: ShellDeskDatabaseTransportMode;
   host?: string;
   port?: number;
   username?: string;
   password?: string;
   authSource?: string;
+  tunnel?: ShellDeskDatabaseTunnelConfig;
   mongoId?: string;
+}
+
+interface ShellDeskMongoConnectResult {
+  mongoId: string;
+  alreadyConnected?: boolean;
+  transport?: ShellDeskDatabaseTransport;
 }
 
 interface ShellDeskMongoDatabase {
@@ -999,11 +1028,20 @@ interface ShellDeskSqliteUpdateTarget {
 }
 
 interface ShellDeskRedisConnectConfig {
+  mode?: ShellDeskDatabaseTransportMode;
   host?: string;
   port?: number;
   password?: string;
+  database?: number;
   db?: number;
+  tunnel?: ShellDeskDatabaseTunnelConfig;
   redisId?: string;
+}
+
+interface ShellDeskRedisConnectResult {
+  redisId: string;
+  alreadyConnected?: boolean;
+  transport?: ShellDeskDatabaseTransport;
 }
 
 interface ShellDeskRedisScanOptions {
