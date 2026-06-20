@@ -52,7 +52,7 @@
     ],
     "windows": {
       "nsis": {
-        "installMode": "currentUser",
+        "installMode": "both",
         "displayLanguageSelector": false
       }
     },

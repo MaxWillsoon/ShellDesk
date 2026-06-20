@@ -56,13 +56,13 @@ function releaseAssetUrl(repo, tag, fileName) {
 
 function platformFor(fileName) {
   const lower = fileName.toLowerCase();
-  if (/\.(exe|msi)$/i.test(fileName) || lower.includes('windows') || lower.includes('win32')) {
+  if (/\.(exe|msi|zip)$/i.test(fileName) || lower.includes('windows') || lower.includes('win32')) {
     return 'Windows';
   }
   if (/\.(dmg|app\.tar\.gz)$/i.test(fileName) || lower.includes('darwin') || lower.includes('macos')) {
     return 'macOS';
   }
-  if (/\.(appimage|appimage\.tar\.gz|deb|rpm)$/i.test(fileName) || lower.includes('linux')) {
+  if (/\.(appimage|appimage\.tar\.gz|deb|rpm|pkg\.tar\.zst)$/i.test(fileName) || lower.includes('linux')) {
     return 'Linux';
   }
   return 'Other';
@@ -80,17 +80,23 @@ function labelFor(fileName) {
     ? 'NSIS'
     : lower.endsWith('.msi')
       ? 'MSI'
-      : lower.endsWith('.dmg')
-        ? 'DMG'
-        : lower.endsWith('.app.tar.gz')
-          ? 'App tarball'
-          : lower.endsWith('.appimage') || lower.endsWith('.appimage.tar.gz')
-            ? 'AppImage'
-            : lower.endsWith('.deb')
-              ? 'Deb'
-              : lower.endsWith('.rpm')
-                ? 'RPM'
-                : 'Download';
+      : lower.endsWith('-portable.zip')
+        ? 'Portable zip'
+        : lower.endsWith('.zip')
+          ? 'Zip'
+          : lower.endsWith('.dmg')
+            ? 'DMG'
+            : lower.endsWith('.app.tar.gz')
+              ? 'App tarball'
+              : lower.endsWith('.appimage') || lower.endsWith('.appimage.tar.gz')
+                ? 'AppImage'
+                : lower.endsWith('.deb')
+                  ? 'Deb'
+                  : lower.endsWith('.rpm')
+                    ? 'RPM'
+                    : lower.endsWith('.pkg.tar.zst')
+                      ? 'Pacman'
+                      : 'Download';
   return [kind, arch].filter(Boolean).join(' ');
 }
 

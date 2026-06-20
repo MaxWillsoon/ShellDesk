@@ -67,7 +67,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm libarchive-tools
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm libarchive-tools zstd
 
       - name: Install deps
         run: pnpm install --frozen-lockfile
@@ -121,6 +121,7 @@ jobs:
             src-tauri/target/release/bundle/**/*.app.tar.gz
             src-tauri/target/release/bundle/**/*.deb
             src-tauri/target/release/bundle/**/*.rpm
+            src-tauri/target/release/bundle/**/*.pkg.tar.zst
             src-tauri/target/release/bundle/**/*.zip
             src-tauri/target/release/bundle/**/*.sig
             src-tauri/target/release/bundle/**/*.json
@@ -132,6 +133,7 @@ jobs:
             src-tauri/target/*/release/bundle/**/*.app.tar.gz
             src-tauri/target/*/release/bundle/**/*.deb
             src-tauri/target/*/release/bundle/**/*.rpm
+            src-tauri/target/*/release/bundle/**/*.pkg.tar.zst
             src-tauri/target/*/release/bundle/**/*.zip
             src-tauri/target/*/release/bundle/**/*.sig
             src-tauri/target/*/release/bundle/**/*.json
@@ -201,6 +203,7 @@ jobs:
             artifacts/**/*.app.tar.gz
             artifacts/**/*.deb
             artifacts/**/*.rpm
+            artifacts/**/*.pkg.tar.zst
             artifacts/**/*.zip
             artifacts/**/*.sig
             artifacts/**/*.json

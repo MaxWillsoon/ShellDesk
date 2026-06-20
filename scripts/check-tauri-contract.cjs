@@ -125,7 +125,7 @@ assert.equal(tauriConfig.bundle.category, 'DeveloperTool');
 assert.equal(tauriConfig.bundle.copyright, packageJson.license);
 assert.deepEqual(tauriConfig.bundle.icon, ['icons/icon.png', 'icons/icon.ico']);
 assert.deepEqual(tauriConfig.bundle.resources, ['../src/assets/images/icon.png']);
-assert.equal(tauriConfig.bundle.windows.nsis.installMode, 'currentUser');
+assert.equal(tauriConfig.bundle.windows.nsis.installMode, 'both');
 assert.equal(tauriConfig.bundle.macOS.minimumSystemVersion, '10.15');
 assertFile('src-tauri/icons/icon.png');
 assertFile('src-tauri/icons/icon.ico');
@@ -146,6 +146,9 @@ assert.match(buildWrapper, /TAURI_UPDATER_PUBLIC_KEY/);
 assert.match(buildWrapper, /createUpdaterArtifacts: false/);
 assert.match(buildWrapper, /function pnpmCommand\(\)/);
 assert.match(buildWrapper, /pnpm\.cmd/);
+assert.match(buildWrapper, /scripts\/create-extra-packages\.cjs/);
+assert.match(buildWrapper, /\.pkg\.tar\.zst/);
+assert.match(buildWrapper, /!isDebugBuild/);
 assert.match(buildWrapper, /assertBundleArtifactsCreated/);
 assert.doesNotMatch(buildWrapper, /npm_execpath/);
 assert.match(buildWrapper, /spawnSync\(command, \['tauri', 'build'/);
@@ -172,13 +175,16 @@ for (const expected of [
   'pack_script: pack:mac',
   'pack_script: pack:win-x64',
   'pack_script: pack:linux-x64',
+  'libarchive-tools zstd',
   'TAURI_SIGNING_PRIVATE_KEY is required',
   'TAURI_UPDATER_PUBLIC_KEY is required',
   'node scripts/set-release-version.cjs "${VERSION}" --check',
   'node .github/scripts/generate-tauri-updater-manifest.js artifacts artifacts/latest.json',
   'src-tauri/target/*/release/bundle/**/*.exe',
+  'src-tauri/target/*/release/bundle/**/*.pkg.tar.zst',
   'if-no-files-found: error',
   'artifacts/**/*.AppImage.tar.gz',
+  'artifacts/**/*.pkg.tar.zst',
   'artifacts/**/*.sig',
   'artifacts/latest.json',
 ]) {
@@ -201,6 +207,15 @@ assert.ok(
   !/^\s*artifacts\/latest\.json\s*$/m.test(releaseWorkflow),
   'release workflow must not upload latest.json twice',
 );
+
+const extraPackageScript = readText('scripts/create-extra-packages.cjs');
+assert.match(extraPackageScript, /createWindowsPortableZip/);
+assert.match(extraPackageScript, /createPacmanPackage/);
+assert.match(extraPackageScript, /windowsArchName/);
+assert.match(extraPackageScript, /Compress-Archive/);
+assert.match(extraPackageScript, /bsdtar/);
+assert.match(extraPackageScript, /\.pkg\.tar\.zst/);
+assert.match(extraPackageScript, /-portable\.zip/);
 
 assert.match(versionSyncScript, /updateJsonVersion\('package\.json'\)/);
 assert.match(versionSyncScript, /updateJsonVersion\('src-tauri\/tauri\.conf\.json'\)/);

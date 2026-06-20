@@ -36,6 +36,7 @@ const artifactExtensions = [
   '.AppImage',
   '.deb',
   '.rpm',
+  '.pkg.tar.zst',
   '.zip',
   '.tar.gz',
   '.sig',
@@ -100,6 +101,21 @@ try {
       console.error(`Failed to start Tauri build: ${result.error.message}`);
     }
     exitCode = result.status ?? 1;
+    if (exitCode === 0 && !isDebugBuild) {
+      const extraPackageResult = spawnSync(process.execPath, ['scripts/create-extra-packages.cjs', ...args], {
+        cwd: path.resolve(__dirname, '..'),
+        env: process.env,
+        stdio: 'inherit',
+      });
+      if (extraPackageResult.error) {
+        console.error(`Failed to create extra package artifacts: ${extraPackageResult.error.message}`);
+        exitCode = 1;
+      } else {
+        exitCode = extraPackageResult.status ?? 1;
+      }
+    } else if (exitCode === 0) {
+      console.log('Skipping extra package artifacts for debug build.');
+    }
     if (exitCode === 0) {
       try {
         assertBundleArtifactsCreated();

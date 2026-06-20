@@ -33,10 +33,12 @@ function runNode(args, env = {}) {
 try {
   write(path.join(artifactsDir, 'windows', 'ShellDesk_1.2.3_x64-setup.exe'), 'windows');
   write(path.join(artifactsDir, 'windows', 'ShellDesk_1.2.3_x64-setup.exe.sig'), 'windows-signature');
+  write(path.join(artifactsDir, 'windows', 'ShellDesk_1.2.3_x64-portable.zip'), 'windows-portable');
   write(path.join(artifactsDir, 'macos', 'ShellDesk_1.2.3_aarch64.app.tar.gz'), 'macos');
   write(path.join(artifactsDir, 'macos', 'ShellDesk_1.2.3_aarch64.app.tar.gz.sig'), 'macos-signature');
   write(path.join(artifactsDir, 'linux', 'ShellDesk_1.2.3_x86_64.AppImage'), 'linux');
   write(path.join(artifactsDir, 'linux', 'ShellDesk_1.2.3_x86_64.AppImage.sig'), 'linux-signature');
+  write(path.join(artifactsDir, 'linux', 'shelldesk-1.2.3-1-x86_64.pkg.tar.zst'), 'pacman');
   write(path.join(artifactsDir, 'linux-legacy', 'ShellDesk_1.2.3_x86_64.AppImage.tar.gz'), 'linux-legacy');
   write(path.join(artifactsDir, 'linux-legacy', 'ShellDesk_1.2.3_x86_64.AppImage.tar.gz.sig'), 'linux-legacy-signature');
   write(path.join(artifactsDir, 'latest.yml'), 'ignored');
@@ -73,9 +75,11 @@ try {
   assert.match(releaseNotes, /\*\*macOS\*\*/);
   assert.match(releaseNotes, /\*\*Linux\*\*/);
   assert.match(releaseNotes, /ShellDesk_1\.2\.3_x64-setup\.exe/);
+  assert.match(releaseNotes, /ShellDesk_1\.2\.3_x64-portable\.zip/);
   assert.match(releaseNotes, /ShellDesk_1\.2\.3_aarch64\.app\.tar\.gz/);
   assert.match(releaseNotes, /ShellDesk_1\.2\.3_x86_64\.AppImage\.tar\.gz/);
   assert.match(releaseNotes, /ShellDesk_1\.2\.3_x86_64\.AppImage/);
+  assert.match(releaseNotes, /shelldesk-1\.2\.3-1-x86_64\.pkg\.tar\.zst/);
   assert.doesNotMatch(releaseNotes, /ShellDesk_1\.2\.3_arm64-setup\.exe/);
   assert.doesNotMatch(releaseNotes, /\.sig/);
   assert.doesNotMatch(releaseNotes, /latest\.yml/);
@@ -87,8 +91,10 @@ try {
   assert.match(releaseWorkflow, /artifacts\/\*\*\/\*\.app\.tar\.gz/);
   assert.match(releaseWorkflow, /artifacts\/\*\*\/\*\.AppImage\.tar\.gz/);
   assert.match(releaseWorkflow, /artifacts\/\*\*\/\*\.AppImage/);
+  assert.match(releaseWorkflow, /artifacts\/\*\*\/\*\.pkg\.tar\.zst/);
   assert.match(releaseWorkflow, /artifacts\/\*\*\/\*\.json/);
   assert.match(releaseWorkflow, /src-tauri\/target\/\*\/release\/bundle\/\*\*\/\*\.exe/);
+  assert.match(releaseWorkflow, /src-tauri\/target\/\*\/release\/bundle\/\*\*\/\*\.pkg\.tar\.zst/);
   assert.match(releaseWorkflow, /if-no-files-found: error/);
   assert.doesNotMatch(releaseWorkflow, /^\s*artifacts\/\*\*\/\*\.tar\.gz\s*$/m);
   assert.doesNotMatch(releaseWorkflow, /^\s*artifacts\/\*\*\/\*\.app\.tar\.gz\.sig\s*$/m);
@@ -102,6 +108,7 @@ try {
 
   const tauriConfig = JSON.parse(fs.readFileSync(path.join(repoRoot, 'src-tauri/tauri.conf.json'), 'utf8'));
   assert.equal(tauriConfig.bundle.createUpdaterArtifacts, true);
+  assert.equal(tauriConfig.bundle.windows.nsis.installMode, 'both');
 
   const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
   for (const scriptName of ['release', 'pack', 'pack:dir', 'pack:win', 'pack:win-x64', 'pack:win-arm64', 'pack:mac', 'pack:linux', 'pack:linux-x64', 'pack:linux-arm64']) {
@@ -114,9 +121,20 @@ try {
   assert.match(buildWrapper, /releases\/latest\/download\/latest\.json/);
   assert.match(buildWrapper, /function pnpmCommand\(\)/);
   assert.match(buildWrapper, /pnpm\.cmd/);
+  assert.match(buildWrapper, /scripts\/create-extra-packages\.cjs/);
+  assert.match(buildWrapper, /\.pkg\.tar\.zst/);
+  assert.match(buildWrapper, /!isDebugBuild/);
   assert.match(buildWrapper, /assertBundleArtifactsCreated/);
   assert.doesNotMatch(buildWrapper, /npm_execpath/);
   assert.match(buildWrapper, /spawnSync\(command, \['tauri', 'build'/);
+
+  const extraPackageScript = fs.readFileSync(path.join(repoRoot, 'scripts/create-extra-packages.cjs'), 'utf8');
+  assert.match(extraPackageScript, /createWindowsPortableZip/);
+  assert.match(extraPackageScript, /createPacmanPackage/);
+  assert.match(extraPackageScript, /windowsArchName/);
+  assert.match(extraPackageScript, /Compress-Archive/);
+  assert.match(extraPackageScript, /bsdtar/);
+  assert.match(extraPackageScript, /-portable\.zip/);
 
   const debugBuild = JSON.parse(runNode(['scripts/run-tauri-build.cjs', '--debug'], {
     SHELLDESK_TAURI_BUILD_DRY_RUN: '1',
