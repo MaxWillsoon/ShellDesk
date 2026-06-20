@@ -33,6 +33,8 @@ function runNode(args, env = {}) {
 try {
   write(path.join(artifactsDir, 'windows', 'ShellDesk_1.2.3_x64-setup.exe'), 'windows');
   write(path.join(artifactsDir, 'windows', 'ShellDesk_1.2.3_x64-setup.exe.sig'), 'windows-signature');
+  write(path.join(artifactsDir, 'windows', 'ShellDesk_1.2.3_x64_en-US.msi'), 'windows-msi');
+  write(path.join(artifactsDir, 'windows', 'ShellDesk_1.2.3_x64_en-US.msi.sig'), 'windows-msi-signature');
   write(path.join(artifactsDir, 'windows', 'ShellDesk_1.2.3_x64-portable.zip'), 'windows-portable');
   write(path.join(artifactsDir, 'macos', 'ShellDesk_1.2.3_aarch64.app.tar.gz'), 'macos');
   write(path.join(artifactsDir, 'macos', 'ShellDesk_1.2.3_aarch64.app.tar.gz.sig'), 'macos-signature');
