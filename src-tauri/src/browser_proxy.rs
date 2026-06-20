@@ -1,7 +1,10 @@
 use crate::{
     error_string, get_connection, https_url_origin, pick_free_local_port, start_ssh_local_forward,
-    string_arg, wait_for_tcp, AppState, ConnectionKind,
+    string_arg, wait_for_tcp, AppState, ConnectionKind, SshProfile,
 };
+use crate::{run_ssh_command_for_profile_with_window, shell_quote};
+use base64::Engine;
+use reqwest::header::HOST;
 use serde_json::{json, Value};
 use std::{net::SocketAddr, process::Child as StdChild, time::Duration};
 use tokio::{
@@ -18,8 +21,16 @@ pub(crate) struct BrowserProxySession {
     pub(crate) ssh_forward: Option<StdChild>,
 }
 
+#[derive(Clone)]
+struct BrowserRemoteFallback {
+    state: AppState,
+    window: tauri::Window,
+    profile: SshProfile,
+}
+
 pub(crate) async fn browser_resolve_url(
     state: &AppState,
+    window: &tauri::Window,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
@@ -49,6 +60,7 @@ pub(crate) async fn browser_resolve_url(
                 parsed.clone(),
                 None,
                 true,
+                None,
             )
             .await?;
             let browser_url = browser_proxy_url(&parsed, proxy_port, "http")?;
@@ -121,16 +133,25 @@ pub(crate) async fn browser_resolve_url(
         return Err(format!("远程浏览器 SSH 转发启动失败：{error}"));
     }
 
-    let proxy_port =
-        match start_browser_reverse_proxy(parsed.clone(), Some(local_port), trusted_certificate)
-            .await
-        {
-            Ok(proxy_port) => proxy_port,
-            Err(error) => {
-                let _ = child.kill();
-                return Err(error);
-            }
-        };
+    let remote_fallback = Some(BrowserRemoteFallback {
+        state: state.clone(),
+        window: window.clone(),
+        profile: profile.clone(),
+    });
+    let proxy_port = match start_browser_reverse_proxy(
+        parsed.clone(),
+        Some(local_port),
+        trusted_certificate,
+        remote_fallback,
+    )
+    .await
+    {
+        Ok(proxy_port) => proxy_port,
+        Err(error) => {
+            let _ = child.kill();
+            return Err(error);
+        }
+    };
     let browser_port = proxy_port.0;
     let browser_url = browser_proxy_url(&parsed, browser_port, "http")?;
     let shutdown = Some(proxy_port.1);
@@ -189,6 +210,7 @@ async fn ensure_browser_reverse_proxy(
     upstream_url: reqwest::Url,
     upstream_forward_port: Option<u16>,
     accept_invalid_certs: bool,
+    remote_fallback: Option<BrowserRemoteFallback>,
 ) -> Result<u16, String> {
     if let Some(existing) = state
         .browser_proxies
@@ -198,9 +220,13 @@ async fn ensure_browser_reverse_proxy(
     {
         return Ok(existing.local_port);
     }
-    let (proxy_port, shutdown) =
-        start_browser_reverse_proxy(upstream_url, upstream_forward_port, accept_invalid_certs)
-            .await?;
+    let (proxy_port, shutdown) = start_browser_reverse_proxy(
+        upstream_url,
+        upstream_forward_port,
+        accept_invalid_certs,
+        remote_fallback,
+    )
+    .await?;
     state.browser_proxies.lock().map_err(error_string)?.insert(
         key,
         BrowserProxySession {
@@ -217,24 +243,21 @@ async fn start_browser_reverse_proxy(
     upstream_url: reqwest::Url,
     upstream_forward_port: Option<u16>,
     accept_invalid_certs: bool,
+    remote_fallback: Option<BrowserRemoteFallback>,
 ) -> Result<(u16, oneshot::Sender<()>), String> {
     let host = upstream_url
         .host_str()
         .ok_or_else(|| "浏览器 URL 缺少主机名。".to_string())?
         .to_string();
-    let upstream_origin = format!(
-        "{}://{}{}",
-        upstream_url.scheme(),
-        host,
-        upstream_url
-            .port()
-            .map(|port| format!(":{port}"))
-            .unwrap_or_default()
-    );
+    let upstream_origin = origin_from_url(&upstream_url)?;
+    let upstream_host_header = host_header_from_url(&upstream_url)?;
+    let request_origin =
+        request_origin_for_upstream(&upstream_url, upstream_forward_port, accept_invalid_certs)?;
     let mut client_builder = reqwest::Client::builder()
         .danger_accept_invalid_certs(accept_invalid_certs)
         .redirect(reqwest::redirect::Policy::none());
-    if let Some(forward_port) = upstream_forward_port {
+    if let Some(forward_port) = upstream_forward_port.filter(|_| request_origin == upstream_origin)
+    {
         client_builder = client_builder
             .resolve_to_addrs(&host, &[SocketAddr::from(([127, 0, 0, 1], forward_port))]);
     }
@@ -253,8 +276,18 @@ async fn start_browser_reverse_proxy(
                         Ok((stream, _)) => {
                             let next_client = client.clone();
                             let next_origin = upstream_origin.clone();
+                            let next_request_origin = request_origin.clone();
+                            let next_host_header = upstream_host_header.clone();
+                            let next_remote_fallback = remote_fallback.clone();
                             tauri::async_runtime::spawn(async move {
-                                let _ = handle_trusted_https_browser_proxy(stream, next_client, next_origin).await;
+                                let _ = handle_trusted_https_browser_proxy(
+                                    stream,
+                                    next_client,
+                                    next_origin,
+                                    next_request_origin,
+                                    next_host_header,
+                                    next_remote_fallback,
+                                ).await;
                             });
                         }
                         Err(_) => break,
@@ -266,10 +299,66 @@ async fn start_browser_reverse_proxy(
     Ok((proxy_port, shutdown_tx))
 }
 
+fn origin_from_url(url: &reqwest::Url) -> Result<String, String> {
+    let mut origin = url.clone();
+    origin.set_path("");
+    origin.set_query(None);
+    origin.set_fragment(None);
+    let mut text = origin.to_string();
+    if text.ends_with('/') {
+        text.pop();
+    }
+    Ok(text)
+}
+
+fn host_header_from_url(url: &reqwest::Url) -> Result<String, String> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| "浏览器 URL 缺少主机名。".to_string())?;
+    Ok(match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_string(),
+    })
+}
+
+fn request_origin_for_upstream(
+    upstream_url: &reqwest::Url,
+    upstream_forward_port: Option<u16>,
+    accept_invalid_certs: bool,
+) -> Result<String, String> {
+    let Some(forward_port) = upstream_forward_port else {
+        return origin_from_url(upstream_url);
+    };
+    if !should_use_forward_origin(upstream_url, accept_invalid_certs) {
+        return origin_from_url(upstream_url);
+    }
+    let mut request_url = upstream_url.clone();
+    request_url
+        .set_host(Some("127.0.0.1"))
+        .map_err(|_| "浏览器代理地址无效。".to_string())?;
+    request_url
+        .set_port(Some(forward_port))
+        .map_err(|_| "浏览器代理端口无效。".to_string())?;
+    origin_from_url(&request_url)
+}
+
+fn should_use_forward_origin(upstream_url: &reqwest::Url, accept_invalid_certs: bool) -> bool {
+    upstream_url.scheme() == "http"
+        || accept_invalid_certs
+        || upstream_url.host_str().is_some_and(|host| {
+            host.eq_ignore_ascii_case("localhost")
+                || host.eq_ignore_ascii_case("localhost.")
+                || host.parse::<std::net::IpAddr>().is_ok()
+        })
+}
+
 async fn handle_trusted_https_browser_proxy(
     mut stream: TcpStream,
     client: reqwest::Client,
     upstream_origin: String,
+    request_origin: String,
+    upstream_host_header: String,
+    remote_fallback: Option<BrowserRemoteFallback>,
 ) -> Result<(), String> {
     let (method, target, headers, body) = read_browser_http_request(&mut stream).await?;
     let browser_host = headers
@@ -277,37 +366,57 @@ async fn handle_trusted_https_browser_proxy(
         .find(|(name, _)| name.eq_ignore_ascii_case("host"))
         .map(|(_, value)| value.clone())
         .unwrap_or_default();
-    let upstream_url = if target.starts_with("http://") || target.starts_with("https://") {
-        target
-    } else if target.starts_with('/') {
-        format!("{upstream_origin}{target}")
-    } else {
-        format!("{upstream_origin}/{target}")
-    };
+    let upstream_url = browser_request_url(
+        &target,
+        browser_host.as_str(),
+        &upstream_origin,
+        &request_origin,
+    );
+    let remote_upstream_url = browser_request_url(
+        &target,
+        browser_host.as_str(),
+        &upstream_origin,
+        &upstream_origin,
+    );
     let method = reqwest::Method::from_bytes(method.as_bytes())
         .map_err(|_| "浏览器请求方法无效。".to_string())?;
-    let mut request = client.request(method, upstream_url);
-    for (name, value) in headers {
+    let method_text = method.as_str().to_string();
+    let fallback_headers = headers.clone();
+    let fallback_body = body.clone();
+    let mut request = client
+        .request(method, upstream_url)
+        .header(HOST, upstream_host_header.clone());
+    for (name, value) in &headers {
         let name_lower = name.to_ascii_lowercase();
-        if matches!(
-            name_lower.as_str(),
-            "connection"
-                | "proxy-connection"
-                | "host"
-                | "keep-alive"
-                | "te"
-                | "trailer"
-                | "transfer-encoding"
-                | "upgrade"
-        ) {
+        if is_hop_by_hop_request_header(&name_lower) || name_lower == "host" {
             continue;
         }
-        request = request.header(name, value);
+        request = request.header(name.as_str(), value.as_str());
     }
     if !body.is_empty() {
         request = request.body(body);
     }
-    let response = request.send().await.map_err(error_string)?;
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(error) => {
+            if let Some(fallback) = remote_fallback {
+                return handle_remote_browser_proxy(
+                    &mut stream,
+                    fallback,
+                    method_text,
+                    remote_upstream_url,
+                    fallback_headers,
+                    fallback_body,
+                    upstream_origin,
+                    request_origin,
+                    upstream_host_header,
+                    browser_host,
+                )
+                .await;
+            }
+            return Err(error_string(error));
+        }
+    };
     let status = response.status();
     let response_headers = response.headers().clone();
     let body = response.bytes().await.map_err(error_string)?;
@@ -331,10 +440,15 @@ async fn handle_trusted_https_browser_proxy(
         }
         if let Ok(mut value) = value.to_str().map(str::to_string) {
             if name_lower == "location"
-                && value.starts_with(&upstream_origin)
+                && (value.starts_with(&upstream_origin) || value.starts_with(&request_origin))
                 && !browser_host.is_empty()
             {
-                value = format!("http://{}{}", browser_host, &value[upstream_origin.len()..]);
+                let origin = if value.starts_with(&upstream_origin) {
+                    &upstream_origin
+                } else {
+                    &request_origin
+                };
+                value = format!("http://{}{}", browser_host, &value[origin.len()..]);
             }
             raw.push_str(name.as_str());
             raw.push_str(": ");
@@ -351,6 +465,282 @@ async fn handle_trusted_https_browser_proxy(
         .await
         .map_err(error_string)?;
     stream.write_all(&body).await.map_err(error_string)?;
+    let _ = stream.shutdown().await;
+    Ok(())
+}
+
+fn browser_request_url(
+    target: &str,
+    browser_host: &str,
+    upstream_origin: &str,
+    request_origin: &str,
+) -> String {
+    if target.starts_with('/') {
+        return format!("{request_origin}{target}");
+    }
+    if !target.starts_with("http://") && !target.starts_with("https://") {
+        return format!("{request_origin}/{target}");
+    }
+
+    let Ok(parsed) = reqwest::Url::parse(target) else {
+        return target.to_string();
+    };
+    let Ok(target_origin) = origin_from_url(&parsed) else {
+        return target.to_string();
+    };
+    let browser_origin = (!browser_host.is_empty()).then(|| format!("http://{browser_host}"));
+    if browser_origin.as_deref() == Some(target_origin.as_str())
+        || target_origin == upstream_origin
+        || target_origin == request_origin
+    {
+        return format!("{request_origin}{}", path_query_fragment(&parsed));
+    }
+    target.to_string()
+}
+
+fn path_query_fragment(url: &reqwest::Url) -> String {
+    let mut output = url.path().to_string();
+    if output.is_empty() {
+        output.push('/');
+    }
+    if let Some(query) = url.query() {
+        output.push('?');
+        output.push_str(query);
+    }
+    if let Some(fragment) = url.fragment() {
+        output.push('#');
+        output.push_str(fragment);
+    }
+    output
+}
+
+async fn handle_remote_browser_proxy(
+    stream: &mut TcpStream,
+    fallback: BrowserRemoteFallback,
+    method: String,
+    upstream_url: String,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+    upstream_origin: String,
+    request_origin: String,
+    upstream_host_header: String,
+    browser_host: String,
+) -> Result<(), String> {
+    let command = remote_browser_curl_command(
+        &method,
+        &upstream_url,
+        &upstream_host_header,
+        &headers,
+        !body.is_empty(),
+    );
+    let stdin = String::from_utf8_lossy(&body).to_string();
+    let output = run_ssh_command_for_profile_with_window(
+        &fallback.state,
+        Some(fallback.window),
+        fallback.profile,
+        command,
+        stdin,
+    )
+    .await?;
+    let stdout = output
+        .get("stdout")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let stderr = output.get("stderr").and_then(Value::as_str).unwrap_or("");
+    let success = output
+        .get("success")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if stdout.is_empty() {
+        let reason = if stderr.trim().is_empty() {
+            "远程 curl 未返回数据。".to_string()
+        } else {
+            format!("远程 curl 请求失败：{}", stderr.trim())
+        };
+        write_browser_error_response(stream, 502, &reason).await?;
+        return Ok(());
+    }
+    let response_bytes = base64::engine::general_purpose::STANDARD
+        .decode(stdout)
+        .map_err(|error| format!("远程浏览器响应解码失败：{error}"))?;
+    if !success && response_bytes.is_empty() {
+        let reason = if stderr.trim().is_empty() {
+            "远程 curl 请求失败。".to_string()
+        } else {
+            format!("远程 curl 请求失败：{}", stderr.trim())
+        };
+        write_browser_error_response(stream, 502, &reason).await?;
+        return Ok(());
+    }
+    write_remote_browser_response(
+        stream,
+        &response_bytes,
+        &upstream_origin,
+        &request_origin,
+        &browser_host,
+    )
+    .await
+}
+
+fn remote_browser_curl_command(
+    method: &str,
+    upstream_url: &str,
+    upstream_host_header: &str,
+    headers: &[(String, String)],
+    has_body: bool,
+) -> String {
+    let mut parts = vec![
+        "curl".to_string(),
+        "-sS".to_string(),
+        "--max-time".to_string(),
+        "30".to_string(),
+        "--http1.1".to_string(),
+        "-i".to_string(),
+        "-X".to_string(),
+        shell_quote(method),
+        "-H".to_string(),
+        shell_quote(&format!("Host: {upstream_host_header}")),
+    ];
+    for (name, value) in headers {
+        let name_lower = name.to_ascii_lowercase();
+        if is_hop_by_hop_request_header(&name_lower)
+            || matches!(name_lower.as_str(), "host" | "content-length")
+        {
+            continue;
+        }
+        parts.push("-H".to_string());
+        parts.push(shell_quote(&format!("{name}: {value}")));
+    }
+    if has_body {
+        parts.push("--data-binary".to_string());
+        parts.push("@-".to_string());
+    }
+    parts.push(shell_quote(upstream_url));
+    format!(
+        "{} | (base64 2>/dev/null || openssl base64 -A) | tr -d '\\r\\n'",
+        parts.join(" ")
+    )
+}
+
+fn is_hop_by_hop_request_header(name_lower: &str) -> bool {
+    matches!(
+        name_lower,
+        "connection"
+            | "proxy-connection"
+            | "keep-alive"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+    )
+}
+
+async fn write_remote_browser_response(
+    stream: &mut TcpStream,
+    response_bytes: &[u8],
+    upstream_origin: &str,
+    request_origin: &str,
+    browser_host: &str,
+) -> Result<(), String> {
+    let Some(header_end) = find_http_header_end(response_bytes) else {
+        write_browser_error_response(stream, 502, "远程浏览器响应格式无效。").await?;
+        return Ok(());
+    };
+    let (header_bytes, body) = response_bytes.split_at(header_end);
+    let header_text = String::from_utf8_lossy(header_bytes);
+    let mut lines = header_text.lines();
+    let status_line = lines.next().unwrap_or("HTTP/1.1 502 Bad Gateway");
+    let mut status_parts = status_line.splitn(3, ' ');
+    let _http_version = status_parts.next();
+    let status_code = status_parts.next().unwrap_or("502");
+    let reason = status_parts.next().unwrap_or("Bad Gateway");
+    let mut raw = format!("HTTP/1.1 {status_code} {reason}\r\n");
+    for line in lines {
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() {
+            continue;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let name_lower = name.to_ascii_lowercase();
+        if matches!(
+            name_lower.as_str(),
+            "connection"
+                | "keep-alive"
+                | "proxy-authenticate"
+                | "proxy-authorization"
+                | "te"
+                | "trailer"
+                | "transfer-encoding"
+                | "upgrade"
+                | "content-length"
+        ) {
+            continue;
+        }
+        let mut value = value.trim().to_string();
+        if name_lower == "location"
+            && (value.starts_with(upstream_origin) || value.starts_with(request_origin))
+            && !browser_host.is_empty()
+        {
+            let origin = if value.starts_with(upstream_origin) {
+                upstream_origin
+            } else {
+                request_origin
+            };
+            value = format!("http://{}{}", browser_host, &value[origin.len()..]);
+        }
+        raw.push_str(name);
+        raw.push_str(": ");
+        raw.push_str(&value);
+        raw.push_str("\r\n");
+    }
+    raw.push_str(&format!(
+        "Content-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    ));
+    stream
+        .write_all(raw.as_bytes())
+        .await
+        .map_err(error_string)?;
+    stream.write_all(body).await.map_err(error_string)?;
+    let _ = stream.shutdown().await;
+    Ok(())
+}
+
+fn find_http_header_end(bytes: &[u8]) -> Option<usize> {
+    bytes
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| index + 4)
+        .or_else(|| {
+            bytes
+                .windows(2)
+                .position(|window| window == b"\n\n")
+                .map(|index| index + 2)
+        })
+}
+
+async fn write_browser_error_response(
+    stream: &mut TcpStream,
+    status: u16,
+    message: &str,
+) -> Result<(), String> {
+    let body = message.as_bytes();
+    let reason = match status {
+        502 => "Bad Gateway",
+        _ => "Error",
+    };
+    let raw = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream
+        .write_all(raw.as_bytes())
+        .await
+        .map_err(error_string)?;
+    stream.write_all(body).await.map_err(error_string)?;
     let _ = stream.shutdown().await;
     Ok(())
 }
@@ -441,5 +831,102 @@ mod tests {
 
         assert_ne!(plain, trusted);
         assert_eq!(plain, "conn-1:reverse-https:example.com:443");
+    }
+
+    #[test]
+    fn forwarded_http_loopback_uses_ssh_forward_port_as_request_origin() {
+        let parsed = reqwest::Url::parse("http://127.0.0.1:5173/dashboard").unwrap();
+
+        assert_eq!(origin_from_url(&parsed).unwrap(), "http://127.0.0.1:5173");
+        assert_eq!(
+            request_origin_for_upstream(&parsed, Some(42123), false).unwrap(),
+            "http://127.0.0.1:42123"
+        );
+        assert_eq!(host_header_from_url(&parsed).unwrap(), "127.0.0.1:5173");
+    }
+
+    #[test]
+    fn forwarded_https_preserves_origin_until_certificate_is_trusted() {
+        let parsed = reqwest::Url::parse("https://service.internal:8443/").unwrap();
+
+        assert_eq!(
+            request_origin_for_upstream(&parsed, Some(42123), false).unwrap(),
+            "https://service.internal:8443"
+        );
+        assert_eq!(
+            request_origin_for_upstream(&parsed, Some(42123), true).unwrap(),
+            "https://127.0.0.1:42123"
+        );
+    }
+
+    #[test]
+    fn forwarded_https_ip_literal_uses_ssh_forward_port() {
+        let parsed = reqwest::Url::parse("https://127.0.0.1:8443/").unwrap();
+
+        assert_eq!(
+            request_origin_for_upstream(&parsed, Some(42123), false).unwrap(),
+            "https://127.0.0.1:42123"
+        );
+    }
+
+    #[test]
+    fn absolute_browser_proxy_request_rewrites_to_ssh_forward_port() {
+        assert_eq!(
+            browser_request_url(
+                "http://127.0.0.1:51234/app?q=1",
+                "127.0.0.1:51234",
+                "http://127.0.0.1:3000",
+                "http://127.0.0.1:42123",
+            ),
+            "http://127.0.0.1:42123/app?q=1"
+        );
+    }
+
+    #[test]
+    fn absolute_upstream_request_rewrites_to_ssh_forward_port() {
+        assert_eq!(
+            browser_request_url(
+                "http://127.0.0.1:3000/app?q=1",
+                "127.0.0.1:51234",
+                "http://127.0.0.1:3000",
+                "http://127.0.0.1:42123",
+            ),
+            "http://127.0.0.1:42123/app?q=1"
+        );
+    }
+
+    #[test]
+    fn absolute_upstream_request_rewrites_to_remote_origin_for_exec_fallback() {
+        assert_eq!(
+            browser_request_url(
+                "http://127.0.0.1:51234/app?q=1",
+                "127.0.0.1:51234",
+                "http://127.0.0.1:3000",
+                "http://127.0.0.1:3000",
+            ),
+            "http://127.0.0.1:3000/app?q=1"
+        );
+    }
+
+    #[test]
+    fn remote_browser_curl_command_preserves_upstream_host_and_skips_proxy_headers() {
+        let headers = vec![
+            ("Host".to_string(), "127.0.0.1:51234".to_string()),
+            ("Connection".to_string(), "keep-alive".to_string()),
+            ("Accept".to_string(), "text/html".to_string()),
+        ];
+
+        let command = remote_browser_curl_command(
+            "GET",
+            "http://127.0.0.1:3000/app?q=1",
+            "127.0.0.1:3000",
+            &headers,
+            false,
+        );
+
+        assert!(command.contains("'Host: 127.0.0.1:3000'"));
+        assert!(command.contains("'Accept: text/html'"));
+        assert!(!command.contains("127.0.0.1:51234"));
+        assert!(!command.contains("'Connection: keep-alive'"));
     }
 }

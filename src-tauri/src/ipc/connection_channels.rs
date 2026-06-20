@@ -27,7 +27,9 @@ pub(crate) async fn dispatch(
         "connection:trust-browser-certificate" => {
             connection::trust_browser_certificate(state, args)
         }
-        "connection:browser-resolve-url" => browser_proxy::browser_resolve_url(state, args).await,
+        "connection:browser-resolve-url" => {
+            browser_proxy::browser_resolve_url(state, &window, args).await
+        }
         "connection:get-ipc-capabilities" => {
             Ok(json!({ "terminalSessions": true, "terminalBinary": true }))
         }
