@@ -1,29 +1,30 @@
 import { StrictMode, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import App from './App';
 import './tauriBridge';
 import './styles/critical.scss';
 
-let didRequestInitialShow = false;
+let didScheduleInitialReveal = false;
 
-function ShellDeskRoot() {
-  useEffect(() => {
-    if (didRequestInitialShow) {
-      return;
-    }
-    didRequestInitialShow = true;
+function scheduleInitialReveal() {
+  if (didScheduleInitialReveal) {
+    return;
+  }
+  didScheduleInitialReveal = true;
 
-    const frame = requestAnimationFrame(() => {
-      void getCurrentWindow().show().catch((error) => {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      void window.guiSSH?.window?.show?.().catch((error) => {
         console.error('Failed to show ShellDesk window after first paint:', error);
       });
       void import('./styles/deferred.scss').catch(() => {});
     });
+  });
+}
 
-    return () => {
-      cancelAnimationFrame(frame);
-    };
+function ShellDeskRoot() {
+  useEffect(() => {
+    scheduleInitialReveal();
   }, []);
 
   return <App />;
