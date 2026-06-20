@@ -60,6 +60,11 @@ function copyFile(source, destination, mode) {
   }
 }
 
+function writeFile(destination, content, options) {
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.writeFileSync(destination, content, options);
+}
+
 function listFiles(directory) {
   if (!fs.existsSync(directory)) {
     return [];
@@ -122,7 +127,7 @@ function createWindowsPortableZip() {
   try {
     cleanDirectory(appDir);
     copyFile(binaryPath, path.join(appDir, `${productName}.exe`));
-    fs.writeFileSync(
+    writeFile(
       path.join(appDir, 'README.txt'),
       [
         `${productName} portable package`,
@@ -181,7 +186,7 @@ function createPacmanPackage() {
       path.join(pkgRoot, 'usr', 'share', 'icons', 'hicolor', '256x256', 'apps', `${cargoName}.png`),
       0o644,
     );
-    fs.writeFileSync(
+    writeFile(
       path.join(pkgRoot, 'usr', 'share', 'applications', `${cargoName}.desktop`),
       [
         '[Desktop Entry]',
@@ -198,7 +203,7 @@ function createPacmanPackage() {
     );
 
     const installedSize = directorySize(pkgRoot);
-    fs.writeFileSync(
+    writeFile(
       path.join(pkgRoot, '.PKGINFO'),
       [
         `pkgname = ${cargoName}`,
