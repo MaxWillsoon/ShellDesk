@@ -669,10 +669,14 @@ fn proxy_command_for_profile(profile: &SshProfile) -> Option<String> {
         } else {
             vec!["ssh".to_string()]
         };
-        parts.extend(ssh_args(jump).into_iter().map(|arg| shell_arg(&arg)));
+        parts.extend(
+            ssh_args(jump)
+                .into_iter()
+                .map(|arg| proxy_command_arg(&arg)),
+        );
         parts.push("-W".to_string());
         parts.push("%h:%p".to_string());
-        parts.push(shell_arg(&ssh_destination(jump)));
+        parts.push(proxy_command_arg(&ssh_destination(jump)));
         return Some(parts.join(" "));
     }
 
@@ -828,8 +832,19 @@ fn jump_sshpass_password(profile: &SshProfile) -> Option<&str> {
 }
 
 fn proxy_command_arg(value: &str) -> String {
-    if cfg!(windows) {
-        format!("\"{}\"", value.replace('"', "\\\""))
+    proxy_command_arg_for_platform(value, cfg!(windows))
+}
+
+fn proxy_command_arg_for_platform(value: &str, windows: bool) -> String {
+    if windows {
+        if value.chars().all(|ch| {
+            ch.is_ascii_alphanumeric()
+                || matches!(ch, '.' | '_' | '-' | '/' | '\\' | ':' | '@' | '%' | '=')
+        }) {
+            value.to_string()
+        } else {
+            format!("\"{}\"", value.replace('"', "\\\""))
+        }
     } else {
         shell_arg(value)
     }
@@ -1049,6 +1064,62 @@ mod tests {
         assert!(!args.contains(&"BatchMode=yes".to_string()));
         assert!(args.contains(&"-i".to_string()));
         assert!(args.contains(&"C:\\Users\\me\\.ssh\\id_rsa".to_string()));
+    }
+
+    #[test]
+    fn windows_proxy_command_arg_uses_double_quotes_for_paths_with_spaces() {
+        let arg = proxy_command_arg_for_platform(
+            "UserKnownHostsFile=C:\\Users\\baicai\\AppData\\Roaming\\ShellDesk Data\\known_hosts",
+            true,
+        );
+
+        assert_eq!(
+            arg,
+            "\"UserKnownHostsFile=C:\\Users\\baicai\\AppData\\Roaming\\ShellDesk Data\\known_hosts\""
+        );
+        assert!(!arg.contains('\''));
+    }
+
+    #[test]
+    fn jump_proxy_command_quotes_known_hosts_for_nested_ssh() {
+        let jump = SshProfile {
+            address: "jump.example.com".to_string(),
+            port: 22,
+            username: "jump-user".to_string(),
+            auth_method: "password".to_string(),
+            password: String::new(),
+            key_path: String::new(),
+            known_hosts_path:
+                "C:\\Users\\baicai\\AppData\\Roaming\\ShellDesk Data\\jump.known_hosts".to_string(),
+            proxy_helper_exe: String::new(),
+            proxy: None,
+            jump: None,
+        };
+        let profile = SshProfile {
+            address: "target.example.com".to_string(),
+            port: 22,
+            username: "target-user".to_string(),
+            auth_method: "password".to_string(),
+            password: String::new(),
+            key_path: String::new(),
+            known_hosts_path: String::new(),
+            proxy_helper_exe: String::new(),
+            proxy: None,
+            jump: Some(Box::new(jump)),
+        };
+
+        let command = proxy_command_for_profile(&profile).unwrap();
+
+        if cfg!(windows) {
+            assert!(command.contains(
+                "-o \"UserKnownHostsFile=C:\\Users\\baicai\\AppData\\Roaming\\ShellDesk Data\\jump.known_hosts\""
+            ));
+            assert!(!command.contains("'UserKnownHostsFile"));
+        } else {
+            assert!(command.contains(
+                "-o 'UserKnownHostsFile=C:\\Users\\baicai\\AppData\\Roaming\\ShellDesk Data\\jump.known_hosts'"
+            ));
+        }
     }
 
     #[test]
