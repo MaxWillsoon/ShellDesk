@@ -2902,6 +2902,63 @@
   white-space: nowrap;
 }
 
+.host-endpoint-line {
+  display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  line-height: 18px;
+  vertical-align: middle;
+}
+
+.host-endpoint-line > span:last-child {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-route-icons {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.host-route-icon {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--host-route-border);
+  border-radius: 5px;
+  background: var(--host-route-bg);
+  color: var(--host-route-color);
+  line-height: 1;
+}
+
+.host-route-icon svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 2.2;
+}
+
+.host-route-icon.jump-host {
+  --host-route-color: #2563eb;
+  --host-route-border: color-mix(in srgb, #2563eb 30%, var(--border));
+  --host-route-bg: color-mix(in srgb, #2563eb 10%, transparent);
+}
+
+.host-route-icon.via-jump-host {
+  --host-route-color: #0d9488;
+  --host-route-border: color-mix(in srgb, #0d9488 30%, var(--border));
+  --host-route-bg: color-mix(in srgb, #0d9488 10%, transparent);
+}
+
 .host-card-recent {
   color: var(--muted-strong);
   font-size: 12px;

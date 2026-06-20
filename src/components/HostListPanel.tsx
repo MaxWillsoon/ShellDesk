@@ -5,7 +5,9 @@ import {
   ChevronsLeft,
   ChevronsRight,
   MoreHorizontal,
+  Network,
   Pencil,
+  Route,
   Trash2,
 } from 'lucide-react';
 
@@ -20,6 +22,8 @@ interface HostListPanelHost {
   group: string;
   tags: string[];
   note: string;
+  jumpHostId: string;
+  canBeJumpHost: boolean;
   proxyProfileId: string;
   systemName: string;
   systemType: string;
@@ -31,6 +35,13 @@ interface HostListPanelHost {
 interface HostConnectionStateView {
   className: string;
   title: string;
+}
+
+function getHostRouteLabels(appLanguage: AppLanguage) {
+  return {
+    jumpHost: appLanguage === 'zh-CN' ? '可作为跳板机' : 'Jump host',
+    viaJumpHost: appLanguage === 'zh-CN' ? '通过跳板机连接' : 'Connects via jump host',
+  };
 }
 
 interface HostListPanelProps<THost extends HostListPanelHost> {
@@ -58,6 +69,27 @@ interface HostListPanelProps<THost extends HostListPanelHost> {
   getHostSystemLabel: (host: THost, language: AppLanguage) => string;
   getProxyConfigTypeLabel: (config: ShellDeskProxyConfig | undefined) => string;
   renderHostSystemIcon: (host: THost) => ReactNode;
+}
+
+function HostRouteIcons<THost extends HostListPanelHost>({ host, appLanguage }: { host: THost; appLanguage: AppLanguage }) {
+  if (!host.canBeJumpHost && !host.jumpHostId) return null;
+
+  const labels = getHostRouteLabels(appLanguage);
+
+  return (
+    <span className="host-route-icons" aria-label={[host.canBeJumpHost ? labels.jumpHost : '', host.jumpHostId ? labels.viaJumpHost : ''].filter(Boolean).join(', ')}>
+      {host.canBeJumpHost ? (
+        <span className="host-route-icon jump-host" title={labels.jumpHost}>
+          <Network aria-hidden="true" />
+        </span>
+      ) : null}
+      {host.jumpHostId ? (
+        <span className="host-route-icon via-jump-host" title={labels.viaJumpHost}>
+          <Route aria-hidden="true" />
+        </span>
+      ) : null}
+    </span>
+  );
 }
 
 function HostListPanel<THost extends HostListPanelHost>({
@@ -154,7 +186,10 @@ function HostListPanel<THost extends HostListPanelHost>({
                       </div>
 
                       <div className="host-card-meta">
-                        <span className="mono-cell">{host.address}:{host.port}</span>
+                        <span className="host-endpoint-line mono-cell">
+                          <HostRouteIcons host={host} appLanguage={appLanguage} />
+                          <span>{host.address}:{host.port}</span>
+                        </span>
                       </div>
 
                       <div className="host-card-recent">
@@ -208,7 +243,12 @@ function HostListPanel<THost extends HostListPanelHost>({
                         <td>
                           <span className={getHostChipClassName('group', host.group, Boolean(host.group))}>{host.group || t('app.host.group.ungrouped', appLanguage)}</span>
                         </td>
-                        <td className="mono-cell">{host.address}</td>
+                        <td>
+                          <span className="host-endpoint-line mono-cell">
+                            <HostRouteIcons host={host} appLanguage={appLanguage} />
+                            <span>{host.address}</span>
+                          </span>
+                        </td>
                         <td className="mono-cell">{host.username}</td>
                         <td className="mono-cell">{host.port}</td>
                         <td className="host-tag-cell">
