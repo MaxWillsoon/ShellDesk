@@ -71,7 +71,9 @@ export function validateNginxConfigPath(filePath: string, installation: NginxIns
     filePath === installation.configPath
     || isPathUnder(filePath, installation.configDir)
     || isPathUnder(filePath, installation.availableDir)
+    || isPathUnder(filePath, installation.enabledDir)
     || isPathUnder(filePath, installation.confDir)
+    || isPathUnder(filePath, '/etc/nginx')
   );
 }
 
@@ -106,8 +108,15 @@ fi
 available_dir="$config_dir/sites-available"
 enabled_dir="$config_dir/sites-enabled"
 conf_dir="$config_dir/conf.d"
+if [ ! -d "$conf_dir" ] && [ -d /etc/nginx/conf.d ]; then
+  conf_dir="/etc/nginx/conf.d"
+fi
 if [ -d "$available_dir" ] || [ -d "$enabled_dir" ]; then
   sites_layout=debian
+elif [ -d /etc/nginx/sites-available ] || [ -d /etc/nginx/sites-enabled ]; then
+  sites_layout=debian
+  available_dir="/etc/nginx/sites-available"
+  enabled_dir="/etc/nginx/sites-enabled"
 else
   sites_layout=rhel
   available_dir=""
@@ -189,21 +198,45 @@ emit_file() {
 }
 is_enabled_debian() {
   file="$1"
-  [ -n "$enabled_dir" ] && [ -e "$enabled_dir/$(basename "$file")" ]
+  base="$(basename "$file")"
+  { [ -n "$enabled_dir" ] && [ -e "$enabled_dir/$base" ]; } || [ -e "/etc/nginx/sites-enabled/$base" ]
 }
-if [ -n "$available_dir" ] && [ -d "$available_dir" ]; then
-  find "$available_dir" -maxdepth 1 -type f -name '*.conf' 2>/dev/null | sort | while IFS= read -r file; do
+has_available_peer() {
+  file="$1"
+  base="$(basename "$file")"
+  { [ -n "$available_dir" ] && [ -e "$available_dir/$base" ]; } || [ -e "/etc/nginx/sites-available/$base" ]
+}
+list_available_dir() {
+  dir="$1"
+  [ -n "$dir" ] && [ -d "$dir" ] || return 0
+  find "$dir" -maxdepth 1 -type f ! -name '.*' ! -name '*.bak' ! -name '*.bak.*' 2>/dev/null | sort | while IFS= read -r file; do
     if is_enabled_debian "$file"; then emit_file "$file" true; else emit_file "$file" false; fi
   done
-fi
-if [ -d "$conf_dir" ]; then
-  find "$conf_dir" -maxdepth 1 -type f \\( -name '*.conf' -o -name '*.conf.disabled' \\) 2>/dev/null | sort | while IFS= read -r file; do
+}
+list_enabled_dir() {
+  dir="$1"
+  [ -n "$dir" ] && [ -d "$dir" ] || return 0
+  find -L "$dir" -maxdepth 1 -type f ! -name '.*' 2>/dev/null | sort | while IFS= read -r file; do
+    if has_available_peer "$file"; then continue; fi
+    emit_file "$file" true
+  done
+}
+list_conf_dir() {
+  dir="$1"
+  [ -n "$dir" ] && [ -d "$dir" ] || return 0
+  find "$dir" -maxdepth 1 -type f \\( -name '*.conf' -o -name '*.conf.disabled' \\) 2>/dev/null | sort | while IFS= read -r file; do
     case "$file" in
       *.disabled) emit_file "$file" false ;;
       *) emit_file "$file" true ;;
     esac
   done
-fi
+}
+list_available_dir "$available_dir"
+[ "$available_dir" = "/etc/nginx/sites-available" ] || list_available_dir "/etc/nginx/sites-available"
+list_enabled_dir "$enabled_dir"
+[ "$enabled_dir" = "/etc/nginx/sites-enabled" ] || list_enabled_dir "/etc/nginx/sites-enabled"
+list_conf_dir "$conf_dir"
+[ "$conf_dir" = "/etc/nginx/conf.d" ] || list_conf_dir "/etc/nginx/conf.d"
 `.trim(),
   };
 }
@@ -250,6 +283,16 @@ export function createNginxDisableSiteCommand(filePath: string, installation: Ng
 
   const safeFilename = basename(filePath);
   if (installation.sitesLayout === 'debian' && installation.enabledDir) {
+    if (isPathUnder(filePath, installation.enabledDir)) {
+      const disabledDir = installation.availableDir ?? `${installation.configDir}/.shelldesk-disabled`;
+      const disabledPath = `${disabledDir}/${safeFilename}`;
+      return {
+        command: sudoCommand(
+          `[ -L ${shellSingleQuote(filePath)} ] && rm -f -- ${shellSingleQuote(filePath)} || { mkdir -p -- ${shellSingleQuote(disabledDir)}; mv -- ${shellSingleQuote(filePath)} ${shellSingleQuote(disabledPath)}; }`,
+        ),
+      };
+    }
+
     return { command: sudoCommand(`rm -f -- ${shellSingleQuote(`${installation.enabledDir}/${safeFilename}`)}`) };
   }
 
@@ -303,7 +346,7 @@ export function createNginxDeleteCommand(filePath: string, installation: NginxIn
 
   const backupDir = `${installation.configDir}/.shelldesk-backups`;
   const backupPrefix = `${backupDir}/${basename(filePath)}.`;
-  const unlinkEnabled = installation.enabledDir
+  const unlinkEnabled = installation.enabledDir && !isPathUnder(filePath, installation.enabledDir)
     ? `rm -f -- ${shellSingleQuote(`${installation.enabledDir}/${basename(filePath).replace(/\.disabled$/i, '')}`)}; `
     : '';
 
@@ -316,7 +359,7 @@ export function createNginxMoveConfigToBackupCommand(filePath: string, backupPat
   if (isWindowsHost) return windowsUnsupported();
 
   const safeFilename = basename(filePath).replace(/\.disabled$/i, '');
-  const unlinkEnabled = installation.enabledDir
+  const unlinkEnabled = installation.enabledDir && !isPathUnder(filePath, installation.enabledDir)
     ? `rm -f -- ${shellSingleQuote(`${installation.enabledDir}/${safeFilename}`)}; `
     : '';
 
@@ -329,7 +372,7 @@ export function createNginxRestoreDeletedConfigCommand(backupPath: string, origi
   if (isWindowsHost) return windowsUnsupported();
 
   const safeFilename = basename(originalPath).replace(/\.disabled$/i, '');
-  const restoreEnabled = enabled && installation.sitesLayout === 'debian' && installation.enabledDir
+  const restoreEnabled = enabled && installation.sitesLayout === 'debian' && installation.enabledDir && !isPathUnder(originalPath, installation.enabledDir)
     ? `; ln -sf ${shellSingleQuote(originalPath)} ${shellSingleQuote(`${installation.enabledDir}/${safeFilename}`)}`
     : '';
 
@@ -340,7 +383,7 @@ export function createNginxCleanupCreatedConfigCommand(filePath: string, install
   if (isWindowsHost) return windowsUnsupported();
 
   const safeFilename = basename(filePath).replace(/\.disabled$/i, '');
-  const unlinkEnabled = installation.enabledDir
+  const unlinkEnabled = installation.enabledDir && !isPathUnder(filePath, installation.enabledDir)
     ? `rm -f -- ${shellSingleQuote(`${installation.enabledDir}/${safeFilename}`)}; `
     : '';
 
