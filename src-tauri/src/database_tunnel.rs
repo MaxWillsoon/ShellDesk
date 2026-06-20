@@ -911,6 +911,7 @@ pub(crate) async fn clickhouse_databases(
         &args,
         "SELECT name FROM system.databases ORDER BY name",
         None,
+        METADATA_TIMEOUT,
     )
     .await?;
     Ok(json!(result
@@ -932,7 +933,7 @@ pub(crate) async fn clickhouse_tables(state: &AppState, args: Vec<Value>) -> Res
         "SELECT name, engine, total_rows AS totalRows, total_bytes AS totalBytes FROM system.tables WHERE database = {} ORDER BY name",
         clickhouse_string_literal(&database)
     );
-    let result = clickhouse_query_sql(state, &args, &sql, None).await?;
+    let result = clickhouse_query_sql(state, &args, &sql, None, METADATA_TIMEOUT).await?;
     Ok(result.get("rows").cloned().unwrap_or_else(|| json!([])))
 }
 
@@ -947,14 +948,14 @@ pub(crate) async fn clickhouse_columns(
         clickhouse_string_literal(&database),
         clickhouse_string_literal(&table)
     );
-    let result = clickhouse_query_sql(state, &args, &sql, None).await?;
+    let result = clickhouse_query_sql(state, &args, &sql, None, METADATA_TIMEOUT).await?;
     Ok(result.get("rows").cloned().unwrap_or_else(|| json!([])))
 }
 
 pub(crate) async fn clickhouse_query(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
     let sql = string_arg(&args, 2)?;
     let database = args.get(3).and_then(Value::as_str);
-    clickhouse_query_sql(state, &args, &sql, database).await
+    clickhouse_query_sql(state, &args, &sql, database, QUERY_TIMEOUT).await
 }
 
 pub(crate) async fn mongo_connect(
@@ -1466,7 +1467,7 @@ async fn connect_mongo_direct(
     )
     .await
     .map_err(|_| DbTunnelError::QueryTimeout.user_message())?
-        .map_err(|error| DbTunnelError::MongoConnect(error.to_string()).user_message())?;
+    .map_err(|error| DbTunnelError::MongoConnect(error.to_string()).user_message())?;
     Ok(client)
 }
 
@@ -1541,6 +1542,7 @@ async fn clickhouse_query_sql(
     args: &[Value],
     sql: &str,
     database_override: Option<&str>,
+    timeout: Duration,
 ) -> Result<Value, String> {
     let client = clickhouse_client(state, args)?;
     let client = if let Some(database) = database_override.filter(|database| !database.is_empty()) {
@@ -1550,11 +1552,14 @@ async fn clickhouse_query_sql(
     };
     let mut cursor = client
         .query(sql)
+        .with_option("max_execution_time", timeout.as_secs().to_string())
+        .with_option("max_result_rows", (MAX_QUERY_ROWS + 1).to_string())
+        .with_option("result_overflow_mode", "break")
         .fetch_bytes("JSON")
         .map_err(|error| DbTunnelError::ClickHouseQuery(error.to_string()).user_message())?;
-    let bytes = cursor
-        .collect()
+    let bytes = tokio::time::timeout(timeout, cursor.collect())
         .await
+        .map_err(|_| DbTunnelError::QueryTimeout.user_message())?
         .map_err(|error| DbTunnelError::ClickHouseQuery(error.to_string()).user_message())?;
     let output = String::from_utf8_lossy(&bytes).to_string();
     Ok(parse_clickhouse_response(&output))
@@ -2341,6 +2346,27 @@ mod tests {
         assert_eq!(config.host, "127.0.0.1");
         assert_eq!(config.port, 6379);
         assert_eq!(config.database, 0);
+    }
+
+    #[test]
+    fn parse_clickhouse_response_marks_and_limits_truncated_rows() {
+        let rows = (0..=MAX_QUERY_ROWS)
+            .map(|index| json!({ "value": index }))
+            .collect::<Vec<_>>();
+        let output = json!({
+            "meta": [{ "name": "value", "type": "UInt64" }],
+            "data": rows,
+            "rows": MAX_QUERY_ROWS + 1
+        })
+        .to_string();
+
+        let parsed = parse_clickhouse_response(&output);
+        assert_eq!(parsed["truncated"], json!(true));
+        assert_eq!(
+            parsed["rows"].as_array().map(Vec::len),
+            Some(MAX_QUERY_ROWS)
+        );
+        assert_eq!(parsed["rowCount"], json!(MAX_QUERY_ROWS + 1));
     }
 
     #[test]
