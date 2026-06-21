@@ -837,6 +837,7 @@ interface ShellDeskHttpTunnelRequest {
   targetPort: number;
   path: string;
   auth?: ShellDeskHttpTunnelAuth | null;
+  headers?: Record<string, string>;
   body?: unknown;
   ignoreSsl?: boolean;
   secure?: boolean;

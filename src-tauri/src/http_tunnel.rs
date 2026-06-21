@@ -3,10 +3,10 @@ use crate::{
     ssh_tunnel::{config_from_connection_with_window, create_tunnel, SshTunnel, SshTunnelError},
     string_arg, AppState, ConnectionKind,
 };
-use reqwest::StatusCode;
-use serde::{de::DeserializeOwned, Deserialize};
+use reqwest::{header::CONTENT_TYPE, StatusCode};
+use serde::Deserialize;
 use serde_json::Value;
-use std::time::{Duration, Instant};
+use std::{collections::HashMap, time::Duration, time::Instant};
 use thiserror::Error;
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -32,32 +32,40 @@ impl HttpTunnelClient {
         }
     }
 
-    pub(crate) async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, HttpTunnelError> {
-        self.send(self.client.get(self.url(path))).await
+    pub(crate) async fn get(
+        &self,
+        path: &str,
+        headers: Option<&HashMap<String, String>>,
+    ) -> Result<Value, HttpTunnelError> {
+        self.send(self.client.get(self.url(path)), headers).await
     }
 
-    pub(crate) async fn post<T: DeserializeOwned>(
+    pub(crate) async fn post(
         &self,
         path: &str,
         body: Value,
-    ) -> Result<T, HttpTunnelError> {
-        self.send(self.client.post(self.url(path)).json(&body))
+        headers: Option<&HashMap<String, String>>,
+    ) -> Result<Value, HttpTunnelError> {
+        self.send(self.client.post(self.url(path)).json(&body), headers)
             .await
     }
 
-    pub(crate) async fn put<T: DeserializeOwned>(
+    pub(crate) async fn put(
         &self,
         path: &str,
         body: Value,
-    ) -> Result<T, HttpTunnelError> {
-        self.send(self.client.put(self.url(path)).json(&body)).await
+        headers: Option<&HashMap<String, String>>,
+    ) -> Result<Value, HttpTunnelError> {
+        self.send(self.client.put(self.url(path)).json(&body), headers)
+            .await
     }
 
-    pub(crate) async fn delete<T: DeserializeOwned>(
+    pub(crate) async fn delete(
         &self,
         path: &str,
-    ) -> Result<T, HttpTunnelError> {
-        self.send(self.client.delete(self.url(path))).await
+        headers: Option<&HashMap<String, String>>,
+    ) -> Result<Value, HttpTunnelError> {
+        self.send(self.client.delete(self.url(path)), headers).await
     }
 
     fn url(&self, path: &str) -> String {
@@ -71,12 +79,18 @@ impl HttpTunnelClient {
         }
     }
 
-    async fn send<T: DeserializeOwned>(
+    async fn send(
         &self,
         mut request: reqwest::RequestBuilder,
-    ) -> Result<T, HttpTunnelError> {
+        headers: Option<&HashMap<String, String>>,
+    ) -> Result<Value, HttpTunnelError> {
         if let Some((username, password)) = &self.auth {
             request = request.basic_auth(username, Some(password));
+        }
+        if let Some(headers) = headers {
+            for (name, value) in headers {
+                request = request.header(name.as_str(), value.as_str());
+            }
         }
 
         let response = request.send().await.map_err(|error| {
@@ -90,14 +104,36 @@ impl HttpTunnelClient {
             return Err(HttpTunnelError::AuthRequired);
         }
         let response = response.error_for_status()?;
-        response.json::<T>().await.map_err(|error| {
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+
+        if content_type.contains("application/json") || content_type.contains("+json") {
+            return response.json::<Value>().await.map_err(|error| {
+                if error.is_timeout() {
+                    HttpTunnelError::Timeout
+                } else if error.is_decode() {
+                    HttpTunnelError::Json(error.to_string())
+                } else {
+                    HttpTunnelError::Http(error)
+                }
+            });
+        }
+
+        let text = response.text().await.map_err(|error| {
             if error.is_timeout() {
                 HttpTunnelError::Timeout
-            } else if error.is_decode() {
-                HttpTunnelError::Json(error.to_string())
             } else {
                 HttpTunnelError::Http(error)
             }
+        })?;
+        Ok(if text.is_empty() {
+            Value::Null
+        } else {
+            Value::String(text)
         })
     }
 }
@@ -150,6 +186,7 @@ struct HttpTunnelRequest {
     target_port: u16,
     path: String,
     auth: Option<HttpTunnelAuth>,
+    headers: Option<HashMap<String, String>>,
     body: Option<Value>,
     #[serde(default)]
     ignore_ssl: bool,
@@ -213,18 +250,26 @@ async fn execute(
     );
 
     let result = match method {
-        "GET" => client.get::<Value>(&request.path).await,
+        "GET" => client.get(&request.path, request.headers.as_ref()).await,
         "POST" => {
             client
-                .post::<Value>(&request.path, request.body.clone().unwrap_or(Value::Null))
+                .post(
+                    &request.path,
+                    request.body.clone().unwrap_or(Value::Null),
+                    request.headers.as_ref(),
+                )
                 .await
         }
         "PUT" => {
             client
-                .put::<Value>(&request.path, request.body.clone().unwrap_or(Value::Null))
+                .put(
+                    &request.path,
+                    request.body.clone().unwrap_or(Value::Null),
+                    request.headers.as_ref(),
+                )
                 .await
         }
-        "DELETE" => client.delete::<Value>(&request.path).await,
+        "DELETE" => client.delete(&request.path, request.headers.as_ref()).await,
         _ => unreachable!("unsupported HTTP method"),
     }
     .map_err(|error| error.user_message());
@@ -351,6 +396,7 @@ fn parse_request(args: Vec<Value>) -> Result<HttpTunnelRequest, String> {
         .map(serde_json::from_value)
         .transpose()
         .map_err(|error| format!("HTTP Basic Auth 参数无效：{error}"))?;
+    let headers = None;
     let body = args.get(5).cloned().filter(|value| !value.is_null());
     let ignore_ssl = args.get(6).and_then(Value::as_bool).unwrap_or(false);
     let secure = args.get(7).and_then(Value::as_bool);
@@ -361,6 +407,7 @@ fn parse_request(args: Vec<Value>) -> Result<HttpTunnelRequest, String> {
         target_port,
         path,
         auth,
+        headers,
         body,
         ignore_ssl,
         secure,

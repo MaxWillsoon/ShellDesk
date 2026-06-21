@@ -6,14 +6,13 @@ import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import { isWindowsSystem, type RemoteCommandInput } from './remoteSystem';
 import { loadRemoteConnectionProfile, readProfileBoolean, readProfileString, saveRemoteConnectionProfile } from './remoteConnectionProfiles';
 import {
-  createS3DeleteObjectCommand,
-  createS3DetectCommand,
   createS3DownloadObjectCommand,
-  createS3ListBucketsCommand,
-  createS3ListObjectsCommand,
+  createS3DeleteObjectTunnelRequest,
+  createS3ListBucketsTunnelRequest,
+  createS3ListObjectsTunnelRequest,
   createS3ObjectUrl,
-  parseS3Buckets,
-  parseS3Objects,
+  parseS3BucketsResponse,
+  parseS3ObjectsResponse,
   type S3BucketEntry,
   type S3CliMode,
   type S3ConnectionConfig,
@@ -36,7 +35,7 @@ interface PendingS3Action {
   title: string;
   bucket: string;
   object: S3ObjectEntry;
-  command: RemoteCommandInput;
+  command?: RemoteCommandInput;
   danger?: boolean;
 }
 
@@ -56,6 +55,16 @@ function runCmd(connectionId: string, input: RemoteCommandInput) {
   }
 
   return api.runCommand(connectionId, input.command, input.stdin);
+}
+
+function getHttpTunnelApi() {
+  const api = window.guiSSH?.connections;
+
+  if (!api) {
+    throw new Error(tCurrent('auto.remoteS3Browser.g77vf3'));
+  }
+
+  return api;
 }
 
 function formatSize(value?: number) {
@@ -156,21 +165,9 @@ function RemoteS3Browser({ connectionId, hostId, systemType }: RemoteS3BrowserPr
   }, [hostId]);
 
   const detectTools = useCallback(async () => {
-    try {
-      const result = await runCmd(connectionId, createS3DetectCommand(isWindowsHost));
-      const tools = result.stdout
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((tool): tool is S3CliMode => tool === 'mc' || tool === 'aws');
-
-      setAvailableTools(Array.from(new Set(tools)));
-      if (tools.length && !tools.includes(mode)) {
-        setMode(tools[0]);
-      }
-    } catch (error) {
-      setNotice(getErrorMessage(error));
-    }
-  }, [connectionId, isWindowsHost, mode]);
+    setAvailableTools(['mc', 'aws']);
+    setNotice(mode === 'aws' ? 'HTTP tunnel + S3 SigV4' : 'HTTP tunnel + Basic Auth');
+  }, [mode]);
 
   useEffect(() => {
     void detectTools();
@@ -182,20 +179,18 @@ function RemoteS3Browser({ connectionId, hostId, systemType }: RemoteS3BrowserPr
     setNotice('');
 
     try {
-      const result = await runCmd(connectionId, createS3ListBucketsCommand(mode, config, isWindowsHost));
-
-      if (result.code !== 0) {
-        throw new Error(result.stderr || result.stdout || tCurrent('auto.remoteS3Browser.7anxqo', { value0: mode }));
-      }
-
-      const nextBuckets = parseS3Buckets(mode, result.stdout);
+      const response = await getHttpTunnelApi().httpTunnelGet({
+        ...(await createS3ListBucketsTunnelRequest(mode, config)),
+        connectionId,
+      });
+      const nextBuckets = parseS3BucketsResponse(response);
       setConnected(true);
       setBuckets(nextBuckets);
       setSelectedBucketName((current) => current && nextBuckets.some((bucket) => bucket.name === current) ? current : nextBuckets[0]?.name ?? '');
       setObjects([]);
       setSelectedObjectKey('');
       setPrefix('');
-      setRawOutput(result.stdout || result.stderr);
+      setRawOutput(typeof response === 'string' ? response : JSON.stringify(response, null, 2));
       setLastRefreshedAt(new Date().toLocaleTimeString(getShellDeskLocale()));
       setNotice(tCurrent('auto.remoteS3Browser.rp1fyr', { value0: nextBuckets.length }));
       void saveRemoteConnectionProfile(hostId, 's3-browser', {
@@ -240,18 +235,16 @@ function RemoteS3Browser({ connectionId, hostId, systemType }: RemoteS3BrowserPr
 
     try {
       const normalizedPrefix = ensurePrefix(nextPrefix);
-      const result = await runCmd(connectionId, createS3ListObjectsCommand(mode, config, bucketName, normalizedPrefix, isWindowsHost));
-
-      if (result.code !== 0) {
-        throw new Error(result.stderr || result.stdout || tCurrent('auto.remoteS3Browser.z0wjzo', { value0: mode }));
-      }
-
-      const nextObjects = parseS3Objects(mode, result.stdout, normalizedPrefix);
+      const response = await getHttpTunnelApi().httpTunnelGet({
+        ...(await createS3ListObjectsTunnelRequest(mode, config, bucketName, normalizedPrefix)),
+        connectionId,
+      });
+      const nextObjects = parseS3ObjectsResponse(response, normalizedPrefix);
       setObjects(nextObjects);
       setSelectedBucketName(bucketName);
       setPrefix(normalizedPrefix);
       setSelectedObjectKey(nextObjects[0]?.key ?? '');
-      setRawOutput(result.stdout || result.stderr);
+      setRawOutput(typeof response === 'string' ? response : JSON.stringify(response, null, 2));
       setActiveTab('objects');
       setLastRefreshedAt(new Date().toLocaleTimeString(getShellDeskLocale()));
       setNotice(tCurrent('auto.remoteS3Browser.1s0sz3e', { value0: nextObjects.length }));
@@ -280,7 +273,6 @@ function RemoteS3Browser({ connectionId, hostId, systemType }: RemoteS3BrowserPr
         title: tCurrent('auto.remoteS3Browser.1i54laq', { value0: object.key }),
         bucket: selectedBucket.name,
         object,
-        command: createS3DeleteObjectCommand(mode, config, selectedBucket.name, object.key, isWindowsHost),
         danger: true,
       });
     } catch (error) {
@@ -312,11 +304,21 @@ function RemoteS3Browser({ connectionId, hostId, systemType }: RemoteS3BrowserPr
     setNotice('');
 
     try {
-      const result = await runCmd(connectionId, pendingAction.command);
-      const output = result.stdout || result.stderr || tCurrent('auto.remoteS3Browser.1m6h6ak');
+      let output = tCurrent('auto.remoteS3Browser.1m6h6ak');
 
-      if (result.code !== 0) {
-        throw new Error(output);
+      if (pendingAction.kind === 'delete') {
+        const response = await getHttpTunnelApi().httpTunnelDelete({
+          ...(await createS3DeleteObjectTunnelRequest(mode, config, pendingAction.bucket, pendingAction.object.key)),
+          connectionId,
+        });
+        output = typeof response === 'string' ? response || output : JSON.stringify(response, null, 2);
+      } else if (pendingAction.command) {
+        const result = await runCmd(connectionId, pendingAction.command);
+        output = result.stdout || result.stderr || output;
+
+        if (result.code !== 0) {
+          throw new Error(output);
+        }
       }
 
       setNotice(output);

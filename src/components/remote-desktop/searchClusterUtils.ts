@@ -1,4 +1,3 @@
-import { powershellCommand, powershellSingleQuote } from './remoteSystem';
 import { tCurrent } from '../../i18n';
 
 export interface SearchClusterConnectionConfig {
@@ -43,15 +42,6 @@ export interface SearchClusterShard {
   node: string;
 }
 
-function shellSingleQuote(value: string) {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
-function clampTimeout(value: number) {
-  if (!Number.isFinite(value)) return 10;
-  return Math.min(Math.max(Math.round(value), 1), 120);
-}
-
 function normalizeBaseUrl(value: string) {
   const trimmed = value.trim().replace(/\/+$/, '');
 
@@ -72,21 +62,6 @@ function normalizeBaseUrl(value: string) {
   }
 
   return trimmed;
-}
-
-function joinUrl(baseUrl: string, path: string) {
-  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-  return `${normalizeBaseUrl(baseUrl)}${normalizedPath}`;
-}
-
-function getAuthText(config: SearchClusterConnectionConfig) {
-  const username = config.username.trim();
-
-  if (!username) {
-    return '';
-  }
-
-  return `${username}:${config.password}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -118,70 +93,30 @@ function summarizeSearchError(value: unknown): string {
   }
 }
 
-export function createSearchClusterCommand(
+export function createSearchClusterTunnelRequest(
   config: SearchClusterConnectionConfig,
   path: string,
-  options: { method?: 'GET' | 'POST'; body?: string; isWindowsHost: boolean },
-): { command: string; stdin?: string } {
-  const url = joinUrl(config.url, path);
-  const timeout = clampTimeout(config.timeoutSeconds);
-  const method = options.method ?? 'GET';
-  const body = options.body ?? '';
-  const authText = getAuthText(config);
-  const insecureArg = config.ignoreSslCertificate ? '--insecure' : '';
-
-  if (options.isWindowsHost) {
-    const authArgs = authText ? `$curlArgs += @("-u", ${powershellSingleQuote(authText)})` : '';
-    const insecureArgs = insecureArg ? `$curlArgs += @(${powershellSingleQuote(insecureArg)})` : '';
-    const bodySetup = body ? `
-$bodyFile = New-TemporaryFile
-[System.IO.File]::WriteAllText($bodyFile.FullName, ${powershellSingleQuote(body)}, [System.Text.UTF8Encoding]::new($false))
-$curlArgs += @("-H", "Content-Type: application/json", "--data-binary", "@$($bodyFile.FullName)")
-` : '$bodyFile = $null';
-
-    return {
-      command: powershellCommand(`
-$curlArgs = @("-sS", "--max-time", "${timeout}", "-X", "${method}")
-${authArgs}
-${insecureArgs}
-${bodySetup}
-$curlArgs += @(${powershellSingleQuote(url)})
-& curl.exe @curlArgs
-$curlCode = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
-if ($bodyFile) { Remove-Item -LiteralPath $bodyFile.FullName -Force -ErrorAction SilentlyContinue }
-exit $curlCode
-`),
-    };
-  }
-
-  const authArgs = authText ? `-u ${shellSingleQuote(authText)}` : '';
-  const insecureArgs = insecureArg ? shellSingleQuote(insecureArg) : '';
-
-  if (body) {
-    return {
-      command: tCurrent('auto.searchClusterUtils.lzad6z', { value0: timeout, value1: method, value2: insecureArgs, value3: authArgs, value4: shellSingleQuote(url) }),
-      stdin: body,
-    };
-  }
+  body?: unknown,
+): ShellDeskHttpTunnelRequest {
+  const url = new URL(normalizeBaseUrl(config.url));
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  const basePath = url.pathname === '/' ? '' : url.pathname.replace(/\/+$/, '');
+  const targetPort = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
+  const username = config.username.trim();
 
   return {
-    command: tCurrent('auto.searchClusterUtils.18nh1h0', { value0: timeout, value1: method, value2: insecureArgs, value3: authArgs, value4: shellSingleQuote(url) }),
+    connectionId: '',
+    targetHost: url.hostname,
+    targetPort,
+    path: `${basePath}${normalizedPath}`,
+    auth: username ? { username, password: config.password } : null,
+    body,
+    ignoreSsl: config.ignoreSslCertificate,
+    secure: url.protocol === 'https:',
   };
 }
 
-export function parseJsonResponse<T>(stdout: string, stderr: string, code: number, label: string): T {
-  if (code !== 0) {
-    throw new Error(stderr || stdout || tCurrent('auto.searchClusterUtils.57s8f6', { value0: label, value1: code }));
-  }
-
-  let parsed: unknown;
-
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    throw new Error(tCurrent('auto.searchClusterUtils.1m1c877', { value0: label }));
-  }
-
+export function parseJsonResponse<T>(parsed: unknown, label: string): T {
   if (isRecord(parsed) && parsed.error !== undefined) {
     const status = parsed.status !== undefined ? `HTTP ${String(parsed.status)}` : tCurrent('auto.searchClusterUtils.1t4bmu5');
     throw new Error(tCurrent('auto.searchClusterUtils.gxlawy', { value0: label, value1: status, value2: summarizeSearchError(parsed.error) }));

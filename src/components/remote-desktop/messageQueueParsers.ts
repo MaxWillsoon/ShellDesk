@@ -118,24 +118,19 @@ export function createRabbitCtlCommand(commandPath: string, isWindowsHost: boole
   return `${shellSingleQuote(executable)} --quiet list_queues name messages consumers state`;
 }
 
-export function createRabbitManagementCommand(config: { url: string; username: string; password: string }, isWindowsHost: boolean) {
-  const queuesUrl = `${normalizeUrl(config.url)}/api/queues`;
-  const authText = config.username.trim() ? `${config.username.trim()}:${config.password}` : '';
+export function createRabbitManagementTunnelRequest(config: { url: string; username: string; password: string }): ShellDeskHttpTunnelRequest {
+  const normalizedUrl = normalizeUrl(config.url);
+  const url = new URL(normalizedUrl);
+  const username = config.username.trim() || 'guest';
 
-  if (isWindowsHost) {
-    const authArgs = authText ? `$curlArgs += @("-u", ${powershellSingleQuote(authText)})` : '';
-
-    return powershellCommand(`
-$curlArgs = @("-sS", "--max-time", "15")
-${authArgs}
-$curlArgs += @(${powershellSingleQuote(queuesUrl)})
-& curl.exe @curlArgs
-exit $LASTEXITCODE
-`);
-  }
-
-  const authArgs = authText ? `-u ${shellSingleQuote(authText)}` : '';
-  return `curl -sS --max-time 15 ${authArgs} ${shellSingleQuote(queuesUrl)}`;
+  return {
+    connectionId: '',
+    targetHost: url.hostname,
+    targetPort: Number(url.port || (url.protocol === 'https:' ? 443 : 80)),
+    path: '/api/queues',
+    auth: { username, password: config.password || 'guest' },
+    secure: url.protocol === 'https:',
+  };
 }
 
 function createKafkaCliCommand(target: KafkaCommandTarget, fallbackCommand: string, bootstrapServer: string, isWindowsHost: boolean, args: string[]) {
