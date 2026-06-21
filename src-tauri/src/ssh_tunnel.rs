@@ -6,10 +6,10 @@ use russh::{
 use serde::Deserialize;
 use std::{
     fmt,
-    net::{Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     path::Path,
     pin::Pin,
-    process::Stdio,
+    process::{Child as StdChild, Stdio},
     sync::Arc,
     task::{Context, Poll},
     time::Duration,
@@ -26,9 +26,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     connection::{confirm_ssh_host_public_key_trusted, ensure_ssh_profile_host_key_trusted},
-    error_string, get_connection, prevent_tokio_process_window,
+    error_string, get_connection, pick_free_local_port, prevent_tokio_process_window,
     proxy::SshProxyConfig,
-    shell_quote, AppState, ConnectionKind, SshProfile,
+    shell_quote, start_ssh_local_forward, wait_for_tcp, AppState, ConnectionKind, SshProfile,
 };
 use serde_json::Value;
 
@@ -104,7 +104,7 @@ pub(crate) enum SshTunnelError {
     MissingSshHost,
     #[error("SSH 用户名不能为空。")]
     MissingSshUser,
-    #[error("远程数据库主机不能为空。")]
+    #[error("远程主机不能为空。")]
     MissingRemoteHost,
     #[error("{field} 端口必须在 1-65535 范围内。")]
     InvalidPort { field: &'static str },
@@ -153,7 +153,7 @@ impl SshTunnelConfig {
             return Err(SshTunnelError::InvalidPort { field: "SSH" });
         }
         if self.remote_port == 0 {
-            return Err(SshTunnelError::InvalidPort { field: "数据库" });
+            return Err(SshTunnelError::InvalidPort { field: "远程" });
         }
 
         let has_password = self
@@ -187,6 +187,32 @@ pub(crate) struct SshTunnel {
     shutdown_tx: mpsc::Sender<()>,
     cancellation_token: CancellationToken,
     accept_task: JoinHandle<()>,
+}
+
+pub(crate) enum SshTunnelHandle {
+    Native(SshTunnel),
+    OpenSsh(StdChild),
+}
+
+impl SshTunnelHandle {
+    pub(crate) async fn shutdown(self) {
+        match self {
+            Self::Native(tunnel) => {
+                let _ = tunnel.shutdown().await;
+            }
+            Self::OpenSsh(mut child) => {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+
+    pub(crate) fn local_addr(&self) -> Option<SocketAddr> {
+        match self {
+            Self::Native(tunnel) => Some(tunnel.local_addr()),
+            Self::OpenSsh(_) => None,
+        }
+    }
 }
 
 impl fmt::Debug for SshTunnel {
@@ -363,6 +389,63 @@ pub(crate) async fn create_tunnel(config: SshTunnelConfig) -> Result<SshTunnel, 
         cancellation_token,
         accept_task,
     })
+}
+
+pub(crate) async fn create_tunnel_with_fallback(
+    state: &AppState,
+    window: &tauri::Window,
+    connection_id: &str,
+    host: &str,
+    port: u16,
+) -> Result<(SshTunnelHandle, SocketAddr), String> {
+    let config =
+        config_from_connection_with_window(state, window, connection_id, host, port, None).await?;
+    match create_tunnel(config).await {
+        Ok(tunnel) => {
+            let addr = tunnel.local_addr();
+            Ok((SshTunnelHandle::Native(tunnel), addr))
+        }
+        Err(native_error) => {
+            eprintln!(
+                "[ssh-tunnel] Native tunnel failed, trying OpenSSH: {}",
+                native_error.user_message()
+            );
+            let profile = get_connection(state, connection_id)?
+                .ssh
+                .ok_or_else(|| "SSH profile is unavailable.".to_string())?;
+            let local_port = pick_free_local_port()?;
+            let mut child =
+                start_ssh_local_forward(&profile, local_port, host, port).map_err(|error| {
+                    format!(
+                        "{}；OpenSSH 本地转发启动失败：{}",
+                        native_error.user_message(),
+                        error
+                    )
+                })?;
+            if let Err(error) = wait_for_tcp("127.0.0.1", local_port, Duration::from_secs(8)).await
+            {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "{}；OpenSSH 本地转发不可用：{}",
+                    native_error.user_message(),
+                    error
+                ));
+            }
+            let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), local_port);
+            Ok((SshTunnelHandle::OpenSsh(child), addr))
+        }
+    }
+}
+
+pub(crate) fn spawn_tunnel_shutdown(label: impl Into<String>, tunnel: SshTunnelHandle) {
+    let label = label.into();
+    tauri::async_runtime::spawn(async move {
+        match tokio::time::timeout(Duration::from_secs(5), tunnel.shutdown()).await {
+            Ok(()) => {}
+            Err(_) => eprintln!("[{}] tunnel shutdown timed out after 5s", label),
+        }
+    });
 }
 
 async fn connect_profile(
@@ -925,7 +1008,7 @@ mod tests {
         config.remote_port = 0;
         assert!(matches!(
             config.validate(),
-            Err(SshTunnelError::InvalidPort { field: "数据库" })
+            Err(SshTunnelError::InvalidPort { field: "远程" })
         ));
     }
 

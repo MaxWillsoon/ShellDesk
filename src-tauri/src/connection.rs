@@ -1,4 +1,5 @@
 use crate::proxy::SshProxyConfig;
+use crate::ssh_tunnel::spawn_tunnel_shutdown;
 use crate::vault::{read_store, write_store};
 use crate::{
     command_exists, error_string, https_url_origin, now, prevent_process_window,
@@ -1166,8 +1167,8 @@ pub(crate) fn close_connection_by_id(state: &AppState, connection_id: &str) -> R
             if let Some(shutdown) = proxy.shutdown.take() {
                 let _ = shutdown.send(());
             }
-            if let Some(mut child) = proxy.ssh_forward.take() {
-                let _ = child.kill();
+            if let Some(tunnel) = proxy.ssh_tunnel.take() {
+                spawn_tunnel_shutdown("vnc", tunnel);
             }
         }
     }
@@ -1188,8 +1189,8 @@ pub(crate) fn close_connection_by_id(state: &AppState, connection_id: &str) -> R
             if let Some(shutdown) = proxy.shutdown.take() {
                 let _ = shutdown.send(());
             }
-            if let Some(mut child) = proxy.ssh_forward.take() {
-                let _ = child.kill();
+            if let Some(tunnel) = proxy.ssh_tunnel.take() {
+                spawn_tunnel_shutdown("browser", tunnel);
             }
         }
     }
