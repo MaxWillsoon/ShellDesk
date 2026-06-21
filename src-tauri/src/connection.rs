@@ -1,4 +1,5 @@
 use crate::proxy::SshProxyConfig;
+use crate::ssh_tunnel::spawn_tunnel_shutdown;
 use crate::vault::{read_store, write_store};
 use crate::{
     command_exists, error_string, https_url_origin, now, prevent_process_window,
@@ -1167,9 +1168,7 @@ pub(crate) fn close_connection_by_id(state: &AppState, connection_id: &str) -> R
                 let _ = shutdown.send(());
             }
             if let Some(tunnel) = proxy.ssh_tunnel.take() {
-                tauri::async_runtime::spawn(async move {
-                    let _ = tunnel.shutdown().await;
-                });
+                spawn_tunnel_shutdown("vnc", tunnel);
             }
         }
     }
@@ -1191,9 +1190,7 @@ pub(crate) fn close_connection_by_id(state: &AppState, connection_id: &str) -> R
                 let _ = shutdown.send(());
             }
             if let Some(tunnel) = proxy.ssh_tunnel.take() {
-                tauri::async_runtime::spawn(async move {
-                    let _ = tunnel.shutdown().await;
-                });
+                spawn_tunnel_shutdown("browser", tunnel);
             }
         }
     }

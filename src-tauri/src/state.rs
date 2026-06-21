@@ -1,6 +1,6 @@
 use crate::{
     browser_proxy, database_tunnel::DatabaseTunnelSession, proxy::SshProxyConfig,
-    ssh_tunnel::SshTunnel, terminal, updater::update_status, zmodem,
+    ssh_tunnel::SshTunnelHandle, terminal, updater::update_status, zmodem,
 };
 use serde_json::Value;
 use std::{
@@ -114,7 +114,7 @@ pub(crate) enum ConnectionKind {
 pub(crate) struct VncProxySession {
     pub(crate) connection_id: String,
     pub(crate) shutdown: Option<oneshot::Sender<()>>,
-    pub(crate) ssh_tunnel: Option<SshTunnel>,
+    pub(crate) ssh_tunnel: Option<SshTunnelHandle>,
 }
 
 #[derive(Clone)]

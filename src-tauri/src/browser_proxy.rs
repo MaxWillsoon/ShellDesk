@@ -1,7 +1,7 @@
 use crate::{
     error_string, get_connection, https_url_origin,
-    ssh_tunnel::{config_from_connection_with_window, create_tunnel, SshTunnel},
-    string_arg, wait_for_tcp, AppState, ConnectionKind, SshProfile,
+    ssh_tunnel::{create_tunnel_with_fallback, spawn_tunnel_shutdown, SshTunnelHandle},
+    string_arg, AppState, ConnectionKind, SshProfile,
 };
 use crate::{run_ssh_command_for_profile_with_window, shell_quote};
 use base64::Engine;
@@ -19,7 +19,7 @@ pub(crate) struct BrowserProxySession {
     pub(crate) connection_id: String,
     pub(crate) local_port: u16,
     pub(crate) shutdown: Option<oneshot::Sender<()>>,
-    pub(crate) ssh_tunnel: Option<SshTunnel>,
+    pub(crate) ssh_tunnel: Option<SshTunnelHandle>,
 }
 
 #[derive(Clone)]
@@ -127,20 +127,11 @@ pub(crate) async fn browser_resolve_url(
         .ssh
         .clone()
         .ok_or_else(|| "SSH profile is unavailable.".to_string())?;
-    let tunnel =
-        open_browser_ssh_tunnel(state, window, &connection_id, &target_host, target_port).await?;
-    let local_addr = tunnel.local_addr();
+    let (tunnel, local_addr) =
+        create_tunnel_with_fallback(state, window, &connection_id, &target_host, target_port)
+            .await?;
+    let local_addr = tunnel.local_addr().unwrap_or(local_addr);
     let tunnel_port = local_addr.port();
-    if let Err(error) = wait_for_tcp(
-        &local_addr.ip().to_string(),
-        tunnel_port,
-        Duration::from_secs(8),
-    )
-    .await
-    {
-        let _ = tunnel.shutdown().await;
-        return Err(format!("远程浏览器 SSH 转发启动失败：{error}"));
-    }
 
     let remote_fallback = Some(BrowserRemoteFallback {
         state: state.clone(),
@@ -157,7 +148,7 @@ pub(crate) async fn browser_resolve_url(
     {
         Ok(proxy_port) => proxy_port,
         Err(error) => {
-            let _ = tunnel.shutdown().await;
+            spawn_tunnel_shutdown("browser", tunnel);
             return Err(error);
         }
     };
@@ -246,20 +237,6 @@ async fn ensure_browser_reverse_proxy(
         },
     );
     Ok(proxy_port)
-}
-
-async fn open_browser_ssh_tunnel(
-    state: &AppState,
-    window: &tauri::Window,
-    connection_id: &str,
-    host: &str,
-    port: u16,
-) -> Result<SshTunnel, String> {
-    let config =
-        config_from_connection_with_window(state, window, connection_id, host, port, None).await?;
-    create_tunnel(config)
-        .await
-        .map_err(|error| error.user_message())
 }
 
 async fn start_browser_reverse_proxy(

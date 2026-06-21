@@ -12,8 +12,8 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::{
     error_string, get_connection, random_id, read_string_field,
-    ssh_tunnel::{config_from_connection_with_window, create_tunnel, SshTunnel},
-    string_arg, wait_for_tcp, AppState, ConnectionKind, VncProxySession,
+    ssh_tunnel::{create_tunnel_with_fallback, spawn_tunnel_shutdown, SshTunnelHandle},
+    string_arg, AppState, ConnectionKind, VncProxySession,
 };
 
 pub(crate) async fn probe(
@@ -94,20 +94,10 @@ pub(crate) async fn start(
             "ssh-forward",
             &format!("Opening SSH tunnel 127.0.0.1:* -> {host}:{port}"),
         );
-        let tunnel = open_vnc_ssh_tunnel(state, window, &connection_id, &host, port).await?;
-        let local_addr = tunnel.local_addr();
+        let (tunnel, local_addr) =
+            create_tunnel_with_fallback(state, window, &connection_id, &host, port).await?;
+        let local_addr = tunnel.local_addr().unwrap_or(local_addr);
         let forward_port = local_addr.port();
-        if let Err(error) = wait_for_tcp(
-            &local_addr.ip().to_string(),
-            forward_port,
-            Duration::from_secs(8),
-        )
-        .await
-        {
-            let _ = tunnel.shutdown().await;
-            emit_diagnostic(window, &connection_id, &vnc_id, "ssh-forward-error", &error);
-            return Err(format!("VNC SSH 隧道启动失败：{error}"));
-        }
         emit_diagnostic(
             window,
             &connection_id,
@@ -230,23 +220,14 @@ async fn probe_vnc_target(
     port: u16,
 ) -> Result<Value, String> {
     let connection = get_connection(state, connection_id)?;
-    let (target_host, target_port, mut ssh_tunnel): (String, u16, Option<SshTunnel>) =
+    let (target_host, target_port, mut ssh_tunnel): (String, u16, Option<SshTunnelHandle>) =
         if connection.kind == ConnectionKind::Local {
             (host.to_string(), port, None)
         } else {
-            let tunnel = open_vnc_ssh_tunnel(state, window, connection_id, host, port).await?;
-            let local_addr = tunnel.local_addr();
+            let (tunnel, local_addr) =
+                create_tunnel_with_fallback(state, window, connection_id, host, port).await?;
+            let local_addr = tunnel.local_addr().unwrap_or(local_addr);
             let forward_port = local_addr.port();
-            if let Err(error) = wait_for_tcp(
-                &local_addr.ip().to_string(),
-                forward_port,
-                Duration::from_secs(8),
-            )
-            .await
-            {
-                let _ = tunnel.shutdown().await;
-                return Err(format!("VNC SSH 隧道启动失败：{error}"));
-            }
             (local_addr.ip().to_string(), forward_port, Some(tunnel))
         };
     let result = async {
@@ -261,23 +242,9 @@ async fn probe_vnc_target(
     }
     .await;
     if let Some(tunnel) = ssh_tunnel.take() {
-        let _ = tunnel.shutdown().await;
+        spawn_tunnel_shutdown("vnc", tunnel);
     }
     result
-}
-
-async fn open_vnc_ssh_tunnel(
-    state: &AppState,
-    window: &tauri::Window,
-    connection_id: &str,
-    host: &str,
-    port: u16,
-) -> Result<SshTunnel, String> {
-    let config =
-        config_from_connection_with_window(state, window, connection_id, host, port, None).await?;
-    create_tunnel(config)
-        .await
-        .map_err(|error| error.user_message())
 }
 
 async fn read_vnc_server_handshake(
@@ -397,9 +364,7 @@ fn stop_by_key(state: &AppState, key: &str) -> Result<(), String> {
             let _ = shutdown.send(());
         }
         if let Some(tunnel) = proxy.ssh_tunnel.take() {
-            tauri::async_runtime::spawn(async move {
-                let _ = tunnel.shutdown().await;
-            });
+            spawn_tunnel_shutdown("vnc", tunnel);
         }
     }
     Ok(())
