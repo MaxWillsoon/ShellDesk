@@ -28,7 +28,7 @@ rfd = "0.15"
 async-trait = "0.1"
 russh = "0.53"
 russh-keys = "0.49.2"
-sqlx = { version = "0.8", features = ["runtime-tokio", "mysql", "postgres"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "mysql", "postgres", "chrono"] }
 fred = { version = "10", features = ["enable-rustls"] }
 clickhouse = { version = "0.14", features = ["rustls-tls"] }
 mongodb = { version = "3", features = ["rustls-tls"] }

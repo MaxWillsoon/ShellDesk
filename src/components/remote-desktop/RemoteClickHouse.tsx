@@ -1,4 +1,5 @@
 import { type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import { exportDatabaseRows, type DatabaseExportFormat } from './databaseExport';
@@ -66,6 +67,16 @@ interface ClickHouseHistoryItem {
   createdAt: number;
 }
 
+type ClickHouseContextMenuTarget =
+  | { type: 'database'; database: string }
+  | { type: 'table'; database: string; table: ShellDeskClickHouseTable };
+
+interface ClickHouseContextMenuState {
+  x: number;
+  y: number;
+  target: ClickHouseContextMenuTarget;
+}
+
 const defaultHttpPort = 8123;
 const defaultHttpsPort = 8443;
 const pageSize = 100;
@@ -93,6 +104,10 @@ function createInitialQueryState(): { tabs: ClickHouseQueryTab[]; activeId: stri
 
 function quoteClickHouseIdentifier(identifier: string): string {
   return `\`${identifier.replace(/`/g, '``')}\``;
+}
+
+function quoteClickHouseString(value: string): string {
+  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
 }
 
 function formatSqlPreview(sql: string, length = 56): string {
@@ -234,6 +249,7 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
   const [activeResultId, setActiveResultId] = useState('');
   const [history, setHistory] = useState<ClickHouseHistoryItem[]>([]);
   const [page, setPage] = useState(0);
+  const [contextMenu, setContextMenu] = useState<ClickHouseContextMenuState | null>(null);
 
   const isReady = status === 'connected';
   const activeQueryTab = useMemo(() => {
@@ -325,6 +341,7 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
     setHistory([]);
     setPage(0);
     setMessage(null);
+    setContextMenu(null);
   }, []);
 
   const addHistoryItem = useCallback((item: Omit<ClickHouseHistoryItem, 'id' | 'createdAt'>) => {
@@ -536,6 +553,29 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
     void loadTables(database, true);
   }, [loadTables]);
 
+  const openDatabaseContextMenu = useCallback((event: React.MouseEvent, database: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveDb(database);
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      target: { type: 'database', database },
+    });
+  }, []);
+
+  const openTableContextMenu = useCallback((event: React.MouseEvent, database: string, table: ShellDeskClickHouseTable) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveDb(database);
+    setSelectedTable({ ...table, database });
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      target: { type: 'table', database, table },
+    });
+  }, []);
+
   const handleAddQueryTab = useCallback((seedSql?: string) => {
     setQueryTabs((prev) => {
       const tab = createQueryTab(prev.length + 1, seedSql ?? '');
@@ -603,12 +643,10 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
     setActiveDb(database);
     setMessage(null);
     setPage(0);
+    setTableColumns([]);
     updateActiveQuerySql(previewSql);
 
     try {
-      const cols = await api.connections.clickhouseColumns(connectionId, clickhouseId, database, table.name);
-      setTableColumns(cols);
-
       const result = await api.connections.clickhouseQuery(connectionId, clickhouseId, previewSql, database);
       const queryTime = Math.round(performance.now() - startTime);
 
@@ -623,7 +661,7 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
         queryTime,
         createdAt: Date.now(),
         table: tableInfo,
-        columns: cols,
+        columns: createGenericColumns(result.columns),
       });
       addHistoryItem({
         sql: previewSql,
@@ -652,6 +690,152 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
       });
     }
   }, [addHistoryItem, addResultTab, api, clickhouseId, connectionId, updateActiveQuerySql]);
+
+  const handleShowDatabaseInfo = useCallback(async (database: string) => {
+    if (!api?.connections || !clickhouseId) return;
+
+    const sqlText = [
+      'SELECT',
+      '  name AS `数据库`,',
+      '  engine AS `引擎`,',
+      '  data_path AS `数据路径`,',
+      '  metadata_path AS `元数据路径`',
+      'FROM system.databases',
+      `WHERE name = ${quoteClickHouseString(database)};`,
+    ].join('\n');
+    const startTime = performance.now();
+
+    setActiveDb(database);
+    setMessage(null);
+    setPage(0);
+    updateActiveQuerySql(sqlText);
+
+    try {
+      const result = await api.connections.clickhouseQuery(connectionId, clickhouseId, sqlText, database);
+      const queryTime = Math.round(performance.now() - startTime);
+      addResultTab({
+        id: createId('result'),
+        title: `${database} 信息`,
+        subtitle: database,
+        sql: sqlText,
+        database,
+        status: 'success',
+        result,
+        queryTime,
+        createdAt: Date.now(),
+        columns: createGenericColumns(result.columns),
+      });
+      addHistoryItem({
+        sql: sqlText,
+        database,
+        status: 'success',
+        queryTime,
+        rowCount: result.rowCount ?? result.rows.length,
+      });
+    } catch (error) {
+      const text = getErrorMessage(error);
+      setMessage({ type: 'error', text });
+      addResultTab({
+        id: createId('result'),
+        title: `${database} 信息`,
+        subtitle: database,
+        sql: sqlText,
+        database,
+        status: 'error',
+        error: text,
+        queryTime: Math.round(performance.now() - startTime),
+        createdAt: Date.now(),
+        columns: [],
+      });
+    }
+  }, [addHistoryItem, addResultTab, api, clickhouseId, connectionId, updateActiveQuerySql]);
+
+  const handleShowTableStructure = useCallback(async (database: string, table: ShellDeskClickHouseTable) => {
+    if (!api?.connections || !clickhouseId) return;
+
+    const tableInfo: TableInfo = { ...table, database };
+    const sqlText = `DESCRIBE TABLE ${quoteClickHouseIdentifier(database)}.${quoteClickHouseIdentifier(table.name)};`;
+    const startTime = performance.now();
+
+    setSelectedTable(tableInfo);
+    setActiveDb(database);
+    setMessage(null);
+    setPage(0);
+    updateActiveQuerySql(sqlText);
+
+    try {
+      const cols = await api.connections.clickhouseColumns(connectionId, clickhouseId, database, table.name);
+      setTableColumns(cols);
+      const result: ShellDeskClickHouseQueryResult = {
+        columns: ['字段', '类型', '默认类型', '默认表达式', '主键', '排序键', '注释'],
+        rows: cols.map((column) => ({
+          字段: column.name,
+          类型: column.type,
+          默认类型: column.defaultKind || '',
+          默认表达式: column.defaultExpression || '',
+          主键: column.isPrimaryKey ? 'YES' : '',
+          排序键: column.isSortingKey ? 'YES' : '',
+          注释: column.comment || '',
+        })),
+        rowCount: cols.length,
+      };
+      const queryTime = Math.round(performance.now() - startTime);
+      addResultTab({
+        id: createId('result'),
+        title: `${table.name} 结构`,
+        subtitle: database,
+        sql: sqlText,
+        database,
+        status: 'success',
+        result,
+        queryTime,
+        createdAt: Date.now(),
+        table: tableInfo,
+        columns: createGenericColumns(result.columns),
+      });
+      addHistoryItem({
+        sql: sqlText,
+        database,
+        status: 'success',
+        queryTime,
+        rowCount: result.rows.length,
+      });
+    } catch (error) {
+      const text = getErrorMessage(error);
+      setMessage({ type: 'error', text });
+      addResultTab({
+        id: createId('result'),
+        title: `${table.name} 结构`,
+        subtitle: database,
+        sql: sqlText,
+        database,
+        status: 'error',
+        error: text,
+        queryTime: Math.round(performance.now() - startTime),
+        createdAt: Date.now(),
+        table: tableInfo,
+        columns: [],
+      });
+    }
+  }, [addHistoryItem, addResultTab, api, clickhouseId, connectionId, updateActiveQuerySql]);
+
+  const handleContextMenuAction = useCallback((action: 'database-info' | 'query-table' | 'table-structure') => {
+    const target = contextMenu?.target;
+    setContextMenu(null);
+    if (!target) return;
+
+    if (action === 'database-info' && target.type === 'database') {
+      void handleShowDatabaseInfo(target.database);
+      return;
+    }
+
+    if (target.type !== 'table') return;
+    if (action === 'query-table') {
+      void handleSelectTable(target.database, target.table);
+    } else if (action === 'table-structure') {
+      void handleShowTableStructure(target.database, target.table);
+    }
+  }, [contextMenu, handleSelectTable, handleShowDatabaseInfo, handleShowTableStructure]);
 
   const handleExecuteSql = useCallback(async () => {
     if (!api?.connections || !clickhouseId || !activeQueryTab?.sql.trim()) return;
@@ -772,6 +956,29 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
       sqlRef.current?.focus();
     }
   }, [activeQueryId, isReady]);
+
+  useEffect(() => {
+    if (!contextMenu) return undefined;
+
+    const close = () => setContextMenu(null);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') close();
+    };
+
+    window.addEventListener('click', close);
+    window.addEventListener('contextmenu', close);
+    window.addEventListener('resize', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('contextmenu', close);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [contextMenu]);
 
   useEffect(() => {
     return () => {
@@ -928,6 +1135,7 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
                     type="button"
                     className={`mysql-tree-db-btn ${expanded ? 'expanded' : ''} ${activeDb === database ? 'active' : ''}`}
                     onClick={() => toggleDatabase(database)}
+                    onContextMenu={(event) => openDatabaseContextMenu(event, database)}
                   >
                     <span className="mysql-tree-arrow">{expanded ? '▾' : '▸'}</span>
                     <span className="mysql-tree-icon">DB</span>
@@ -960,26 +1168,13 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
                               type="button"
                               className={`mysql-tree-table-btn ${selectedTable?.database === database && selectedTable.name === table.name ? 'selected' : ''}`}
                               onClick={() => void handleSelectTable(database, table)}
+                              onContextMenu={(event) => openTableContextMenu(event, database, table)}
                               title={tableMeta || table.name}
                             >
                               <span className="mysql-tree-icon">T</span>
                               <span className="mysql-tree-name">{table.name}</span>
                               {table.engine ? <span className="clickhouse-table-engine">{table.engine}</span> : null}
                             </button>
-                            {selectedTable?.database === database && selectedTable.name === table.name && tableColumns.length > 0 ? (
-                              <div className="mysql-column-list">
-                                {tableColumns.map((column) => {
-                                  const badge = getColumnBadge(column);
-                                  return (
-                                    <div key={column.name} className="mysql-column-item" title={column.comment || column.defaultExpression || column.type}>
-                                      <span className="mysql-column-name">{column.name}</span>
-                                      <span className="mysql-column-type">{column.type}</span>
-                                      {badge ? <span className="mysql-column-key">{badge}</span> : null}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            ) : null}
                           </div>
                         );
                       })}
@@ -1237,6 +1432,32 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
           </section>
         </main>
       </div>
+      {contextMenu ? createPortal(
+        <div
+          className="mysql-context-menu"
+          style={{
+            left: Math.min(contextMenu.x, window.innerWidth - 220),
+            top: Math.min(contextMenu.y, window.innerHeight - 140),
+          }}
+          role="menu"
+          onClick={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <div className="mysql-context-menu-title">
+            <strong>{contextMenu.target.type === 'database' ? contextMenu.target.database : contextMenu.target.table.name}</strong>
+            <span>{contextMenu.target.type === 'database' ? '数据库' : contextMenu.target.database}</span>
+          </div>
+          {contextMenu.target.type === 'database' ? (
+            <button type="button" role="menuitem" onClick={() => handleContextMenuAction('database-info')}>查看数据库信息</button>
+          ) : (
+            <>
+              <button type="button" role="menuitem" onClick={() => handleContextMenuAction('query-table')}>查询数据</button>
+              <button type="button" role="menuitem" onClick={() => handleContextMenuAction('table-structure')}>查看表结构</button>
+            </>
+          )}
+        </div>,
+        document.body,
+      ) : null}
     </div>
   );
 }

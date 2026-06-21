@@ -85,6 +85,16 @@ interface PendingEdit {
   pkValues: unknown[];
 }
 
+type MysqlContextMenuTarget =
+  | { type: 'database'; database: string }
+  | { type: 'table'; database: string; table: string };
+
+interface MysqlContextMenuState {
+  x: number;
+  y: number;
+  target: MysqlContextMenuTarget;
+}
+
 const defaultPort = 3306;
 const pageSize = 100;
 const tablePreviewLimit = 50;
@@ -111,6 +121,10 @@ function createInitialQueryState(): { tabs: MysqlQueryTab[]; activeId: string } 
 
 function quoteMysqlIdentifier(identifier: string): string {
   return `\`${identifier.replace(/`/g, '``')}\``;
+}
+
+function quoteMysqlString(value: string): string {
+  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "''")}'`;
 }
 
 function formatSqlPreview(sql: string, length = 56): string {
@@ -226,6 +240,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
   const [pendingEdit, setPendingEdit] = useState<PendingEdit | null>(null);
   const [editSaving, setEditSaving] = useState(false);
   const [page, setPage] = useState(0);
+  const [contextMenu, setContextMenu] = useState<MysqlContextMenuState | null>(null);
 
   const isReady = status === 'connected';
 
@@ -319,6 +334,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
     setPendingEdit(null);
     setPage(0);
     setMessage(null);
+    setContextMenu(null);
   }, []);
 
   const addHistoryItem = useCallback((item: Omit<MysqlHistoryItem, 'id' | 'createdAt'>) => {
@@ -514,6 +530,29 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
     void loadTables(database, true);
   }, [loadTables]);
 
+  const openDatabaseContextMenu = useCallback((event: React.MouseEvent, database: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveDb(database);
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      target: { type: 'database', database },
+    });
+  }, []);
+
+  const openTableContextMenu = useCallback((event: React.MouseEvent, database: string, table: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveDb(database);
+    setSelectedTable({ database, name: table });
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      target: { type: 'table', database, table },
+    });
+  }, []);
+
   const handleAddQueryTab = useCallback((seedSql?: string) => {
     setQueryTabs((prev) => {
       const tab = createQueryTab(prev.length + 1, seedSql ?? '');
@@ -625,6 +664,155 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
       });
     }
   }, [addHistoryItem, addResultTab, api, connectionId, mysqlId, updateActiveQuerySql]);
+
+  const handleShowDatabaseInfo = useCallback(async (database: string) => {
+    if (!api?.connections || !mysqlId) return;
+
+    const sqlText = [
+      'SELECT',
+      '  s.SCHEMA_NAME AS `数据库`,',
+      '  s.DEFAULT_CHARACTER_SET_NAME AS `默认字符集`,',
+      '  s.DEFAULT_COLLATION_NAME AS `默认排序规则`,',
+      '  COUNT(t.TABLE_NAME) AS `表数量`,',
+      '  COALESCE(ROUND(SUM(t.DATA_LENGTH + t.INDEX_LENGTH) / 1024 / 1024, 2), 0) AS `大小MB`',
+      'FROM information_schema.SCHEMATA s',
+      'LEFT JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = s.SCHEMA_NAME',
+      `WHERE s.SCHEMA_NAME = ${quoteMysqlString(database)}`,
+      'GROUP BY s.SCHEMA_NAME, s.DEFAULT_CHARACTER_SET_NAME, s.DEFAULT_COLLATION_NAME;',
+    ].join('\n');
+    const startTime = performance.now();
+
+    setActiveDb(database);
+    setMessage(null);
+    setPage(0);
+    updateActiveQuerySql(sqlText);
+
+    try {
+      const result = await api.connections.mysqlQuery(connectionId, mysqlId, sqlText, database);
+      const queryTime = Math.round(performance.now() - startTime);
+      addResultTab({
+        id: createId('result'),
+        title: `${database} 信息`,
+        subtitle: database,
+        sql: sqlText,
+        database,
+        status: 'success',
+        result,
+        queryTime,
+        createdAt: Date.now(),
+        columns: createGenericColumns(result.columns),
+      });
+      addHistoryItem({
+        sql: sqlText,
+        database,
+        status: 'success',
+        queryTime,
+        rowCount: result.rows.length,
+        affectedRows: result.affectedRows,
+      });
+    } catch (error) {
+      const text = getErrorMessage(error);
+      addResultTab({
+        id: createId('result'),
+        title: `${database} 信息`,
+        subtitle: database,
+        sql: sqlText,
+        database,
+        status: 'error',
+        error: text,
+        queryTime: Math.round(performance.now() - startTime),
+        createdAt: Date.now(),
+        columns: [],
+      });
+      setMessage({ type: 'error', text });
+    }
+  }, [addHistoryItem, addResultTab, api, connectionId, mysqlId, updateActiveQuerySql]);
+
+  const handleShowTableStructure = useCallback(async (database: string, table: string) => {
+    if (!api?.connections || !mysqlId) return;
+
+    const sqlText = `SHOW FULL COLUMNS FROM ${quoteMysqlIdentifier(database)}.${quoteMysqlIdentifier(table)};`;
+    const startTime = performance.now();
+
+    setSelectedTable({ database, name: table });
+    setActiveDb(database);
+    setMessage(null);
+    setPage(0);
+    updateActiveQuerySql(sqlText);
+
+    try {
+      const cols = await api.connections.mysqlColumns(connectionId, mysqlId, database, table);
+      setTableColumns(cols);
+      const result: ShellDeskMysqlQueryResult = {
+        columns: ['字段', '类型', '可空', '键', '默认', '额外', '注释'],
+        rows: cols.map((column) => ({
+          字段: column.name,
+          类型: column.type,
+          可空: column.nullable ? 'YES' : 'NO',
+          键: column.key || '',
+          默认: column.default,
+          额外: column.extra || '',
+          注释: column.comment || '',
+        })),
+        affectedRows: undefined,
+      };
+      const queryTime = Math.round(performance.now() - startTime);
+      addResultTab({
+        id: createId('result'),
+        title: `${table} 结构`,
+        subtitle: database,
+        sql: sqlText,
+        database,
+        status: 'success',
+        result,
+        queryTime,
+        createdAt: Date.now(),
+        table: { database, name: table },
+        columns: createGenericColumns(result.columns),
+      });
+      addHistoryItem({
+        sql: sqlText,
+        database,
+        status: 'success',
+        queryTime,
+        rowCount: result.rows.length,
+      });
+    } catch (error) {
+      const text = getErrorMessage(error);
+      setMessage({ type: 'error', text });
+      addResultTab({
+        id: createId('result'),
+        title: `${table} 结构`,
+        subtitle: database,
+        sql: sqlText,
+        database,
+        status: 'error',
+        error: text,
+        queryTime: Math.round(performance.now() - startTime),
+        createdAt: Date.now(),
+        table: { database, name: table },
+        columns: [],
+      });
+    }
+  }, [addHistoryItem, addResultTab, api, connectionId, mysqlId, updateActiveQuerySql]);
+
+  const handleContextMenuAction = useCallback((action: 'database-info' | 'query-table' | 'table-structure') => {
+    const target = contextMenu?.target;
+    setContextMenu(null);
+    if (!target) return;
+
+    if (action === 'database-info' && target.type === 'database') {
+      void handleShowDatabaseInfo(target.database);
+      return;
+    }
+
+    if (target.type !== 'table') return;
+    if (action === 'query-table') {
+      void handleSelectTable(target.database, target.table);
+    } else if (action === 'table-structure') {
+      void handleShowTableStructure(target.database, target.table);
+    }
+  }, [contextMenu, handleSelectTable, handleShowDatabaseInfo, handleShowTableStructure]);
 
   const handleExecuteSql = useCallback(async () => {
     if (!api?.connections || !mysqlId || !activeQueryTab?.sql.trim()) return;
@@ -855,6 +1043,31 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
   }, [activeQueryId, isReady]);
 
   useEffect(() => {
+    if (!contextMenu) return undefined;
+
+    const close = () => setContextMenu(null);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        close();
+      }
+    };
+
+    window.addEventListener('click', close);
+    window.addEventListener('contextmenu', close);
+    window.addEventListener('resize', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('contextmenu', close);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [contextMenu]);
+
+  useEffect(() => {
     return () => {
       const currentMysqlId = mysqlIdRef.current;
       if (currentMysqlId && api?.connections) {
@@ -993,6 +1206,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
                     type="button"
                     className={`mysql-tree-db-btn ${expanded ? 'expanded' : ''} ${activeDb === database ? 'active' : ''}`}
                     onClick={() => toggleDatabase(database)}
+                    onContextMenu={(event) => openDatabaseContextMenu(event, database)}
                   >
                     <span className="mysql-tree-arrow">{expanded ? '▾' : '▸'}</span>
                     <span className="mysql-tree-icon">DB</span>
@@ -1022,21 +1236,11 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
                             type="button"
                             className={`mysql-tree-table-btn ${selectedTable?.database === database && selectedTable.name === table ? 'selected' : ''}`}
                             onClick={() => void handleSelectTable(database, table)}
+                            onContextMenu={(event) => openTableContextMenu(event, database, table)}
                           >
                             <span className="mysql-tree-icon">T</span>
                             <span className="mysql-tree-name">{table}</span>
                           </button>
-                          {selectedTable?.database === database && selectedTable.name === table && tableColumns.length > 0 ? (
-                            <div className="mysql-column-list">
-                              {tableColumns.map((column) => (
-                                <div key={column.name} className="mysql-column-item" title={column.comment || column.extra || column.type}>
-                                  <span className="mysql-column-name">{column.name}</span>
-                                  <span className="mysql-column-type">{column.type}</span>
-                                  {column.key ? <span className="mysql-column-key">{column.key}</span> : null}
-                                </div>
-                              ))}
-                            </div>
-                          ) : null}
                         </div>
                       ))}
                       {!loading && dbTables[database] !== undefined && visibleTables.length === 0 ? (
@@ -1341,6 +1545,43 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
               </button>
             </div>
           </div>
+        </div>,
+        document.body,
+      ) : null}
+
+      {contextMenu ? createPortal(
+        <div
+          className="mysql-context-menu"
+          style={{
+            left: Math.min(contextMenu.x, window.innerWidth - 220),
+            top: Math.min(contextMenu.y, window.innerHeight - 140),
+          }}
+          role="menu"
+          onClick={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <div className="mysql-context-menu-title">
+            <strong>
+              {contextMenu.target.type === 'database'
+                ? contextMenu.target.database
+                : contextMenu.target.table}
+            </strong>
+            <span>{contextMenu.target.type === 'database' ? '数据库' : contextMenu.target.database}</span>
+          </div>
+          {contextMenu.target.type === 'database' ? (
+            <button type="button" role="menuitem" onClick={() => handleContextMenuAction('database-info')}>
+              查看数据库信息
+            </button>
+          ) : (
+            <>
+              <button type="button" role="menuitem" onClick={() => handleContextMenuAction('query-table')}>
+                查询数据
+              </button>
+              <button type="button" role="menuitem" onClick={() => handleContextMenuAction('table-structure')}>
+                查看表结构
+              </button>
+            </>
+          )}
         </div>,
         document.body,
       ) : null}

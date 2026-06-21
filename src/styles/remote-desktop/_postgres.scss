@@ -227,6 +227,44 @@
   margin: 10px;
 }
 
+.postgres-database-list {
+  display: grid;
+  gap: 4px;
+  border-bottom: 1px solid var(--pg-border);
+  padding: 8px 10px;
+}
+
+.postgres-database-btn {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 26px minmax(0, 1fr);
+  align-items: center;
+  text-align: left;
+}
+
+.postgres-database-btn span {
+  color: var(--pg-accent);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.postgres-database-btn strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.postgres-database-btn.active {
+  border-color: rgba(115, 183, 255, 0.36);
+  background: rgba(115, 183, 255, 0.14);
+  color: var(--pg-text);
+}
+
+.postgres-database-btn:disabled {
+  cursor: default;
+  opacity: 0.78;
+}
+
 .postgres-object-tree,
 .postgres-column-list,
 .postgres-history-list {

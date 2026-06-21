@@ -1,5 +1,8 @@
 use base64::Engine;
-use russh::{client, keys::key::PrivateKeyWithHashAlg};
+use russh::{
+    client,
+    keys::{key::PrivateKeyWithHashAlg, Algorithm, HashAlg},
+};
 use serde::Deserialize;
 use std::{
     fmt,
@@ -408,15 +411,45 @@ async fn authenticate_key(
 ) -> Result<(), SshTunnelError> {
     let key = russh::keys::load_secret_key(key_path, passphrase)
         .map_err(|error| SshTunnelError::SshAuth(error.to_string()))?;
-    let key = PrivateKeyWithHashAlg::new(Arc::new(key), None);
-    let auth_result = session
-        .authenticate_publickey(user, key)
-        .await
-        .map_err(|error| SshTunnelError::SshAuth(error.to_string()))?;
-    if !auth_result.success() {
-        return Err(SshTunnelError::SshAuth("服务器拒绝私钥认证。".to_string()));
+    let key = Arc::new(key);
+    let rsa_hash = if matches!(key.algorithm(), Algorithm::Rsa { .. }) {
+        session
+            .best_supported_rsa_hash()
+            .await
+            .map_err(|error| SshTunnelError::SshAuth(error.to_string()))?
+    } else {
+        None
+    };
+    for hash_alg in key_auth_hash_algorithms(key.algorithm(), rsa_hash) {
+        let key_with_hash = PrivateKeyWithHashAlg::new(Arc::clone(&key), hash_alg);
+        let auth_result = session
+            .authenticate_publickey(user, key_with_hash)
+            .await
+            .map_err(|error| SshTunnelError::SshAuth(error.to_string()))?;
+        if auth_result.success() {
+            return Ok(());
+        }
     }
-    Ok(())
+    Err(SshTunnelError::SshAuth("服务器拒绝私钥认证。".to_string()))
+}
+
+fn key_auth_hash_algorithms(
+    algorithm: Algorithm,
+    server_best: Option<Option<HashAlg>>,
+) -> Vec<Option<HashAlg>> {
+    if !matches!(algorithm, Algorithm::Rsa { .. }) {
+        return vec![None];
+    }
+    let mut candidates = Vec::new();
+    if let Some(hash_alg) = server_best {
+        candidates.push(hash_alg);
+    } else {
+        candidates.push(Some(HashAlg::Sha512));
+        candidates.push(Some(HashAlg::Sha256));
+    }
+    candidates.push(None);
+    candidates.dedup();
+    candidates
 }
 
 async fn authenticate_password(
@@ -908,5 +941,34 @@ mod tests {
         } else {
             assert_eq!(command, "connect 'safe&echo bad' 'safe&echo bad' 22 22");
         }
+    }
+
+    #[test]
+    fn rsa_key_auth_prefers_server_supported_hash_then_legacy() {
+        assert_eq!(
+            key_auth_hash_algorithms(
+                Algorithm::Rsa {
+                    hash: Some(HashAlg::Sha256)
+                },
+                Some(Some(HashAlg::Sha512)),
+            ),
+            vec![Some(HashAlg::Sha512), None]
+        );
+    }
+
+    #[test]
+    fn rsa_key_auth_tries_sha2_before_legacy_without_server_hint() {
+        assert_eq!(
+            key_auth_hash_algorithms(Algorithm::Rsa { hash: None }, None),
+            vec![Some(HashAlg::Sha512), Some(HashAlg::Sha256), None]
+        );
+    }
+
+    #[test]
+    fn non_rsa_key_auth_ignores_hash_algorithms() {
+        assert_eq!(
+            key_auth_hash_algorithms(Algorithm::Ed25519, Some(Some(HashAlg::Sha512))),
+            vec![None]
+        );
     }
 }

@@ -1,4 +1,5 @@
 import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import { exportDatabaseRows, type DatabaseExportFormat } from './databaseExport';
@@ -29,6 +30,16 @@ interface QueryHistoryItem {
   createdAt: string;
 }
 
+type PostgresContextMenuTarget =
+  | { type: 'database'; database: string }
+  | { type: 'table'; table: ShellDeskPostgresTable };
+
+interface PostgresContextMenuState {
+  x: number;
+  y: number;
+  target: PostgresContextMenuTarget;
+}
+
 const tablePreviewLimit = 50;
 const maxHistoryItems = 12;
 const defaultPort = 5432;
@@ -39,6 +50,10 @@ function createId(prefix: string) {
 
 function quotePgIdentifier(identifier: string) {
   return `"${identifier.replace(/"/g, '""')}"`;
+}
+
+function quotePgString(value: string) {
+  return `'${value.replace(/'/g, "''")}'`;
 }
 
 function formatCellValue(value: unknown) {
@@ -90,6 +105,7 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
   const [queryColumns, setQueryColumns] = useState<ShellDeskPostgresColumn[]>([]);
   const [queryRunning, setQueryRunning] = useState(false);
   const [history, setHistory] = useState<QueryHistoryItem[]>([]);
+  const [contextMenu, setContextMenu] = useState<PostgresContextMenuState | null>(null);
 
   const isConnected = status === 'connected';
 
@@ -141,6 +157,9 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
   const loadSchemas = useCallback(async (nextPostgresId: string) => {
     if (!api) return;
 
+    setTablesBySchema({});
+    setSelectedTable(null);
+    setColumns([]);
     const [nextDatabases, nextSchemas] = await Promise.all([
       api.postgresDatabases(connectionId, nextPostgresId),
       api.postgresSchemas(connectionId, nextPostgresId),
@@ -148,46 +167,61 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
 
     setDatabases(nextDatabases);
     setSchemas(nextSchemas);
-    setExpandedSchemas(new Set(nextSchemas[0] ? [nextSchemas[0]] : []));
-    if (nextSchemas[0]) {
-      const tables = await api.postgresTables(connectionId, nextPostgresId, nextSchemas[0]);
-      setTablesBySchema({ [nextSchemas[0]]: tables });
+    const initialSchema = nextSchemas.includes('public') ? 'public' : nextSchemas[0];
+    setExpandedSchemas(new Set(initialSchema ? [initialSchema] : []));
+    if (initialSchema) {
+      const tables = await api.postgresTables(connectionId, nextPostgresId, initialSchema);
+      setTablesBySchema({ [initialSchema]: tables });
+    } else {
+      setTablesBySchema({});
     }
   }, [api, connectionId]);
 
-  const connect = async () => {
+  const openPostgresDatabase = async (nextDb: string, initial = false) => {
     if (!api) {
       setError(tCurrent('auto.remotePostgres.g77vf3'));
       return;
     }
 
-    setStatus('connecting');
+    const targetDb = nextDb || 'postgres';
+    const previousPostgresId = postgresIdRef.current;
+    if (!initial && previousPostgresId && targetDb === database) {
+      await loadSchemas(previousPostgresId);
+      return;
+    }
+
+    if (initial) {
+      setStatus('connecting');
+    }
     setError('');
-    setNotice('');
+    setNotice(initial ? '' : `正在切换数据库：${targetDb}`);
 
     let createdPostgresId = '';
     try {
       const nextPort = Number.parseInt(port, 10) || defaultPort;
-      const nextDb = database || 'postgres';
       const result = await api.postgresConnect(connectionId, {
         mode: 'auto',
         host: host || '127.0.0.1',
         port: nextPort,
         user,
         password,
-        database: nextDb,
+        database: targetDb,
       });
       createdPostgresId = result.postgresId;
       postgresIdRef.current = result.postgresId;
       setPostgresId(result.postgresId);
+      setDatabase(targetDb);
       void saveRemoteConnectionProfile(hostId, 'postgres', {
         host: host || '127.0.0.1',
         port: String(nextPort),
         user: user || 'postgres',
         password,
-        database: nextDb,
+        database: targetDb,
       }).catch(() => undefined);
       await loadSchemas(result.postgresId);
+      if (previousPostgresId && previousPostgresId !== result.postgresId) {
+        await api.postgresDisconnect(connectionId, previousPostgresId).catch(() => false);
+      }
       setStatus('connected');
       setNotice(tCurrent(result.alreadyConnected ? 'postgres.connection.reused' : 'postgres.connection.success', {
         transport: result.transport === 'direct'
@@ -198,7 +232,7 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
         user: user || 'postgres',
         host: host || '127.0.0.1',
         port: nextPort,
-        database: nextDb,
+        database: targetDb,
       }));
     } catch (error) {
       if (createdPostgresId) {
@@ -208,13 +242,21 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
           // ignore cleanup errors after partial connect failure
         }
       }
-      if (postgresIdRef.current === createdPostgresId) {
+      if (previousPostgresId) {
+        postgresIdRef.current = previousPostgresId;
+        setPostgresId(previousPostgresId);
+        setStatus('connected');
+      } else if (postgresIdRef.current === createdPostgresId) {
         postgresIdRef.current = '';
+        setPostgresId((current) => (current === createdPostgresId ? '' : current));
+        setStatus('error');
       }
-      setPostgresId((current) => (current === createdPostgresId ? '' : current));
-      setStatus('error');
       setError(getErrorMessage(error));
     }
+  };
+
+  const connect = async () => {
+    await openPostgresDatabase(database || 'postgres', true);
   };
 
   const handleDisconnect = async () => {
@@ -227,6 +269,7 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
     setSelectedTable(null);
     setColumns([]);
     setQueryResult(null);
+    setContextMenu(null);
     setNotice(tCurrent('auto.remotePostgres.tn34oa'));
   };
 
@@ -240,7 +283,7 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
       return next;
     });
 
-    if (!tablesBySchema[schema]) {
+    if (!tablesBySchema[schema] || tablesBySchema[schema].length === 0) {
       try {
         const tables = await api.postgresTables(connectionId, postgresId, schema);
         setTablesBySchema((current) => ({ ...current, [schema]: tables }));
@@ -334,16 +377,155 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
     const tableInfo = { schema: table.schema, name: table.name, type: table.type };
     const previewSql = `SELECT * FROM ${quotePgIdentifier(table.schema)}.${quotePgIdentifier(table.name)} LIMIT ${tablePreviewLimit};`;
     setSelectedTable(tableInfo);
+    setColumns([]);
     setSql(previewSql);
+
+    await runQuery(previewSql, tableInfo);
+  };
+
+  const showDatabaseInfo = useCallback(() => {
+    const infoSql = [
+      'SELECT',
+      '  current_database() AS "数据库",',
+      '  pg_encoding_to_char(encoding) AS "编码",',
+      '  datcollate AS "排序规则",',
+      '  pg_size_pretty(pg_database_size(datname)) AS "大小"',
+      'FROM pg_database',
+      `WHERE datname = current_database();`,
+    ].join('\n');
+    setContextMenu(null);
+    setSelectedTable(null);
+    setColumns([]);
+    setSql(infoSql);
+    void runQuery(infoSql);
+  }, [runQuery]);
+
+  const showTableStructure = useCallback(async (table: ShellDeskPostgresTable) => {
+    if (!api || !postgresId) return;
+
+    const tableInfo = { schema: table.schema, name: table.name, type: table.type };
+    const structureSql = [
+      'SELECT column_name, data_type, is_nullable, column_default',
+      'FROM information_schema.columns',
+      `WHERE table_schema = ${quotePgString(table.schema)}`,
+      `  AND table_name = ${quotePgString(table.name)}`,
+      'ORDER BY ordinal_position;',
+    ].join('\n');
+    const startedAt = performance.now();
+
+    setContextMenu(null);
+    setSelectedTable(tableInfo);
+    setSql(structureSql);
+    setQueryRunning(true);
+    setError('');
+    setNotice('');
 
     try {
       const nextColumns = await api.postgresColumns(connectionId, postgresId, table.schema, table.name);
+      const durationMs = Math.round(performance.now() - startedAt);
+      const result: ShellDeskPostgresQueryResult = {
+        columns: ['字段', '类型', '可空', '主键', '默认值'],
+        rows: nextColumns.map((column) => ({
+          字段: column.name,
+          类型: column.dataType,
+          可空: column.nullable ? 'YES' : 'NO',
+          主键: column.isPrimaryKey ? 'YES' : '',
+          默认值: column.defaultValue ?? null,
+        })),
+        rowCount: nextColumns.length,
+      };
       setColumns(nextColumns);
-      await runQuery(previewSql, tableInfo);
+      setQueryResult(result);
+      setQueryColumns(createGenericColumns(result.columns));
+      const historyItem: QueryHistoryItem = {
+        id: createId('pg-history'),
+        sql: structureSql,
+        status: 'success',
+        rowCount: nextColumns.length,
+        durationMs,
+        createdAt: new Date().toLocaleTimeString(getShellDeskLocale()),
+      };
+      setHistory((items) => [historyItem, ...items].slice(0, maxHistoryItems));
+      setNotice(`表结构已加载：${table.schema}.${table.name}`);
     } catch (error) {
-      setError(getErrorMessage(error));
+      const durationMs = Math.round(performance.now() - startedAt);
+      const message = getErrorMessage(error);
+      setError(message);
+      const historyItem: QueryHistoryItem = {
+        id: createId('pg-history'),
+        sql: structureSql,
+        status: 'error',
+        error: message,
+        durationMs,
+        createdAt: new Date().toLocaleTimeString(getShellDeskLocale()),
+      };
+      setHistory((items) => [historyItem, ...items].slice(0, maxHistoryItems));
+    } finally {
+      setQueryRunning(false);
     }
-  };
+  }, [api, connectionId, postgresId]);
+
+  const openDatabaseContextMenu = useCallback((event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      target: { type: 'database', database },
+    });
+  }, [database]);
+
+  const openTableContextMenu = useCallback((event: React.MouseEvent, table: ShellDeskPostgresTable) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedTable({ schema: table.schema, name: table.name, type: table.type });
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      target: { type: 'table', table },
+    });
+  }, []);
+
+  const handleContextMenuAction = useCallback((action: 'database-info' | 'query-table' | 'table-structure') => {
+    const target = contextMenu?.target;
+    setContextMenu(null);
+    if (!target) return;
+
+    if (action === 'database-info' && target.type === 'database') {
+      showDatabaseInfo();
+      return;
+    }
+
+    if (target.type !== 'table') return;
+    if (action === 'query-table') {
+      void selectTable(target.table);
+    } else if (action === 'table-structure') {
+      void showTableStructure(target.table);
+    }
+  }, [contextMenu, showDatabaseInfo, showTableStructure]);
+
+  useEffect(() => {
+    if (!contextMenu) return undefined;
+
+    const close = () => setContextMenu(null);
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') close();
+    };
+
+    window.addEventListener('click', close);
+    window.addEventListener('contextmenu', close);
+    window.addEventListener('resize', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('contextmenu', close);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [contextMenu]);
 
   const handleSqlKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
@@ -393,12 +575,29 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
     <section className="postgres-manager">
       <aside className="postgres-sidebar">
         <div className="postgres-sidebar-head">
-          <div>
+          <div onContextMenu={openDatabaseContextMenu}>
             <strong>{tCurrent('auto.remotePostgres.1r1l7i2')}</strong>
             <span>{database} · {databases.length} DB</span>
           </div>
           <button type="button" onClick={() => loadSchemas(postgresId)}>{tCurrent('auto.remotePostgres.12qo56a')}</button>
         </div>
+        {databases.length > 0 ? (
+          <div className="postgres-database-list" aria-label="PostgreSQL 数据库">
+            {databases.map((item) => (
+              <button
+                key={item}
+                type="button"
+                className={`postgres-database-btn ${item === database ? 'active' : ''}`}
+                onClick={() => void openPostgresDatabase(item)}
+                disabled={item === database}
+                title={item}
+              >
+                <span>DB</span>
+                <strong>{item}</strong>
+              </button>
+            ))}
+          </div>
+        ) : null}
         <input className="postgres-object-search" value={objectSearch} onChange={(event) => setObjectSearch(event.target.value)} placeholder={tCurrent('auto.remotePostgres.1ymokwb')} />
         <div className="postgres-object-tree">
           {filteredSchemas.map(({ schema, tables }) => (
@@ -416,6 +615,7 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
                       type="button"
                       className={selectedTable?.schema === table.schema && selectedTable.name === table.name ? 'active' : ''}
                       onClick={() => selectTable(table)}
+                      onContextMenu={(event) => openTableContextMenu(event, table)}
                     >
                       <span>{table.type === 'VIEW' ? 'V' : 'T'}</span>
                       <strong>{table.name}</strong>
@@ -525,6 +725,33 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
           ))}
         </div>
       </aside>
+
+      {contextMenu ? createPortal(
+        <div
+          className="mysql-context-menu"
+          style={{
+            left: Math.min(contextMenu.x, window.innerWidth - 220),
+            top: Math.min(contextMenu.y, window.innerHeight - 140),
+          }}
+          role="menu"
+          onClick={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <div className="mysql-context-menu-title">
+            <strong>{contextMenu.target.type === 'database' ? contextMenu.target.database : contextMenu.target.table.name}</strong>
+            <span>{contextMenu.target.type === 'database' ? '数据库' : contextMenu.target.table.schema}</span>
+          </div>
+          {contextMenu.target.type === 'database' ? (
+            <button type="button" role="menuitem" onClick={() => handleContextMenuAction('database-info')}>查看数据库信息</button>
+          ) : (
+            <>
+              <button type="button" role="menuitem" onClick={() => handleContextMenuAction('query-table')}>查询数据</button>
+              <button type="button" role="menuitem" onClick={() => handleContextMenuAction('table-structure')}>查看表结构</button>
+            </>
+          )}
+        </div>,
+        document.body,
+      ) : null}
     </section>
   );
 }

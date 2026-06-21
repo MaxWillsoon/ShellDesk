@@ -71,6 +71,16 @@ interface SqliteSudoPrompt {
   password: string;
 }
 
+type SqliteContextMenuTarget =
+  | { type: 'database'; filePath: string }
+  | { type: 'object'; object: ShellDeskSqliteObject };
+
+interface SqliteContextMenuState {
+  x: number;
+  y: number;
+  target: SqliteContextMenuTarget;
+}
+
 const pageSize = 100;
 const tablePreviewLimit = 50;
 const maxHistoryItems = 12;
@@ -86,6 +96,10 @@ function createId(prefix: string): string {
 
 function quoteSqliteIdentifier(identifier: string): string {
   return `"${identifier.replace(/"/g, '""')}"`;
+}
+
+function quoteSqliteString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
 }
 
 function formatSqlPreview(sql: string, length = 56): string {
@@ -211,6 +225,7 @@ function RemoteSqlite({ connectionId, initialFilePath, systemType }: RemoteSqlit
   const [page, setPage] = useState(0);
   const [filePickerVisible, setFilePickerVisible] = useState(false);
   const [sudoPrompt, setSudoPrompt] = useState<SqliteSudoPrompt | null>(null);
+  const [contextMenu, setContextMenu] = useState<SqliteContextMenuState | null>(null);
 
   const isReady = status === 'connected';
 
@@ -265,6 +280,7 @@ function RemoteSqlite({ connectionId, initialFilePath, systemType }: RemoteSqlit
     setPendingEdit(null);
     setPendingWrite(null);
     setPage(0);
+    setContextMenu(null);
   }, []);
 
   const addHistoryItem = useCallback((item: Omit<SqliteHistoryItem, 'id' | 'createdAt'>) => {
@@ -528,6 +544,61 @@ function RemoteSqlite({ connectionId, initialFilePath, systemType }: RemoteSqlit
     }
   }, [addHistoryItem, api, connectionId, filePath, runWithSudoRetry, sqliteId]);
 
+  const handleShowObjectStructure = useCallback(async (object: ShellDeskSqliteObject) => {
+    if (!api?.connections || !sqliteId) return;
+
+    setSelectedObject(object);
+    setColumns([]);
+    setSchemaSql(object.sql ?? '');
+    setMessage(null);
+    setPage(0);
+    setActivePanel('schema');
+    setSql(object.sql || `SELECT sql FROM sqlite_master WHERE type = ${quoteSqliteString(object.type)} AND name = ${quoteSqliteString(object.name)};`);
+    setQueryResult(null);
+    setResultMeta(null);
+
+    try {
+      const schema = await runWithSudoRetry(
+        tCurrent('sqlite.sudo.operation.schema'),
+        filePath,
+        (options) => api.connections.sqliteSchema(connectionId, sqliteId, object.type, object.name, options),
+      );
+      setSchemaSql(schema.sql || object.sql || '');
+
+      if (object.type === 'table' || object.type === 'view') {
+        const nextColumns = await runWithSudoRetry(
+          tCurrent('sqlite.sudo.operation.schema'),
+          filePath,
+          (options) => api.connections.sqliteColumns(connectionId, sqliteId, object.name, options),
+        );
+        setColumns(nextColumns);
+      }
+    } catch (error) {
+      setMessage({ type: 'error', text: getErrorMessage(error) });
+    }
+  }, [api, connectionId, filePath, runWithSudoRetry, sqliteId]);
+
+  const openDatabaseContextMenu = useCallback((event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      target: { type: 'database', filePath },
+    });
+  }, [filePath]);
+
+  const openObjectContextMenu = useCallback((event: React.MouseEvent, object: ShellDeskSqliteObject) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedObject(object);
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      target: { type: 'object', object },
+    });
+  }, []);
+
   const executeSql = useCallback(async (sqlText: string) => {
     if (!api?.connections || !sqliteId || !sqlText.trim()) return;
 
@@ -590,6 +661,24 @@ function RemoteSqlite({ connectionId, initialFilePath, systemType }: RemoteSqlit
       setQueryRunning(false);
     }
   }, [addHistoryItem, api, connectionId, filePath, refreshObjects, runWithSudoRetry, sqliteId]);
+
+  const handleContextMenuAction = useCallback((action: 'database-info' | 'query-object' | 'object-structure') => {
+    const target = contextMenu?.target;
+    setContextMenu(null);
+    if (!target) return;
+
+    if (action === 'database-info' && target.type === 'database') {
+      void executeSql('PRAGMA database_list;');
+      return;
+    }
+
+    if (target.type !== 'object') return;
+    if (action === 'query-object') {
+      void handleSelectObject(target.object);
+    } else if (action === 'object-structure') {
+      void handleShowObjectStructure(target.object);
+    }
+  }, [contextMenu, executeSql, handleSelectObject, handleShowObjectStructure]);
 
   const handleExecuteSql = useCallback(() => {
     if (!sql.trim()) return;
@@ -788,6 +877,29 @@ function RemoteSqlite({ connectionId, initialFilePath, systemType }: RemoteSqlit
     };
   }, [api, connectionId]);
 
+  useEffect(() => {
+    if (!contextMenu) return undefined;
+
+    const close = () => setContextMenu(null);
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') close();
+    };
+
+    window.addEventListener('click', close);
+    window.addEventListener('contextmenu', close);
+    window.addEventListener('resize', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('contextmenu', close);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [contextMenu]);
+
   const sudoPromptPortal = sudoPrompt ? createPortal(
     <div className="notepad-modal-overlay" role="presentation" onClick={() => resolveSudoPrompt(null)}>
       <form
@@ -902,7 +1014,7 @@ function RemoteSqlite({ connectionId, initialFilePath, systemType }: RemoteSqlit
     <>
       <div className="sqlite-layout">
         <aside className="sqlite-sidebar">
-          <div className="sqlite-sidebar-header">
+          <div className="sqlite-sidebar-header" onContextMenu={openDatabaseContextMenu}>
             <div>
               <strong>{tCurrent('auto.remoteSqlite.dzec2g')}</strong>
               <span>{objects.length} {tCurrent('auto.remoteSqlite.13jip7b')}</span>
@@ -934,6 +1046,7 @@ function RemoteSqlite({ connectionId, initialFilePath, systemType }: RemoteSqlit
                     type="button"
                     className={`sqlite-tree-object-btn ${selectedObject?.type === object.type && selectedObject.name === object.name ? 'selected' : ''}`}
                     onClick={() => void handleSelectObject(object)}
+                    onContextMenu={(event) => openObjectContextMenu(event, object)}
                     title={object.tableName && object.tableName !== object.name ? `${object.name} · ${object.tableName}` : object.name}
                   >
                     <span className={`sqlite-tree-mark type-${object.type}`}>{getObjectTypeMark(object.type)}</span>
@@ -1212,6 +1325,35 @@ function RemoteSqlite({ connectionId, initialFilePath, systemType }: RemoteSqlit
               </button>
             </div>
           </div>
+        </div>,
+        document.body,
+      ) : null}
+
+      {contextMenu ? createPortal(
+        <div
+          className="mysql-context-menu"
+          style={{
+            left: Math.min(contextMenu.x, window.innerWidth - 220),
+            top: Math.min(contextMenu.y, window.innerHeight - 140),
+          }}
+          role="menu"
+          onClick={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <div className="mysql-context-menu-title">
+            <strong>{contextMenu.target.type === 'database' ? getFileName(contextMenu.target.filePath) : contextMenu.target.object.name}</strong>
+            <span>{contextMenu.target.type === 'database' ? '数据库' : getObjectTypeLabel(contextMenu.target.object.type)}</span>
+          </div>
+          {contextMenu.target.type === 'database' ? (
+            <button type="button" role="menuitem" onClick={() => handleContextMenuAction('database-info')}>查看数据库信息</button>
+          ) : (
+            <>
+              {(contextMenu.target.object.type === 'table' || contextMenu.target.object.type === 'view') ? (
+                <button type="button" role="menuitem" onClick={() => handleContextMenuAction('query-object')}>查询数据</button>
+              ) : null}
+              <button type="button" role="menuitem" onClick={() => handleContextMenuAction('object-structure')}>查看表结构</button>
+            </>
+          )}
         </div>,
         document.body,
       ) : null}

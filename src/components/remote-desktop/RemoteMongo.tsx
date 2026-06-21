@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import DismissibleAlert from './DismissibleAlert';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
@@ -16,6 +17,16 @@ type MongoStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 interface SelectedMongoCollection {
   database: string;
   collection: string;
+}
+
+type MongoContextMenuTarget =
+  | { type: 'database'; database: ShellDeskMongoDatabase }
+  | { type: 'collection'; database: string; collection: ShellDeskMongoCollection };
+
+interface MongoContextMenuState {
+  x: number;
+  y: number;
+  target: MongoContextMenuTarget;
 }
 
 const defaultLimit = 100;
@@ -101,6 +112,7 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
   const [loadingObjects, setLoadingObjects] = useState(false);
   const [queryRunning, setQueryRunning] = useState(false);
   const [lastQueryAt, setLastQueryAt] = useState('');
+  const [contextMenu, setContextMenu] = useState<MongoContextMenuState | null>(null);
 
   const isConnected = status === 'connected';
   const documents = queryResult?.documents ?? [];
@@ -257,6 +269,7 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
     setSelectedCollection(null);
     setQueryResult(null);
     setIndexes([]);
+    setContextMenu(null);
     setNotice(tCurrent('auto.remoteMongo.1axmc5g'));
   };
 
@@ -279,7 +292,7 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
     }
   };
 
-  const selectCollection = async (database: string, collection: string) => {
+  const selectCollection = useCallback(async (database: string, collection: string) => {
     setSelectedCollection({ database, collection });
     setSelectedDocumentIndex(0);
     setQueryResult(null);
@@ -295,14 +308,16 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
       setIndexes([]);
       setError(getErrorMessage(error));
     }
-  };
+  }, [api, connectionId, mongoId]);
 
-  const runQuery = async () => {
-    if (!api || !mongoId || !selectedCollection) {
+  const runCollectionQuery = useCallback(async (target?: SelectedMongoCollection) => {
+    const nextCollection = target ?? selectedCollection;
+    if (!api || !mongoId || !nextCollection) {
       setError(tCurrent('auto.remoteMongo.1muzwis'));
       return;
     }
 
+    setSelectedCollection(nextCollection);
     setQueryRunning(true);
     setError('');
     setNotice('');
@@ -310,8 +325,8 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
 
     try {
       const result = await api.mongoQuery(connectionId, mongoId, {
-        database: selectedCollection.database,
-        collection: selectedCollection.collection,
+        database: nextCollection.database,
+        collection: nextCollection.collection,
         filter,
         projection,
         sort,
@@ -327,7 +342,137 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
     } finally {
       setQueryRunning(false);
     }
-  };
+  }, [api, connectionId, filter, limit, mongoId, projection, selectedCollection, sort]);
+
+  const handleQueryCollection = useCallback(async (database: string, collection: string) => {
+    await selectCollection(database, collection);
+    await runCollectionQuery({ database, collection });
+  }, [runCollectionQuery, selectCollection]);
+
+  const runQuery = useCallback(async () => {
+    await runCollectionQuery();
+  }, [runCollectionQuery]);
+
+  const openDatabaseContextMenu = useCallback((event: React.MouseEvent, database: ShellDeskMongoDatabase) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      target: { type: 'database', database },
+    });
+  }, []);
+
+  const openCollectionContextMenu = useCallback((event: React.MouseEvent, database: string, collection: ShellDeskMongoCollection) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedCollection({ database, collection: collection.name });
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      target: { type: 'collection', database, collection },
+    });
+  }, []);
+
+  const showDatabaseInfo = useCallback(async (database: ShellDeskMongoDatabase) => {
+    if (!mongoId) return;
+
+    setSelectedCollection(null);
+    setSelectedDocumentIndex(0);
+    setIndexes([]);
+    setError('');
+    setNotice('');
+
+    try {
+      const collections = collectionsByDatabase[database.name] ?? await loadCollections(mongoId, database.name);
+      setQueryResult({
+        documents: [{
+          name: database.name,
+          sizeOnDisk: database.sizeOnDisk,
+          size: formatBytes(database.sizeOnDisk),
+          empty: database.empty,
+          collections: collections.length,
+        }],
+        count: 1,
+        limit: 1,
+      });
+      setLastQueryAt(new Date().toLocaleTimeString(getShellDeskLocale()));
+      setNotice(`数据库信息已加载：${database.name}`);
+    } catch (error) {
+      setError(getErrorMessage(error));
+    }
+  }, [collectionsByDatabase, loadCollections, mongoId]);
+
+  const showCollectionStructure = useCallback(async (database: string, collection: ShellDeskMongoCollection) => {
+    if (!api || !mongoId) return;
+
+    setSelectedCollection({ database, collection: collection.name });
+    setSelectedDocumentIndex(0);
+    setError('');
+    setNotice('');
+
+    try {
+      const nextIndexes = await api.mongoIndexes(connectionId, mongoId, database, collection.name);
+      setIndexes(nextIndexes);
+      setQueryResult({
+        documents: nextIndexes.map((index) => ({
+          name: index.name,
+          key: index.key,
+          unique: Boolean(index.unique),
+          sparse: Boolean(index.sparse),
+          expireAfterSeconds: index.expireAfterSeconds ?? null,
+        })),
+        count: nextIndexes.length,
+        limit: nextIndexes.length,
+      });
+      setLastQueryAt(new Date().toLocaleTimeString(getShellDeskLocale()));
+      setNotice(`集合结构已加载：${database}.${collection.name}`);
+    } catch (error) {
+      setIndexes([]);
+      setError(getErrorMessage(error));
+    }
+  }, [api, connectionId, mongoId]);
+
+  const handleContextMenuAction = useCallback((action: 'database-info' | 'query-collection' | 'collection-structure') => {
+    const target = contextMenu?.target;
+    setContextMenu(null);
+    if (!target) return;
+
+    if (action === 'database-info' && target.type === 'database') {
+      void showDatabaseInfo(target.database);
+      return;
+    }
+
+    if (target.type !== 'collection') return;
+    if (action === 'query-collection') {
+      void handleQueryCollection(target.database, target.collection.name);
+    } else if (action === 'collection-structure') {
+      void showCollectionStructure(target.database, target.collection);
+    }
+  }, [contextMenu, handleQueryCollection, showCollectionStructure, showDatabaseInfo]);
+
+  useEffect(() => {
+    if (!contextMenu) return undefined;
+
+    const close = () => setContextMenu(null);
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') close();
+    };
+
+    window.addEventListener('click', close);
+    window.addEventListener('contextmenu', close);
+    window.addEventListener('resize', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('contextmenu', close);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [contextMenu]);
 
   const formatDraft = (field: 'filter' | 'projection' | 'sort') => {
     try {
@@ -442,7 +587,12 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
 
             return (
               <div key={database.name} className="mongo-database-group">
-                <button type="button" className="mongo-database-btn" onClick={() => toggleDatabase(database.name)}>
+                <button
+                  type="button"
+                  className="mongo-database-btn"
+                  onClick={() => toggleDatabase(database.name)}
+                  onContextMenu={(event) => openDatabaseContextMenu(event, database)}
+                >
                   <span>{expanded ? '▾' : '▸'}</span>
                   <strong>{database.name}</strong>
                   <em>{formatBytes(database.sizeOnDisk)}</em>
@@ -457,7 +607,8 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
                           key={`${database.name}.${collection.name}`}
                           type="button"
                           className={selected ? 'active' : ''}
-                          onClick={() => selectCollection(database.name, collection.name)}
+                          onClick={() => void handleQueryCollection(database.name, collection.name)}
+                          onContextMenu={(event) => openCollectionContextMenu(event, database.name, collection)}
                         >
                           <strong>{collection.name}</strong>
                           <span>{collection.type}</span>
@@ -573,6 +724,32 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
           {!indexes.length ? <div className="mongo-empty-state compact">{tCurrent('auto.remoteMongo.1mioadg')}</div> : null}
         </div>
       </aside>
+      {contextMenu ? createPortal(
+        <div
+          className="mysql-context-menu"
+          style={{
+            left: Math.min(contextMenu.x, window.innerWidth - 220),
+            top: Math.min(contextMenu.y, window.innerHeight - 140),
+          }}
+          role="menu"
+          onClick={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <div className="mysql-context-menu-title">
+            <strong>{contextMenu.target.type === 'database' ? contextMenu.target.database.name : contextMenu.target.collection.name}</strong>
+            <span>{contextMenu.target.type === 'database' ? '数据库' : contextMenu.target.database}</span>
+          </div>
+          {contextMenu.target.type === 'database' ? (
+            <button type="button" role="menuitem" onClick={() => handleContextMenuAction('database-info')}>查看数据库信息</button>
+          ) : (
+            <>
+              <button type="button" role="menuitem" onClick={() => handleContextMenuAction('query-collection')}>查询数据</button>
+              <button type="button" role="menuitem" onClick={() => handleContextMenuAction('collection-structure')}>查看表结构</button>
+            </>
+          )}
+        </div>,
+        document.body,
+      ) : null}
     </section>
   );
 }

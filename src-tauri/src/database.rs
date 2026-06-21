@@ -46,7 +46,9 @@ pub(crate) async fn mysql_connect(
         match crate::database_tunnel::mysql_connect(state, window, args.clone()).await {
             Ok(result) => return Ok(result),
             Err(error) if should_fallback_to_database_cli(&config) => {
-                eprintln!("[database] MySQL SSH tunnel unavailable, falling back to CLI: {error}");
+                eprintln!(
+                    "[database] MySQL TCP tunnel unavailable, using SSH command fallback: {error}"
+                );
             }
             Err(error) => return Err(error),
         }
@@ -413,7 +415,10 @@ pub(crate) async fn postgres_schemas(state: &AppState, args: Vec<Value>) -> Resu
         state,
         &connection_id,
         &config,
-        "SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog', 'information_schema') ORDER BY schema_name;",
+        "SELECT nspname AS schema_name \
+         FROM pg_catalog.pg_namespace \
+         WHERE nspname <> 'information_schema' AND nspname NOT LIKE 'pg_%' \
+         ORDER BY nspname;",
     )
     .await?;
     let rows = parse_csv_objects(&output)?;
@@ -430,7 +435,20 @@ pub(crate) async fn postgres_tables(state: &AppState, args: Vec<Value>) -> Resul
     let (connection_id, config) = decode_active_db_session_args(state, "postgres", &args, 0, 1)?;
     let schema = string_arg(&args, 2)?;
     let sql = format!(
-        "SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_schema = {} ORDER BY table_name;",
+        "SELECT n.nspname AS table_schema, \
+                c.relname AS table_name, \
+                CASE c.relkind \
+                  WHEN 'r' THEN 'BASE TABLE' \
+                  WHEN 'p' THEN 'PARTITIONED TABLE' \
+                  WHEN 'v' THEN 'VIEW' \
+                  WHEN 'm' THEN 'MATERIALIZED VIEW' \
+                  WHEN 'f' THEN 'FOREIGN TABLE' \
+                  ELSE c.relkind::text \
+                END AS table_type \
+         FROM pg_catalog.pg_class c \
+         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+         WHERE n.nspname = {} AND c.relkind IN ('r', 'p', 'v', 'm', 'f') \
+         ORDER BY c.relname;",
         pg_literal(&schema)
     );
     let output = run_postgres_cli(state, &connection_id, &config, &sql).await?;

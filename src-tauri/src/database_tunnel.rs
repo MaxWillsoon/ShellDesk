@@ -1,11 +1,12 @@
 use crate::{
-    error_string, get_connection, now, random_id,
+    error_string, get_connection, now, pick_free_local_port, random_id,
     ssh_tunnel::{
         config_from_connection_with_window, create_tunnel, SshTunnel, SshTunnelConfig,
         SshTunnelError,
     },
-    string_arg, AppState, ConnectionKind,
+    start_ssh_local_forward, string_arg, wait_for_tcp, AppState, ConnectionKind,
 };
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, SecondsFormat, Utc};
 use fred::{
     prelude::{Client as RedisClient, ClientLike, Config as RedisConfig, Value as RedisValue},
     types::{ClusterHash, CustomCommand},
@@ -23,7 +24,7 @@ use sqlx::{
     postgres::{PgPoolOptions, PgRow},
     Column, Executor, MySql, MySqlPool, PgPool, Row, TypeInfo,
 };
-use std::{future::IntoFuture, time::Duration};
+use std::{future::IntoFuture, process::Child as StdChild, time::Duration};
 use thiserror::Error;
 
 const MAX_QUERY_ROWS: usize = 10_000;
@@ -104,28 +105,54 @@ impl DatabaseTunnelSession {
 }
 
 pub(crate) struct MysqlTunnelSession {
-    tunnel: Option<SshTunnel>,
+    tunnel: Option<DatabaseSshTunnel>,
     pool: MySqlPool,
 }
 
 pub(crate) struct PostgresTunnelSession {
-    tunnel: Option<SshTunnel>,
+    tunnel: Option<DatabaseSshTunnel>,
     pool: PgPool,
 }
 
 pub(crate) struct RedisTunnelSession {
-    tunnel: Option<SshTunnel>,
+    tunnel: Option<DatabaseSshTunnel>,
     client: RedisClient,
 }
 
 pub(crate) struct ClickHouseTunnelSession {
-    tunnel: Option<SshTunnel>,
+    tunnel: Option<DatabaseSshTunnel>,
     client: clickhouse::Client,
 }
 
 pub(crate) struct MongoTunnelSession {
-    tunnel: Option<SshTunnel>,
+    tunnel: Option<DatabaseSshTunnel>,
     client: MongoClient,
+}
+
+pub(crate) enum DatabaseSshTunnel {
+    Native(SshTunnel),
+    OpenSsh(StdChild),
+}
+
+struct DatabaseSshEndpoint {
+    host: String,
+    port: u16,
+    tunnel: DatabaseSshTunnel,
+    transport: &'static str,
+}
+
+impl DatabaseSshTunnel {
+    async fn shutdown(self) {
+        match self {
+            Self::Native(tunnel) => {
+                let _ = tunnel.shutdown().await;
+            }
+            Self::OpenSsh(mut child) => {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
 }
 
 impl MysqlTunnelSession {
@@ -423,16 +450,12 @@ pub(crate) async fn mysql_connect(
             "direct",
         )
     } else {
-        let tunnel_config =
-            tunnel_config_from_options(state, window, &connection_id, &tunnel_options).await?;
-        let tunnel = create_tunnel(tunnel_config)
-            .await
-            .map_err(|error| error.user_message())?;
-        let local_addr = tunnel.local_addr();
-        match connect_mysql_direct(&config, &local_addr.ip().to_string(), local_addr.port()).await {
-            Ok(pool) => (pool, Some(tunnel), "ssh-tunnel"),
+        let endpoint =
+            open_database_ssh_tunnel(state, window, &connection_id, &tunnel_options).await?;
+        match connect_mysql_direct(&config, &endpoint.host, endpoint.port).await {
+            Ok(pool) => (pool, Some(endpoint.tunnel), endpoint.transport),
             Err(error) => {
-                let _ = tunnel.shutdown().await;
+                endpoint.tunnel.shutdown().await;
                 return Err(error);
             }
         }
@@ -464,7 +487,7 @@ pub(crate) async fn mysql_databases(state: &AppState, args: Vec<Value>) -> Resul
     .await?;
     Ok(json!(rows
         .into_iter()
-        .filter_map(|row| row.try_get::<String, _>(0).ok())
+        .filter_map(|row| mysql_text_value(&row, 0))
         .collect::<Vec<_>>()))
 }
 
@@ -480,7 +503,7 @@ pub(crate) async fn mysql_tables(state: &AppState, args: Vec<Value>) -> Result<V
     .await?;
     Ok(json!(rows
         .into_iter()
-        .filter_map(|row| row.try_get::<String, _>(0).ok())
+        .filter_map(|row| mysql_text_value(&row, 0))
         .collect::<Vec<_>>()))
 }
 
@@ -503,13 +526,13 @@ pub(crate) async fn mysql_columns(state: &AppState, args: Vec<Value>) -> Result<
     Ok(json!(rows
         .into_iter()
         .map(|row| json!({
-            "name": row.try_get::<String, _>(0).unwrap_or_default(),
-            "type": row.try_get::<String, _>(1).unwrap_or_default(),
-            "nullable": row.try_get::<String, _>(2).is_ok_and(|value| value == "YES"),
-            "key": row.try_get::<String, _>(3).unwrap_or_default(),
-            "default": row.try_get::<Option<String>, _>(4).ok().flatten(),
-            "extra": row.try_get::<String, _>(5).unwrap_or_default(),
-            "comment": row.try_get::<String, _>(6).unwrap_or_default()
+            "name": mysql_text_value(&row, 0).unwrap_or_default(),
+            "type": mysql_text_value(&row, 1).unwrap_or_default(),
+            "nullable": mysql_text_value(&row, 2).is_some_and(|value| value == "YES"),
+            "key": mysql_text_value(&row, 3).unwrap_or_default(),
+            "default": mysql_text_value(&row, 4),
+            "extra": mysql_text_value(&row, 5).unwrap_or_default(),
+            "comment": mysql_text_value(&row, 6).unwrap_or_default()
         }))
         .collect::<Vec<_>>()))
 }
@@ -633,18 +656,12 @@ pub(crate) async fn postgres_connect(
             "direct",
         )
     } else {
-        let tunnel_config =
-            tunnel_config_from_options(state, window, &connection_id, &tunnel_options).await?;
-        let tunnel = create_tunnel(tunnel_config)
-            .await
-            .map_err(|error| error.user_message())?;
-        let local_addr = tunnel.local_addr();
-        match connect_postgres_direct(&config, &local_addr.ip().to_string(), local_addr.port())
-            .await
-        {
-            Ok(pool) => (pool, Some(tunnel), "ssh-tunnel"),
+        let endpoint =
+            open_database_ssh_tunnel(state, window, &connection_id, &tunnel_options).await?;
+        match connect_postgres_direct(&config, &endpoint.host, endpoint.port).await {
+            Ok(pool) => (pool, Some(endpoint.tunnel), endpoint.transport),
             Err(error) => {
-                let _ = tunnel.shutdown().await;
+                endpoint.tunnel.shutdown().await;
                 return Err(error);
             }
         }
@@ -689,8 +706,10 @@ pub(crate) async fn postgres_schemas(state: &AppState, args: Vec<Value>) -> Resu
     let rows = timeout_result(
         METADATA_TIMEOUT,
         sqlx::query(
-            "SELECT schema_name FROM information_schema.schemata \
-             WHERE schema_name NOT IN ('pg_catalog', 'information_schema') ORDER BY schema_name",
+            "SELECT nspname AS schema_name \
+             FROM pg_catalog.pg_namespace \
+             WHERE nspname <> 'information_schema' AND nspname NOT LIKE 'pg_%' \
+             ORDER BY nspname",
         )
         .fetch_all(&pool),
         |error| DbTunnelError::PostgresQuery(error).user_message(),
@@ -708,8 +727,20 @@ pub(crate) async fn postgres_tables(state: &AppState, args: Vec<Value>) -> Resul
     let rows = timeout_result(
         METADATA_TIMEOUT,
         sqlx::query(
-            "SELECT table_schema, table_name, table_type FROM information_schema.tables \
-             WHERE table_schema = $1 ORDER BY table_name",
+            "SELECT n.nspname AS table_schema, \
+                    c.relname AS table_name, \
+                    CASE c.relkind \
+                      WHEN 'r' THEN 'BASE TABLE' \
+                      WHEN 'p' THEN 'PARTITIONED TABLE' \
+                      WHEN 'v' THEN 'VIEW' \
+                      WHEN 'm' THEN 'MATERIALIZED VIEW' \
+                      WHEN 'f' THEN 'FOREIGN TABLE' \
+                      ELSE c.relkind::text \
+                    END AS table_type \
+             FROM pg_catalog.pg_class c \
+             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'v', 'm', 'f') \
+             ORDER BY c.relname",
         )
         .bind(schema)
         .fetch_all(&pool),
@@ -824,16 +855,12 @@ pub(crate) async fn redis_connect(
             "direct",
         )
     } else {
-        let tunnel_config =
-            tunnel_config_from_options(state, window, &connection_id, &tunnel_options).await?;
-        let tunnel = create_tunnel(tunnel_config)
-            .await
-            .map_err(|error| error.user_message())?;
-        let local_addr = tunnel.local_addr();
-        match connect_redis_direct(&config, &local_addr.ip().to_string(), local_addr.port()).await {
-            Ok(client) => (client, Some(tunnel), "ssh-tunnel"),
+        let endpoint =
+            open_database_ssh_tunnel(state, window, &connection_id, &tunnel_options).await?;
+        match connect_redis_direct(&config, &endpoint.host, endpoint.port).await {
+            Ok(client) => (client, Some(endpoint.tunnel), endpoint.transport),
             Err(error) => {
-                let _ = tunnel.shutdown().await;
+                endpoint.tunnel.shutdown().await;
                 return Err(error);
             }
         }
@@ -887,18 +914,12 @@ pub(crate) async fn clickhouse_connect(
             "direct",
         )
     } else {
-        let tunnel_config =
-            tunnel_config_from_options(state, window, &connection_id, &tunnel_options).await?;
-        let tunnel = create_tunnel(tunnel_config)
-            .await
-            .map_err(|error| error.user_message())?;
-        let local_addr = tunnel.local_addr();
-        match connect_clickhouse_direct(&config, &local_addr.ip().to_string(), local_addr.port())
-            .await
-        {
-            Ok(client) => (client, Some(tunnel), "ssh-tunnel"),
+        let endpoint =
+            open_database_ssh_tunnel(state, window, &connection_id, &tunnel_options).await?;
+        match connect_clickhouse_direct(&config, &endpoint.host, endpoint.port).await {
+            Ok(client) => (client, Some(endpoint.tunnel), endpoint.transport),
             Err(error) => {
-                let _ = tunnel.shutdown().await;
+                endpoint.tunnel.shutdown().await;
                 return Err(error);
             }
         }
@@ -1004,16 +1025,12 @@ pub(crate) async fn mongo_connect(
             "direct",
         )
     } else {
-        let tunnel_config =
-            tunnel_config_from_options(state, window, &connection_id, &tunnel_options).await?;
-        let tunnel = create_tunnel(tunnel_config)
-            .await
-            .map_err(|error| error.user_message())?;
-        let local_addr = tunnel.local_addr();
-        match connect_mongo_direct(&config, &local_addr.ip().to_string(), local_addr.port()).await {
-            Ok(client) => (client, Some(tunnel), "ssh-tunnel"),
+        let endpoint =
+            open_database_ssh_tunnel(state, window, &connection_id, &tunnel_options).await?;
+        match connect_mongo_direct(&config, &endpoint.host, endpoint.port).await {
+            Ok(client) => (client, Some(endpoint.tunnel), endpoint.transport),
             Err(error) => {
-                let _ = tunnel.shutdown().await;
+                endpoint.tunnel.shutdown().await;
                 return Err(error);
             }
         }
@@ -1846,7 +1863,45 @@ fn mysql_value_to_json(row: &MySqlRow, index: usize, type_name: &str) -> Value {
     if let Ok(value) = row.try_get::<String, _>(index) {
         return json!(value);
     }
+    if let Ok(value) = row.try_get::<Option<Vec<u8>>, _>(index) {
+        return value.map_or(Value::Null, mysql_bytes_to_json);
+    }
+    if let Ok(value) = row.try_get::<Vec<u8>, _>(index) {
+        return mysql_bytes_to_json(value);
+    }
     json!(format!("<unsupported:{type_name}>"))
+}
+
+fn mysql_text_value(row: &MySqlRow, index: usize) -> Option<String> {
+    if let Ok(value) = row.try_get::<Option<String>, _>(index) {
+        return value;
+    }
+    if let Ok(value) = row.try_get::<String, _>(index) {
+        return Some(value);
+    }
+    if let Ok(value) = row.try_get::<Option<Vec<u8>>, _>(index) {
+        return value.map(mysql_bytes_to_display_string);
+    }
+    if let Ok(value) = row.try_get::<Vec<u8>, _>(index) {
+        return Some(mysql_bytes_to_display_string(value));
+    }
+    None
+}
+
+fn mysql_bytes_to_json(bytes: Vec<u8>) -> Value {
+    json!(mysql_bytes_to_display_string(bytes))
+}
+
+fn mysql_bytes_to_display_string(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes).unwrap_or_else(|error| {
+        let bytes = error.into_bytes();
+        let mut output = String::with_capacity(2 + bytes.len() * 2);
+        output.push_str("0x");
+        for byte in bytes {
+            output.push_str(&format!("{byte:02X}"));
+        }
+        output
+    })
 }
 
 fn pg_value_to_json(row: &PgRow, index: usize, type_name: &str) -> Value {
@@ -1865,7 +1920,102 @@ fn pg_value_to_json(row: &PgRow, index: usize, type_name: &str) -> Value {
     if let Ok(value) = row.try_get::<String, _>(index) {
         return json!(value);
     }
+    if let Ok(value) = row.try_get::<Option<DateTime<Utc>>, _>(index) {
+        return value.map_or(Value::Null, |value| {
+            json!(value.to_rfc3339_opts(SecondsFormat::Millis, true))
+        });
+    }
+    if let Ok(value) = row.try_get::<DateTime<Utc>, _>(index) {
+        return json!(value.to_rfc3339_opts(SecondsFormat::Millis, true));
+    }
+    if let Ok(value) = row.try_get::<Option<NaiveDateTime>, _>(index) {
+        return value.map_or(Value::Null, |value| {
+            json!(value.format("%Y-%m-%d %H:%M:%S%.f").to_string())
+        });
+    }
+    if let Ok(value) = row.try_get::<NaiveDateTime, _>(index) {
+        return json!(value.format("%Y-%m-%d %H:%M:%S%.f").to_string());
+    }
+    if let Ok(value) = row.try_get::<Option<NaiveDate>, _>(index) {
+        return value.map_or(Value::Null, |value| json!(value.to_string()));
+    }
+    if let Ok(value) = row.try_get::<NaiveDate, _>(index) {
+        return json!(value.to_string());
+    }
+    if let Ok(value) = row.try_get::<Option<NaiveTime>, _>(index) {
+        return value.map_or(Value::Null, |value| json!(value.to_string()));
+    }
+    if let Ok(value) = row.try_get::<NaiveTime, _>(index) {
+        return json!(value.to_string());
+    }
     json!(format!("<unsupported:{type_name}>"))
+}
+
+async fn open_database_ssh_tunnel(
+    state: &AppState,
+    window: &tauri::Window,
+    connection_id: &str,
+    options: &TunnelOptions,
+) -> Result<DatabaseSshEndpoint, String> {
+    let tunnel_config = tunnel_config_from_options(state, window, connection_id, options).await?;
+    match create_tunnel(tunnel_config).await {
+        Ok(tunnel) => {
+            let local_addr = tunnel.local_addr();
+            Ok(DatabaseSshEndpoint {
+                host: local_addr.ip().to_string(),
+                port: local_addr.port(),
+                tunnel: DatabaseSshTunnel::Native(tunnel),
+                transport: "ssh-tunnel",
+            })
+        }
+        Err(native_error) => {
+            eprintln!(
+                "[database] Native SSH tunnel unavailable, trying OpenSSH local forward: {}",
+                native_error.user_message()
+            );
+            open_database_openssh_forward(state, connection_id, options, native_error).await
+        }
+    }
+}
+
+async fn open_database_openssh_forward(
+    state: &AppState,
+    connection_id: &str,
+    options: &TunnelOptions,
+    native_error: SshTunnelError,
+) -> Result<DatabaseSshEndpoint, String> {
+    let profile = get_connection(state, connection_id)?
+        .ssh
+        .ok_or_else(|| "当前连接缺少 SSH 配置。".to_string())?;
+    let local_port = pick_free_local_port()?;
+    let mut child = start_ssh_local_forward(
+        &profile,
+        local_port,
+        &options.remote_host,
+        options.remote_port,
+    )
+    .map_err(|error| {
+        format!(
+            "{}；OpenSSH 本地转发启动失败：{}",
+            native_error.user_message(),
+            error
+        )
+    })?;
+    if let Err(error) = wait_for_tcp("127.0.0.1", local_port, Duration::from_secs(8)).await {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!(
+            "{}；OpenSSH 本地转发不可用：{}",
+            native_error.user_message(),
+            error
+        ));
+    }
+    Ok(DatabaseSshEndpoint {
+        host: "127.0.0.1".to_string(),
+        port: local_port,
+        tunnel: DatabaseSshTunnel::OpenSsh(child),
+        transport: "ssh-forward",
+    })
 }
 
 async fn tunnel_config_from_options(
@@ -2371,6 +2521,23 @@ mod tests {
         assert_eq!(
             session_key("mysql", "conn-1", "mysql-1"),
             "mysql:conn-1:mysql-1"
+        );
+    }
+
+    #[test]
+    fn mysql_bytes_decode_utf8_text_values() {
+        assert_eq!(
+            mysql_bytes_to_display_string(b"information_schema".to_vec()),
+            "information_schema"
+        );
+        assert_eq!(mysql_bytes_to_json(b"mysql".to_vec()), json!("mysql"));
+    }
+
+    #[test]
+    fn mysql_bytes_fall_back_to_hex_for_binary_values() {
+        assert_eq!(
+            mysql_bytes_to_display_string(vec![0xff, 0x00, 0x41]),
+            "0xFF0041"
         );
     }
 
