@@ -1,4 +1,5 @@
 use crate::proxy::SshProxyConfig;
+use crate::ssh_tunnel::spawn_tunnel_shutdown;
 use crate::vault::{read_store, write_store};
 use crate::{
     command_exists, error_string, https_url_origin, now, prevent_process_window,
@@ -1166,8 +1167,8 @@ pub(crate) fn close_connection_by_id(state: &AppState, connection_id: &str) -> R
             if let Some(shutdown) = proxy.shutdown.take() {
                 let _ = shutdown.send(());
             }
-            if let Some(mut child) = proxy.ssh_forward.take() {
-                let _ = child.kill();
+            if let Some(tunnel) = proxy.ssh_tunnel.take() {
+                spawn_tunnel_shutdown("vnc", tunnel);
             }
         }
     }
@@ -1188,8 +1189,8 @@ pub(crate) fn close_connection_by_id(state: &AppState, connection_id: &str) -> R
             if let Some(shutdown) = proxy.shutdown.take() {
                 let _ = shutdown.send(());
             }
-            if let Some(mut child) = proxy.ssh_forward.take() {
-                let _ = child.kill();
+            if let Some(tunnel) = proxy.ssh_tunnel.take() {
+                spawn_tunnel_shutdown("browser", tunnel);
             }
         }
     }
@@ -1230,6 +1231,31 @@ pub(crate) fn close_connection_by_id(state: &AppState, connection_id: &str) -> R
                 tokio::time::timeout(std::time::Duration::from_secs(5), session.shutdown()).await
             {
                 eprintln!("[database-tunnel] session shutdown timed out: {error}");
+            }
+        });
+    }
+    let http_tunnel_sessions = {
+        let mut sessions = state.http_tunnel_sessions.lock().map_err(error_string)?;
+        let keys = sessions
+            .iter()
+            .filter_map(|(key, session)| {
+                if session.connection_id == connection_id {
+                    Some(key.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        keys.into_iter()
+            .filter_map(|key| sessions.remove(&key))
+            .collect::<Vec<_>>()
+    };
+    for session in http_tunnel_sessions {
+        tokio::spawn(async move {
+            if let Err(error) =
+                tokio::time::timeout(std::time::Duration::from_secs(5), session.shutdown()).await
+            {
+                eprintln!("[http-tunnel] session shutdown timed out: {error}");
             }
         });
     }

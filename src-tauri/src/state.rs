@@ -1,13 +1,12 @@
 use crate::{
-    browser_proxy, database_tunnel::DatabaseTunnelSession, proxy::SshProxyConfig, terminal,
-    updater::update_status, zmodem,
+    browser_proxy, database_tunnel::DatabaseTunnelSession, http_tunnel::HttpTunnelSession,
+    proxy::SshProxyConfig, ssh_tunnel::SshTunnelHandle, terminal, updater::update_status, zmodem,
 };
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
     fmt,
     path::PathBuf,
-    process::Child as StdChild,
     sync::{Arc, Mutex},
 };
 use tokio::sync::oneshot;
@@ -24,6 +23,7 @@ pub(crate) struct AppState {
     pub(crate) zmodem_upload_selections: Arc<Mutex<HashMap<String, zmodem::ZmodemUploadSelection>>>,
     pub(crate) database_sessions: Arc<Mutex<HashMap<String, Value>>>,
     pub(crate) database_tunnel_sessions: Arc<Mutex<HashMap<String, DatabaseTunnelSession>>>,
+    pub(crate) http_tunnel_sessions: Arc<Mutex<HashMap<String, HttpTunnelSession>>>,
     pub(crate) update_state: Arc<Mutex<Value>>,
     pub(crate) pending_tauri_update: Arc<Mutex<Option<tauri_plugin_updater::Update>>>,
     pub(crate) sync_schedule_generation: Arc<Mutex<u64>>,
@@ -47,6 +47,7 @@ impl AppState {
             zmodem_upload_selections: Arc::new(Mutex::new(HashMap::new())),
             database_sessions: Arc::new(Mutex::new(HashMap::new())),
             database_tunnel_sessions: Arc::new(Mutex::new(HashMap::new())),
+            http_tunnel_sessions: Arc::new(Mutex::new(HashMap::new())),
             sync_schedule_generation: Arc::new(Mutex::new(0)),
             ui_window: Arc::new(Mutex::new(None)),
             host_key_responses: Arc::new(Mutex::new(HashMap::new())),
@@ -115,7 +116,7 @@ pub(crate) enum ConnectionKind {
 pub(crate) struct VncProxySession {
     pub(crate) connection_id: String,
     pub(crate) shutdown: Option<oneshot::Sender<()>>,
-    pub(crate) ssh_forward: Option<StdChild>,
+    pub(crate) ssh_tunnel: Option<SshTunnelHandle>,
 }
 
 #[derive(Clone)]

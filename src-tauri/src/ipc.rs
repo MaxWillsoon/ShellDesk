@@ -31,7 +31,6 @@ pub(crate) async fn dispatch(
     {
         return Ok(value);
     }
-
     match channel.as_str() {
         channel if channel.starts_with("connection:") => {
             connection_channels::dispatch(&state, window, channel, args)

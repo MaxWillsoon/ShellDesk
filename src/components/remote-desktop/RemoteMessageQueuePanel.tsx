@@ -9,7 +9,7 @@ import {
   createKafkaOffsetsCommand,
   createKafkaTopicsCommand,
   createRabbitCtlCommand,
-  createRabbitManagementCommand,
+  createRabbitManagementTunnelRequest,
   DEFAULT_KAFKA_CONSOLE_CONSUMER_PATH,
   DEFAULT_KAFKA_CONSUMER_GROUPS_PATH,
   DEFAULT_KAFKA_GET_OFFSETS_PATH,
@@ -191,22 +191,36 @@ function RemoteMessageQueuePanel({ connectionId, hostId, systemType }: RemoteMes
   }, [hostId]);
 
   const refreshRabbit = async () => {
-    const command = rabbitMode === 'rabbitmqctl'
-      ? createRabbitCtlCommand(rabbitCtlPath, isWindowsHost)
-      : createRabbitManagementCommand({ url: rabbitApiUrl, username: rabbitUser, password: rabbitPassword }, isWindowsHost);
-    const result = await runCmd(connectionId, command);
+    let rawResult = '';
+    let nextQueues: RabbitQueueSummary[];
 
-    if (result.code !== 0) {
-      throw new Error(formatRabbitCommandError(result.stdout, result.stderr, result.code));
+    if (rabbitMode === 'rabbitmqctl') {
+      const command = createRabbitCtlCommand(rabbitCtlPath, isWindowsHost);
+      const result = await runCmd(connectionId, command);
+
+      if (result.code !== 0) {
+        throw new Error(formatRabbitCommandError(result.stdout, result.stderr, result.code));
+      }
+
+      rawResult = result.stdout || result.stderr;
+      nextQueues = parseRabbitCtlQueues(result.stdout);
+    } else {
+      const api = window.guiSSH?.connections;
+      if (!api) {
+        throw new Error(tCurrent('auto.remoteMessageQueuePanel.g77vf3'));
+      }
+      const response = await api.httpTunnelGet({
+        ...createRabbitManagementTunnelRequest({ url: rabbitApiUrl, username: rabbitUser, password: rabbitPassword }),
+        connectionId,
+      });
+
+      rawResult = JSON.stringify(response, null, 2) ?? '';
+      nextQueues = parseRabbitManagementQueues(rawResult);
     }
-
-    const nextQueues = rabbitMode === 'rabbitmqctl'
-      ? parseRabbitCtlQueues(result.stdout)
-      : parseRabbitManagementQueues(result.stdout);
 
     setQueues(nextQueues);
     setSelectedQueueName((current) => current && nextQueues.some((queue) => queue.name === current) ? current : nextQueues[0]?.name ?? '');
-    setRawOutput(result.stdout || result.stderr);
+    setRawOutput(rawResult);
     setActiveTab('queues');
     setNotice(tCurrent('auto.remoteMessageQueuePanel.xewr3n', { value0: nextQueues.length, value1: nextQueues.reduce((sum, queue) => sum + queue.messages, 0).toLocaleString(getShellDeskLocale()) }));
   };

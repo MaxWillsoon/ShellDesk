@@ -2,10 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import DismissibleAlert from './DismissibleAlert';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
-import { isWindowsSystem } from './remoteSystem';
 import { loadRemoteConnectionProfile, readProfileBoolean, readProfileString, saveRemoteConnectionProfile } from './remoteConnectionProfiles';
 import {
-  createSearchClusterCommand,
+  createSearchClusterTunnelRequest,
   normalizeIndices,
   normalizeShards,
   parseJsonResponse,
@@ -36,18 +35,17 @@ function getHealthTone(status?: string) {
   return 'unknown';
 }
 
-function runCmd(connectionId: string, command: string, stdin?: string) {
+function getHttpTunnelApi() {
   const api = window.guiSSH?.connections;
 
   if (!api) {
     throw new Error(tCurrent('auto.remoteSearchCluster.g77vf3'));
   }
 
-  return api.runCommand(connectionId, command, stdin);
+  return api;
 }
 
-function RemoteSearchCluster({ connectionId, hostId, systemType }: RemoteSearchClusterProps) {
-  const isWindowsHost = isWindowsSystem(systemType);
+function RemoteSearchCluster({ connectionId, hostId }: RemoteSearchClusterProps) {
   const [url, setUrl] = useState('http://127.0.0.1:9200');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -110,11 +108,10 @@ function RemoteSearchCluster({ connectionId, hostId, systemType }: RemoteSearchC
   }, [selectedIndex, shards]);
 
   const executeJsonRequest = useCallback(async <T,>(path: string, label: string): Promise<T> => {
-    const request = createSearchClusterCommand(config, path, { isWindowsHost });
-    const result = await runCmd(connectionId, request.command, request.stdin);
-    setRawResponse(result.stdout || result.stderr);
-    return parseJsonResponse<T>(result.stdout, result.stderr, result.code, label);
-  }, [config, connectionId, isWindowsHost]);
+    const response = await getHttpTunnelApi().httpTunnelGet({ ...createSearchClusterTunnelRequest(config, path), connectionId });
+    setRawResponse(stringifyJson(response));
+    return parseJsonResponse<T>(response, label);
+  }, [config, connectionId]);
 
   const refreshCluster = useCallback(async () => {
     setLoading(true);
@@ -171,18 +168,18 @@ function RemoteSearchCluster({ connectionId, hostId, systemType }: RemoteSearchC
     setNotice('');
 
     try {
-      const request = createSearchClusterCommand(config, `/${encodeURIComponent(indexName)}/_search`, {
-        body: queryBody,
-        isWindowsHost,
-        method: 'POST',
-      });
       const startedAt = performance.now();
-      const result = await runCmd(connectionId, request.command, request.stdin);
-      const response = parseJsonResponse<unknown>(result.stdout, result.stderr, result.code, '_search');
+      const response = parseJsonResponse<unknown>(
+        await getHttpTunnelApi().httpTunnelPost({
+          ...createSearchClusterTunnelRequest(config, `/${encodeURIComponent(indexName)}/_search`, JSON.parse(queryBody)),
+          connectionId,
+        }),
+        '_search',
+      );
       const durationMs = Math.round(performance.now() - startedAt);
 
       setQueryResponse(stringifyJson(response));
-      setRawResponse(result.stdout || result.stderr);
+      setRawResponse(stringifyJson(response));
       setActiveTab('query');
       setNotice(tCurrent('auto.remoteSearchCluster.16hu75t', { value0: durationMs }));
     } catch (error) {

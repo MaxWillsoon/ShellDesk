@@ -2,7 +2,7 @@
 mod database_channels;
 
 use crate::{
-    browser_proxy, connection, connection_monitor, remote_fs, run_connection_command,
+    browser_proxy, connection, connection_monitor, http_tunnel, remote_fs, run_connection_command,
     run_connection_command_stream, terminal, vnc, zmodem, AppState,
 };
 use serde_json::{json, Value};
@@ -47,6 +47,10 @@ pub(crate) async fn dispatch(
         "connection:close-terminal" => terminal::close_terminal(state, args),
         "connection:run-command" => run_connection_command(state, args).await,
         "connection:run-command-stream" => run_connection_command_stream(state, window, args).await,
+        "connection:http-tunnel-get" => http_tunnel::get(state, &window, args).await,
+        "connection:http-tunnel-post" => http_tunnel::post(state, &window, args).await,
+        "connection:http-tunnel-put" => http_tunnel::put(state, &window, args).await,
+        "connection:http-tunnel-delete" => http_tunnel::delete(state, &window, args).await,
         "connection:list-directory" => remote_fs::list_connection_directory(state, args).await,
         "connection:stat-path" => remote_fs::stat_connection_path(state, args).await,
         "connection:read-file" => remote_fs::read_connection_file(state, args).await,

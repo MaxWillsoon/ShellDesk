@@ -1,12 +1,13 @@
 use crate::{
-    error_string, get_connection, https_url_origin, pick_free_local_port, start_ssh_local_forward,
-    string_arg, wait_for_tcp, AppState, ConnectionKind, SshProfile,
+    error_string, get_connection, https_url_origin,
+    ssh_tunnel::{create_tunnel_with_fallback, spawn_tunnel_shutdown, SshTunnelHandle},
+    string_arg, AppState, ConnectionKind, SshProfile,
 };
 use crate::{run_ssh_command_for_profile_with_window, shell_quote};
 use base64::Engine;
 use reqwest::header::HOST;
 use serde_json::{json, Value};
-use std::{net::SocketAddr, process::Child as StdChild, time::Duration};
+use std::{net::SocketAddr, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -18,7 +19,7 @@ pub(crate) struct BrowserProxySession {
     pub(crate) connection_id: String,
     pub(crate) local_port: u16,
     pub(crate) shutdown: Option<oneshot::Sender<()>>,
-    pub(crate) ssh_forward: Option<StdChild>,
+    pub(crate) ssh_tunnel: Option<SshTunnelHandle>,
 }
 
 #[derive(Clone)]
@@ -126,12 +127,11 @@ pub(crate) async fn browser_resolve_url(
         .ssh
         .clone()
         .ok_or_else(|| "SSH profile is unavailable.".to_string())?;
-    let local_port = pick_free_local_port()?;
-    let mut child = start_ssh_local_forward(&profile, local_port, &target_host, target_port)?;
-    if let Err(error) = wait_for_tcp("127.0.0.1", local_port, Duration::from_secs(8)).await {
-        let _ = child.kill();
-        return Err(format!("远程浏览器 SSH 转发启动失败：{error}"));
-    }
+    let (tunnel, local_addr) =
+        create_tunnel_with_fallback(state, window, &connection_id, &target_host, target_port)
+            .await?;
+    let local_addr = tunnel.local_addr().unwrap_or(local_addr);
+    let tunnel_port = local_addr.port();
 
     let remote_fallback = Some(BrowserRemoteFallback {
         state: state.clone(),
@@ -140,7 +140,7 @@ pub(crate) async fn browser_resolve_url(
     });
     let proxy_port = match start_browser_reverse_proxy(
         parsed.clone(),
-        Some(local_port),
+        Some(tunnel_port),
         trusted_certificate,
         remote_fallback,
     )
@@ -148,7 +148,7 @@ pub(crate) async fn browser_resolve_url(
     {
         Ok(proxy_port) => proxy_port,
         Err(error) => {
-            let _ = child.kill();
+            spawn_tunnel_shutdown("browser", tunnel);
             return Err(error);
         }
     };
@@ -161,7 +161,7 @@ pub(crate) async fn browser_resolve_url(
             connection_id: connection_id.clone(),
             local_port: browser_port,
             shutdown,
-            ssh_forward: Some(child),
+            ssh_tunnel: Some(tunnel),
         },
     );
 
@@ -233,7 +233,7 @@ async fn ensure_browser_reverse_proxy(
             connection_id,
             local_port: proxy_port,
             shutdown: Some(shutdown),
-            ssh_forward: None,
+            ssh_tunnel: None,
         },
     );
     Ok(proxy_port)
