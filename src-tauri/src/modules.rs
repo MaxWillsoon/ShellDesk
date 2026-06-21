@@ -20,6 +20,8 @@ pub(crate) mod connection_monitor;
 pub(crate) mod database;
 #[path = "database_tunnel.rs"]
 pub(crate) mod database_tunnel;
+#[path = "http_tunnel.rs"]
+pub(crate) mod http_tunnel;
 #[path = "ipc.rs"]
 pub(crate) mod ipc;
 #[path = "local_fs.rs"]

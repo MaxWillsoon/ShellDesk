@@ -753,6 +753,10 @@ interface ShellDeskConnectionControls {
     callbacks?: ShellDeskRunCommandStreamCallbacks,
     options?: { sudoPassword?: string },
   ) => Promise<{ stdout: string; stderr: string; code: number }>;
+  httpTunnelGet: (request: ShellDeskHttpTunnelRequest) => Promise<unknown>;
+  httpTunnelPost: (request: ShellDeskHttpTunnelRequest) => Promise<unknown>;
+  httpTunnelPut: (request: ShellDeskHttpTunnelRequest) => Promise<unknown>;
+  httpTunnelDelete: (request: ShellDeskHttpTunnelRequest) => Promise<unknown>;
   mysqlConnect: (connectionId: string, config: ShellDeskMysqlConnectConfig) => Promise<ShellDeskMysqlConnectResult>;
   mysqlDisconnect: (connectionId: string, mysqlId: string) => Promise<boolean>;
   mysqlDatabases: (connectionId: string, mysqlId: string) => Promise<string[]>;
@@ -821,6 +825,22 @@ interface ShellDeskConnectionControls {
 
 type ShellDeskDatabaseTransportMode = 'auto' | 'cli' | 'tunnel';
 type ShellDeskDatabaseTransport = 'ssh-tunnel' | 'ssh-exec' | 'direct';
+
+interface ShellDeskHttpTunnelAuth {
+  username: string;
+  password: string;
+}
+
+interface ShellDeskHttpTunnelRequest {
+  connectionId: string;
+  targetHost: string;
+  targetPort: number;
+  path: string;
+  auth?: ShellDeskHttpTunnelAuth | null;
+  body?: unknown;
+  ignoreSsl?: boolean;
+  secure?: boolean;
+}
 
 interface ShellDeskDatabaseTunnelConfig {
   remoteHost: string;

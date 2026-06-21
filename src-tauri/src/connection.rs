@@ -1233,6 +1233,31 @@ pub(crate) fn close_connection_by_id(state: &AppState, connection_id: &str) -> R
             }
         });
     }
+    let http_tunnel_sessions = {
+        let mut sessions = state.http_tunnel_sessions.lock().map_err(error_string)?;
+        let keys = sessions
+            .iter()
+            .filter_map(|(key, session)| {
+                if session.connection_id == connection_id {
+                    Some(key.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        keys.into_iter()
+            .filter_map(|key| sessions.remove(&key))
+            .collect::<Vec<_>>()
+    };
+    for session in http_tunnel_sessions {
+        tokio::spawn(async move {
+            if let Err(error) =
+                tokio::time::timeout(std::time::Duration::from_secs(5), session.shutdown()).await
+            {
+                eprintln!("[http-tunnel] session shutdown timed out: {error}");
+            }
+        });
+    }
     Ok(())
 }
 
