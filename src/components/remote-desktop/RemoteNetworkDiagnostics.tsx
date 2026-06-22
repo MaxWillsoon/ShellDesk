@@ -3,6 +3,7 @@ import DismissibleAlert from './DismissibleAlert';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import { isWindowsSystem, powershellCommand, powershellSingleQuote } from './remoteSystem';
+import { shellSingleQuote } from './shellUtils';
 import type { RemoteSystemType } from './types';
 import { tCurrent } from '../../i18n';
 
@@ -93,10 +94,6 @@ function runCmdStream(
 
     return result;
   });
-}
-
-function shellSingleQuote(value: string) {
-  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 function createId(prefix: string) {

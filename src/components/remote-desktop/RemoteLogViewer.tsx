@@ -2,7 +2,9 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import DismissibleAlert from './DismissibleAlert';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
+import { formatBytes, toStringOrEmpty } from './parseUtils';
 import { isWindowsSystem, powershellCommand, powershellSingleQuote } from './remoteSystem';
+import { shellSingleQuote } from './shellUtils';
 import { useSudoCommand } from './sudoPrompt';
 import type { RemoteSystemType } from './types';
 import { tCurrent } from '../../i18n';
@@ -98,10 +100,6 @@ const errorPattern = /\b(error|err|fatal|panic|critical|crit|alert|emerg|excepti
 const warningPattern = /\b(warn|warning|deprecated|timeout|retry|slow|unreachable)\b/i;
 const debugPattern = /\b(debug|trace|verbose)\b/i;
 
-function shellSingleQuote(value: string) {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
 function sanitizeSingleLine(value: string) {
   return value.replace(/[\r\n]+/g, ' ').trim();
 }
@@ -112,36 +110,6 @@ function clampLines(value: number) {
   }
 
   return Math.min(Math.max(Math.round(value), 20), maxLines);
-}
-
-function readString(value: unknown) {
-  if (typeof value === 'string') {
-    return value.trim();
-  }
-
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    return String(value);
-  }
-
-  return '';
-}
-
-function formatBytes(value: number | undefined) {
-  if (!value || !Number.isFinite(value) || value <= 0) {
-    return '';
-  }
-
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let nextValue = value;
-  let unitIndex = 0;
-
-  while (nextValue >= 1024 && unitIndex < units.length - 1) {
-    nextValue /= 1024;
-    unitIndex += 1;
-  }
-
-  const precision = nextValue >= 100 ? 0 : nextValue >= 10 ? 1 : 2;
-  return `${nextValue.toFixed(precision).replace(/\.0+$/, '')} ${units[unitIndex]}`;
 }
 
 function formatLoadedAt(value: number | null) {
@@ -329,12 +297,12 @@ function parseWindowsEventOutput(stdout: string): LogLine[] {
       }
 
       const eventRecord = record as WindowsEventRecord;
-      const timestamp = readString(eventRecord.timeCreated);
-      const levelValue = readString(eventRecord.level);
-      const service = readString(eventRecord.providerName);
-      const eventId = readString(eventRecord.eventId);
-      const message = readString(eventRecord.message);
-      const raw = readString(eventRecord.raw) || [timestamp, levelValue ? `[${levelValue}]` : '', service, eventId ? `#${eventId}` : '', message]
+      const timestamp = toStringOrEmpty(eventRecord.timeCreated);
+      const levelValue = toStringOrEmpty(eventRecord.level);
+      const service = toStringOrEmpty(eventRecord.providerName);
+      const eventId = toStringOrEmpty(eventRecord.eventId);
+      const message = toStringOrEmpty(eventRecord.message);
+      const raw = toStringOrEmpty(eventRecord.raw) || [timestamp, levelValue ? `[${levelValue}]` : '', service, eventId ? `#${eventId}` : '', message]
         .filter(Boolean)
         .join(' ');
 
@@ -370,7 +338,7 @@ function parseLogFiles(stdout: string): LogSource[] {
         type: 'file',
         label: path.replace(/^\/var\/log\/?/, '') || path,
         value: path,
-        description: [Number.isFinite(size) ? formatBytes(size) : '', modifiedAt].filter(Boolean).join(' · '),
+        description: [Number.isFinite(size) ? formatBytes(size, { invalidText: '', zeroText: '', maxUnit: 'GB' }) : '', modifiedAt].filter(Boolean).join(' · '),
         size: Number.isFinite(size) ? size : undefined,
         modifiedAt: modifiedAt || undefined,
       };

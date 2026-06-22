@@ -13,6 +13,7 @@ import {
 } from './cronUtils';
 import { getErrorMessage } from './desktopUtils';
 import { isWindowsSystem, powershellCommand, powershellSingleQuote } from './remoteSystem';
+import { shellSingleQuote } from './shellUtils';
 import type { RemoteSystemType } from './types';
 import { tCurrent } from '../../i18n';
 
@@ -41,10 +42,6 @@ interface WindowsTaskSummary {
 
 type ScheduledTab = 'cron' | 'systemd' | 'windows';
 type PendingAction = { title: string; command: string; afterRun?: () => Promise<void> };
-
-function shellSingleQuote(value: string) {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
 
 function withLinuxPrivilege(command: string) {
   return `if [ "$(id -u 2>/dev/null)" = "0" ]; then
