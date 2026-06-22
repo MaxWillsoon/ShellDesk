@@ -16,10 +16,8 @@ pub(crate) mod config;
 pub(crate) mod connection;
 #[path = "connection_monitor.rs"]
 pub(crate) mod connection_monitor;
-#[path = "database.rs"]
+#[path = "database/mod.rs"]
 pub(crate) mod database;
-#[path = "database_tunnel.rs"]
-pub(crate) mod database_tunnel;
 #[path = "http_tunnel.rs"]
 pub(crate) mod http_tunnel;
 #[path = "ipc.rs"]

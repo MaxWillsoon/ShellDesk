@@ -1,5 +1,5 @@
 use crate::{
-    browser_proxy, database_tunnel::DatabaseTunnelSession, http_tunnel::HttpTunnelSession,
+    browser_proxy, database::tunnel::DatabaseTunnelSession, http_tunnel::HttpTunnelSession,
     proxy::SshProxyConfig, ssh_tunnel::SshTunnelHandle, terminal, updater::update_status, zmodem,
 };
 use serde_json::Value;

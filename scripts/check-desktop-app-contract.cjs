@@ -185,7 +185,7 @@ const remoteDesktopSource = readWorkspaceFile('src/RemoteDesktopShell.tsx');
 const appSource = readWorkspaceFile('src/App.tsx');
 const styleIndexSource = readWorkspaceFile('src/styles/index.scss');
 const viteEnvSource = readWorkspaceFile('src/vite-env.d.ts');
-const vaultSource = readWorkspaceFile('src-tauri/src/vault.rs');
+const vaultRemoteProfilesSource = readWorkspaceFile('src-tauri/src/vault/remote_profiles.rs');
 const vaultNormalizeSource = readWorkspaceFile('src-tauri/src/vault/normalize.rs');
 const i18nCatalogSource = readWorkspaceFile('src/i18nCatalog.ts');
 
@@ -198,7 +198,7 @@ if (desktopAppKeys.length !== unique(desktopAppKeys).length) {
 }
 
 compareOrdered('vite-env ShellDeskDesktopAppKey', desktopAppKeys, extractTypeUnion(viteEnvSource, 'ShellDeskDesktopAppKey'), errors);
-compareOrdered('Rust REMOTE_DESKTOP_APP_KEYS', desktopAppKeys, extractRustStringArray(vaultSource, 'REMOTE_DESKTOP_APP_KEYS'), errors);
+compareOrdered('Rust REMOTE_DESKTOP_APP_KEYS', desktopAppKeys, extractRustStringArray(vaultRemoteProfilesSource, 'REMOTE_DESKTOP_APP_KEYS'), errors);
 compareSets('desktopAppIconSources', desktopAppKeys, extractRecordKeys(remoteDesktopSource, 'desktopAppIconSources'), errors);
 compareSets('defaultWindowFrames', desktopAppKeys, extractRecordKeys(remoteDesktopSource, 'defaultWindowFrames'), errors);
 compareSets('renderWindowContent branches', desktopAppKeys, extractRenderBranches(remoteDesktopSource), errors);
