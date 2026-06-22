@@ -1,7 +1,7 @@
 import { FitAddon } from '@xterm/addon-fit';
-import { SearchAddon, type ISearchOptions } from '@xterm/addon-search';
+import { SearchAddon } from '@xterm/addon-search';
 import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes';
-import { type ITerminalOptions, type IWindowsPty, Terminal as XTerminal } from '@xterm/xterm';
+import { Terminal as XTerminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import * as Zmodem from 'zmodem.js';
 import {
@@ -14,736 +14,31 @@ import {
   useRef,
   useState,
 } from 'react';
-import { createPortal } from 'react-dom';
 
-import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
+import { getErrorMessage } from './desktopUtils';
 import { isWindowsSystem } from './remoteSystem';
-import {
-  buildTerminalFontStack,
-  getTerminalTheme,
-  terminalThemeChoices,
-  toTerminalFontWeight,
-} from './terminalPresets';
-import { isMacClient, matchesSnippetShortcut } from './terminalSnippetShortcuts';
-import type { RemoteSystemType } from './types';
+import { collectSubmittedCommands, isLikelyForegroundCommand, readForegroundTaskSignal, summarizeTerminalOutput } from './terminalCommands';
+import { applyTerminalOptions, buildTerminalOptions, getLocalWindowsPtyOption, getShellChoices, getTerminalChromeTone, getTerminalSessionTitle, getTerminalStatusLabel, sftpProbeCacheMs, terminalSearchOptions } from './terminalCore';
+import { createTerminalCwdProbeController } from './terminalCwd';
+import { createSftpProgressHandlers, createSftpTransferRunner } from './terminalTransfer';
+import type { ForegroundTaskSource, RemoteTerminalProps, RemoteTerminalSessionEvent, RemoteTerminalSessionEventInput, RemoteTerminalSessionStatus, TerminalContextMenuState, TerminalCwdProbeState, TerminalLaunchDraft, TerminalSearchResultState } from './terminalTypes';
+import { TerminalPaneView } from './TerminalPaneView';
+import { createZmodemSentry, readSubmittedTransferCommand, readTerminalPayloadBytes, readVisibleSubmittedTransferCommand } from './terminalZmodem';
+import { getTerminalTheme } from './terminalPresets';
+import { attachTerminalInteractions } from './terminalInteractions';
+import { useTerminalExternalRequests } from './terminalRequests';
 import { t } from '../../i18n';
 
-export type RemoteTerminalSessionStatus = 'idle' | 'running' | 'exited' | 'disconnected';
-
-export interface RemoteTerminalLaunchOptions {
-  title?: string;
-  shell?: string;
-  initialCommand?: string;
-  workingDirectory?: string;
-  mode?: 'tmux';
-  tmuxSessionName?: string;
-}
-
-export interface RemoteTerminalChromePayload {
-  title: string;
-  status: string;
-  tone: 'idle' | 'loading' | 'error';
-}
-
-export interface RemoteTerminalSessionState {
-  title: string;
-  status: RemoteTerminalSessionStatus;
-  lastExitCode: number | null;
-  hasForegroundTask: boolean;
-}
-
-export interface RemoteTerminalCommandRequest {
-  id: string;
-  command: string;
-  mode: 'insert' | 'run';
-  source?: 'snippet' | 'deployment' | 'external';
-}
-
-export type RemoteTerminalToolAction =
-  | 'new-terminal'
-  | 'search'
-  | 'clear'
-  | 'toggle-follow'
-  | 'scroll-bottom'
-  | 'restart'
-  | 'settings';
-
-export interface RemoteTerminalToolRequest {
-  id: string;
-  action: RemoteTerminalToolAction;
-}
-
-export type RemoteTerminalSessionEvent =
-  | {
-      type: 'terminal-command';
-      terminalId: string;
-      timestamp: string;
-      title: string;
-      command: string;
-      source: 'keyboard' | 'snippet' | 'deployment' | 'external';
-    }
-  | {
-      type: 'terminal-output';
-      terminalId: string;
-      timestamp: string;
-      title: string;
-      summary: string;
-      truncated: boolean;
-    };
-
-type RemoteTerminalSessionEventInput =
-  | Omit<Extract<RemoteTerminalSessionEvent, { type: 'terminal-command' }>, 'terminalId' | 'timestamp' | 'title'>
-  | Omit<Extract<RemoteTerminalSessionEvent, { type: 'terminal-output' }>, 'terminalId' | 'timestamp' | 'title'>;
-
-type ForegroundTaskSource = 'alternate-screen' | 'command';
-
-interface RemoteTerminalProps {
-  connectionId: string;
-  terminalId: string;
-  settings: ShellDeskAppSettings;
-  connectionKind?: 'ssh' | 'local';
-  systemType?: RemoteSystemType;
-  launchOptions?: RemoteTerminalLaunchOptions;
-  commandRequest?: RemoteTerminalCommandRequest | null;
-  toolRequest?: RemoteTerminalToolRequest | null;
-  onChromeChange?: (payload: RemoteTerminalChromePayload) => void;
-  onCommandRequestHandled?: (requestId: string) => void;
-  onToolRequestHandled?: (requestId: string) => void;
-  onOpenTerminal?: (options?: RemoteTerminalLaunchOptions) => void;
-  onOpenNote?: (note: { title: string; content: string }) => void;
-  onCommandIntercept?: (command: string) => boolean;
-  onSessionEvent?: (event: RemoteTerminalSessionEvent) => void;
-  onSessionStateChange?: (state: RemoteTerminalSessionState) => void;
-  onSettingsChange?: (settings: ShellDeskAppSettings) => void;
-}
-
-interface TerminalContextMenuState {
-  x: number;
-  y: number;
-  selection: string;
-}
-
-interface TerminalSearchResultState {
-  index: number;
-  count: number;
-}
-
-type TerminalLaunchDraft = Required<Omit<RemoteTerminalLaunchOptions, 'mode' | 'tmuxSessionName'>>;
-
-const outputSummaryLimit = 1200;
-const terminalSearchOptions: ISearchOptions = {
-  decorations: {
-    matchBackground: '#2d5d76',
-    matchOverviewRuler: '#43c7ff',
-    activeMatchBackground: '#77f4c5',
-    activeMatchColorOverviewRuler: '#77f4c5',
-  },
-};
-const ansiOscPattern = /\x1b\][^\x07]*(?:\x07|\x1b\\)/g;
-const ansiCsiPattern = /\x1b\[[0-?]*[ -/]*[@-~]/g;
-const controlCharacterPattern = /[\x00-\x08\x0b-\x1f\x7f]/g;
-const alternateScreenPattern = /\x1b\[\?(?:47|1047|1049)([hl])/g;
-const foregroundCommandPattern = /^(?:(?:sudo|doas)\s+)?(?:top(?!\s+-b(?:\s|$))|htop|btop|atop|watch|vim|vi|nvim|nano|less|more|man)(?:\s|$)/i;
-const foregroundSequenceBufferLimit = 32;
-const sftpProbeCacheMs = 30000;
-const terminalCwdProbeTimeoutMs = 6000;
-const terminalCwdProbeBufferLimit = 12000;
-const zmodemReadChunkSize = 64 * 1024;
-const zmodemUploadCommands = new Set(['rz', 'lrz']);
-const zmodemDownloadCommands = new Set(['sz', 'lsz']);
-const szOptionsWithValue = new Set(['-B', '-L', '-l', '-w', '--bufsize', '--packetlen', '--framelen', '--window-size']);
-const szUnsupportedOptions = new Set(['-i', '--command', '-X', '--xmodem', '-Y', '--ymodem']);
-const terminalPayloadEncoder = new TextEncoder();
-
-interface TerminalTransferCommand {
-  action: 'rz' | 'sz';
-  command: string;
-  inputData: string;
-  needsLineClear: boolean;
-  remotePaths: string[];
-}
-
-interface TerminalCwdProbeState {
-  beginMarker: string;
-  endMarker: string;
-  buffer: string;
-  hasBeginMarker: boolean;
-  timer: number;
-  resolve: (directory: string) => void;
-}
-
-interface TerminalBufferLineLike {
-  isWrapped?: boolean;
-  translateToString: (trimRight?: boolean) => string;
-}
-
-function getCommandBasename(commandPath: string) {
-  return commandPath.replace(/\\/g, '/').split('/').pop()?.toLowerCase() ?? '';
-}
-
-function pushShellWord(words: string[], word: string, hasWord: boolean) {
-  if (hasWord) {
-    words.push(word);
-  }
-}
-
-function parseSimpleShellWords(command: string) {
-  const words: string[] = [];
-  let word = '';
-  let quote: '"' | "'" | null = null;
-  let hasWord = false;
-
-  for (let index = 0; index < command.length; index += 1) {
-    const character = command[index];
-
-    if (quote === "'") {
-      if (character === "'") {
-        quote = null;
-      } else {
-        word += character;
-        hasWord = true;
-      }
-      continue;
-    }
-
-    if (quote === '"') {
-      if (character === '"') {
-        quote = null;
-        continue;
-      }
-
-      if (character === '$' || character === '`') {
-        return null;
-      }
-
-      if (character === '\\') {
-        index += 1;
-        if (index >= command.length) {
-          return null;
-        }
-        word += command[index];
-        hasWord = true;
-        continue;
-      }
-
-      word += character;
-      hasWord = true;
-      continue;
-    }
-
-    if (/\s/.test(character)) {
-      pushShellWord(words, word, hasWord);
-      word = '';
-      hasWord = false;
-      continue;
-    }
-
-    if (character === "'" || character === '"') {
-      quote = character;
-      hasWord = true;
-      continue;
-    }
-
-    if (/[;&|<>`$(){}]/.test(character)) {
-      return null;
-    }
-
-    if (character === '\\') {
-      index += 1;
-      if (index >= command.length) {
-        return null;
-      }
-      word += command[index];
-      hasWord = true;
-      continue;
-    }
-
-    word += character;
-    hasWord = true;
-  }
-
-  if (quote) {
-    return null;
-  }
-
-  pushShellWord(words, word, hasWord);
-  return words;
-}
-
-function optionTakesSeparateValue(option: string) {
-  if (szOptionsWithValue.has(option)) {
-    return true;
-  }
-
-  return /^-[BLlw]$/u.test(option);
-}
-
-function optionIncludesValue(option: string) {
-  return /^-[BLlw].+/u.test(option) || /^--(?:bufsize|packetlen|framelen|window-size)=/u.test(option);
-}
-
-function readSzRemotePaths(tokens: string[]) {
-  const remotePaths: string[] = [];
-  let stopParsingOptions = false;
-
-  for (let index = 1; index < tokens.length; index += 1) {
-    const token = tokens[index];
-
-    if (!stopParsingOptions && token === '--') {
-      stopParsingOptions = true;
-      continue;
-    }
-
-    if (!stopParsingOptions && szUnsupportedOptions.has(token)) {
-      return null;
-    }
-
-    if (!stopParsingOptions && optionTakesSeparateValue(token)) {
-      index += 1;
-      continue;
-    }
-
-    if (!stopParsingOptions && (optionIncludesValue(token) || (token.startsWith('-') && token.length > 1))) {
-      continue;
-    }
-
-    remotePaths.push(token);
-  }
-
-  return remotePaths.length ? remotePaths : null;
-}
-
-function readTransferCommand(command: string, inputData: string, needsLineClear: boolean): TerminalTransferCommand | null {
-  const tokens = parseSimpleShellWords(command);
-
-  if (!tokens?.length) {
-    return null;
-  }
-
-  const commandName = getCommandBasename(tokens[0]);
-
-  if (zmodemUploadCommands.has(commandName)) {
-    const hasUnexpectedArgument = tokens.slice(1).some((token) => token !== '--' && !token.startsWith('-'));
-
-    return hasUnexpectedArgument
-      ? null
-      : { action: 'rz', command, inputData, needsLineClear, remotePaths: [] };
-  }
-
-  if (zmodemDownloadCommands.has(commandName)) {
-    const remotePaths = readSzRemotePaths(tokens);
-
-    return remotePaths
-      ? { action: 'sz', command, inputData, needsLineClear, remotePaths }
-      : null;
-  }
-
-  return null;
-}
-
-function readSubmittedTransferCommand(currentBuffer: string, data: string) {
-  const commandState = collectSubmittedCommands(currentBuffer, data);
-
-  if (commandState.commands.length !== 1 || commandState.buffer) {
-    return null;
-  }
-
-  const command = commandState.commands[0];
-  const needsLineClear = currentBuffer.trim().length > 0 && /^[\r\n]+$/u.test(data);
-
-  return readTransferCommand(command, data, needsLineClear);
-}
-
-function readVisibleTerminalLine(terminal: XTerminal) {
-  const terminalBuffer = (terminal as unknown as {
-    buffer?: {
-      active?: {
-        baseY?: number;
-        cursorY?: number;
-        getLine?: (lineIndex: number) => TerminalBufferLineLike | undefined;
-      };
-    };
-  }).buffer?.active;
-
-  if (!terminalBuffer?.getLine) {
-    return '';
-  }
-
-  let lineIndex = Number(terminalBuffer.baseY ?? 0) + Number(terminalBuffer.cursorY ?? 0);
-  const parts: string[] = [];
-
-  for (let wrappedLineCount = 0; wrappedLineCount < 8 && lineIndex >= 0; wrappedLineCount += 1) {
-    const line = terminalBuffer.getLine(lineIndex);
-
-    if (!line) {
-      break;
-    }
-
-    parts.unshift(line.translateToString(true));
-
-    if (!line.isWrapped) {
-      break;
-    }
-
-    lineIndex -= 1;
-  }
-
-  return parts.join('').trimEnd();
-}
-
-function readVisibleSubmittedTransferCommand(terminal: XTerminal, data: string) {
-  if (!/^[\r\n]+$/u.test(data)) {
-    return null;
-  }
-
-  const line = readVisibleTerminalLine(terminal);
-
-  if (!line.trim()) {
-    return null;
-  }
-
-  const candidates = [line.trim()];
-  const promptDelimiterPattern = /[#$>%]\s+/gu;
-  let match: RegExpExecArray | null = promptDelimiterPattern.exec(line);
-  let lastPromptEnd = -1;
-
-  while (match) {
-    lastPromptEnd = match.index + match[0].length;
-    match = promptDelimiterPattern.exec(line);
-  }
-
-  if (lastPromptEnd >= 0) {
-    candidates.unshift(line.slice(lastPromptEnd).trim());
-  }
-
-  for (const candidate of candidates) {
-    const transferCommand = readTransferCommand(candidate, data, true);
-
-    if (transferCommand) {
-      return transferCommand;
-    }
-  }
-
-  return null;
-}
-
-function isAbsoluteTransferPath(remotePath: string, isWindowsHost: boolean) {
-  const normalizedPath = remotePath.replace(/\\/g, '/');
-
-  if (normalizedPath.startsWith('~')) {
-    return true;
-  }
-
-  if (isWindowsHost) {
-    return /^\/?[a-z]:\//iu.test(normalizedPath) || normalizedPath.startsWith('/');
-  }
-
-  return normalizedPath.startsWith('/');
-}
-
-function joinTransferRemotePath(basePath: string, remotePath: string, isWindowsHost: boolean) {
-  const normalizedRemotePath = isWindowsHost ? remotePath.replace(/\\/g, '/') : remotePath;
-
-  if (isAbsoluteTransferPath(normalizedRemotePath, isWindowsHost)) {
-    return normalizedRemotePath;
-  }
-
-  const normalizedBasePath = (isWindowsHost ? basePath.replace(/\\/g, '/') : basePath).trim() || '.';
-
-  if (normalizedBasePath === '.') {
-    return normalizedRemotePath;
-  }
-
-  if (normalizedBasePath === '/') {
-    return `/${normalizedRemotePath.replace(/^\/+/u, '')}`;
-  }
-
-  if (isWindowsHost && /^\/?[a-z]:\/?$/iu.test(normalizedBasePath)) {
-    return `${normalizedBasePath.replace(/\/?$/u, '/')}${normalizedRemotePath.replace(/^\/+/u, '')}`;
-  }
-
-  return `${normalizedBasePath.replace(/\/+$/u, '')}/${normalizedRemotePath.replace(/^\/+/u, '')}`;
-}
-
-function readTerminalPayloadBytes(payload: { data: string; bytes?: ArrayBuffer | ArrayBufferView | number[] }) {
-  const { bytes } = payload;
-
-  if (bytes instanceof ArrayBuffer) {
-    return new Uint8Array(bytes);
-  }
-
-  if (ArrayBuffer.isView(bytes)) {
-    return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  }
-
-  if (Array.isArray(bytes)) {
-    return Uint8Array.from(bytes);
-  }
-
-  return terminalPayloadEncoder.encode(payload.data);
-}
-
-function mergeZmodemChunks(chunks: Uint8Array[]) {
-  const totalBytes = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
-  const merged = new Uint8Array(totalBytes);
-  let offset = 0;
-
-  chunks.forEach((chunk) => {
-    merged.set(chunk, offset);
-    offset += chunk.byteLength;
-  });
-
-  return merged;
-}
-
-function formatTransferBytes(size: number) {
-  if (!Number.isFinite(size) || size < 0) {
-    return '-';
-  }
-
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let value = size;
-  let unitIndex = 0;
-
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-
-  return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
-}
-
-function getTransferPercent(payload: Pick<ShellDeskTransferProgress, 'total' | 'transferred' | 'completedItems' | 'totalItems'>) {
-  if (payload.total > 0) {
-    return Math.max(0, Math.min(100, Math.round((payload.transferred / payload.total) * 100)));
-  }
-
-  if ((payload.totalItems ?? 0) > 0) {
-    return Math.max(0, Math.min(100, Math.round(((payload.completedItems ?? 0) / (payload.totalItems ?? 1)) * 100)));
-  }
-
-  return 0;
-}
-
-function buildSftpProgressText(
-  payload: ShellDeskTransferProgress | ShellDeskTransferEndPayload,
-  language: ShellDeskAppSettings['language'],
-  statusText = '',
-) {
-  const action = payload.type === 'download'
-    ? t('fileExplorer.transfer.download', language)
-    : t('fileExplorer.transfer.upload', language);
-  const totalText = payload.total > 0 ? ` / ${formatTransferBytes(payload.total)}` : '';
-  const itemText = (payload.totalItems ?? 0) > 0
-    ? ` · ${t('fileExplorer.transfer.items', language, {
-        completed: payload.completedItems ?? 0,
-        total: t('fileExplorer.transfer.totalSuffix', language, { total: payload.totalItems ?? 0 }),
-      })}`
-    : '';
-  const statusSuffix = statusText ? ` · ${statusText}` : '';
-
-  return [
-    `SFTP ${action}`,
-    `${getTransferPercent(payload)}%`,
-    `${formatTransferBytes(payload.transferred)}${totalText}`,
-    payload.fileName,
-  ].filter(Boolean).join(' · ') + itemText + statusSuffix;
-}
-
-function isWindowsClientPlatform() {
-  if (typeof navigator === 'undefined') {
-    return false;
-  }
-
-  return /windows|win32|win64/i.test(navigator.userAgent || navigator.platform || '');
-}
-
-function getLocalWindowsPtyOption(enabled: boolean): IWindowsPty | undefined {
-  return enabled && isWindowsClientPlatform() ? { backend: 'conpty' } : undefined;
-}
-
-function buildTerminalOptions(settings: ShellDeskAppSettings, windowsPty?: IWindowsPty): ITerminalOptions {
-  return {
-    allowProposedApi: true,
-    allowTransparency: true,
-    altClickMovesCursor: settings.terminalAltClickMovesCursor,
-    cursorBlink: settings.terminalCursorBlink,
-    cursorInactiveStyle: settings.terminalCursorInactiveStyle,
-    cursorStyle: settings.terminalCursorStyle,
-    customGlyphs: true,
-    fontFamily: buildTerminalFontStack(settings.terminalFontFamily),
-    fontSize: settings.terminalFontSize,
-    fontWeight: toTerminalFontWeight(settings.terminalFontWeight),
-    fontWeightBold: toTerminalFontWeight(settings.terminalFontWeightBold),
-    ignoreBracketedPasteMode: !settings.terminalBracketedPasteMode,
-    lineHeight: settings.terminalLineHeight,
-    minimumContrastRatio: settings.terminalMinimumContrastRatio,
-    rescaleOverlappingGlyphs: true,
-    screenReaderMode: settings.terminalScreenReaderMode,
-    scrollback: settings.terminalScrollback,
-    scrollOnEraseInDisplay: settings.terminalScrollOnEraseInDisplay,
-    scrollOnUserInput: settings.terminalScrollOnUserInput,
-    scrollSensitivity: settings.terminalScrollSensitivity,
-    fastScrollSensitivity: settings.terminalFastScrollSensitivity,
-    ...(windowsPty ? { windowsPty } : {}),
-    theme: { ...getTerminalTheme(settings.terminalTheme) },
-  };
-}
-
-function applyTerminalOptions(terminal: XTerminal, settings: ShellDeskAppSettings, windowsPty?: IWindowsPty) {
-  const { allowTransparency: _allowTransparency, ...terminalOptions } = buildTerminalOptions(settings, windowsPty);
-  terminal.options = terminalOptions;
-}
-
-function getTerminalSessionTitle(terminalId: string, options?: RemoteTerminalLaunchOptions) {
-  const configuredTitle = options?.title?.trim();
-
-  if (configuredTitle) {
-    return configuredTitle;
-  }
-
-  const workingDirectory = options?.workingDirectory?.trim();
-
-  if (workingDirectory) {
-    return workingDirectory;
-  }
-
-  return terminalId;
-}
-
-function getTerminalStatusLabel(status: RemoteTerminalSessionStatus, hasError: boolean, language: ShellDeskAppSettings['language']) {
-  if (status === 'running') {
-    return t('terminal.status.running', language);
-  }
-
-  if (status === 'disconnected') {
-    return t('terminal.status.disconnected', language);
-  }
-
-  if (status === 'exited') {
-    return hasError ? t('terminal.status.startFailed', language) : t('terminal.status.exited', language);
-  }
-
-  return t('terminal.status.starting', language);
-}
-
-function getTerminalChromeTone(status: RemoteTerminalSessionStatus, hasError: boolean): RemoteTerminalChromePayload['tone'] {
-  if (status === 'idle') {
-    return 'loading';
-  }
-
-  if (status === 'running' && !hasError) {
-    return 'idle';
-  }
-
-  return 'error';
-}
-
-function stripTerminalControlSequences(data: string) {
-  return data
-    .replace(ansiOscPattern, '')
-    .replace(ansiCsiPattern, '')
-    .replace(controlCharacterPattern, '')
-    .replace(/\r/g, '');
-}
-
-function summarizeTerminalOutput(data: string) {
-  const summary = stripTerminalControlSequences(data).trim();
-
-  if (!summary) {
-    return null;
-  }
-
-  if (summary.length <= outputSummaryLimit) {
-    return { summary, truncated: false };
-  }
-
-  return {
-    summary: summary.slice(-outputSummaryLimit),
-    truncated: true,
-  };
-}
-
-function readForegroundTaskSignal(previousBuffer: string, data: string) {
-  const combinedData = `${previousBuffer}${data}`;
-  let hasForegroundTask: boolean | null = null;
-  alternateScreenPattern.lastIndex = 0;
-  let match: RegExpExecArray | null = alternateScreenPattern.exec(combinedData);
-
-  while (match) {
-    hasForegroundTask = match[1] === 'h';
-    match = alternateScreenPattern.exec(combinedData);
-  }
-
-  alternateScreenPattern.lastIndex = 0;
-
-  return {
-    buffer: combinedData.slice(-foregroundSequenceBufferLimit),
-    hasForegroundTask,
-  };
-}
-
-function isLikelyForegroundCommand(command: string) {
-  const trimmedCommand = command.trim();
-
-  if (!trimmedCommand || /[;&|]/.test(trimmedCommand)) {
-    return false;
-  }
-
-  return foregroundCommandPattern.test(trimmedCommand);
-}
-
-function formatTroubleshootingSnippet(selection: string) {
-  return selection
-    .replace(/\r\n?/g, '\n')
-    .split('\n')
-    .map((line) => (line.trim() ? `$ ${line}` : '$'))
-    .join('\n');
-}
-
-function collectSubmittedCommands(currentBuffer: string, data: string) {
-  if (data.includes('\x1b')) {
-    return { buffer: currentBuffer, commands: [] as string[] };
-  }
-
-  let nextBuffer = currentBuffer;
-  const commands: string[] = [];
-
-  for (const character of data) {
-    if (character === '\r' || character === '\n') {
-      const command = nextBuffer.trim();
-
-      if (command) {
-        commands.push(command);
-      }
-
-      nextBuffer = '';
-      continue;
-    }
-
-    if (character === '\x7f') {
-      nextBuffer = nextBuffer.slice(0, -1);
-      continue;
-    }
-
-    if (character === '\x03') {
-      nextBuffer = '';
-      continue;
-    }
-
-    if (character >= ' ') {
-      nextBuffer += character;
-    }
-  }
-
-  return { buffer: nextBuffer, commands };
-}
-
-function getShellChoices(systemType?: RemoteSystemType) {
-  return isWindowsSystem(systemType)
-    ? ['', 'powershell', 'pwsh', 'cmd']
-    : ['', 'bash', 'zsh', 'fish', 'sh'];
-}
+export type {
+  RemoteTerminalChromePayload,
+  RemoteTerminalCommandRequest,
+  RemoteTerminalLaunchOptions,
+  RemoteTerminalSessionEvent,
+  RemoteTerminalSessionState,
+  RemoteTerminalSessionStatus,
+  RemoteTerminalToolAction,
+  RemoteTerminalToolRequest,
+} from './terminalTypes';
 
 function RemoteTerminal({
   connectionId,
@@ -1050,83 +345,16 @@ function RemoteTerminal({
     foregroundSequenceBufferRef.current = '';
     foregroundTaskSourceRef.current = null;
 
-    terminal.attachCustomKeyEventHandler((event) => {
-      if (event.type === 'keydown' && isTerminalReadyRef.current) {
-        const matchingSnippet = (settingsRef.current.terminalSnippets ?? [])
-          .find((snippet) => snippet.shortcut && matchesSnippetShortcut(event, snippet.shortcut, isMacClient()));
-
-        if (matchingSnippet) {
-          terminal.focus();
-          terminal.paste(matchingSnippet.command);
-          return false;
-        }
-      }
-
-      const shouldOpenSearch = event.type === 'keydown' &&
-        (event.ctrlKey || event.metaKey) &&
-        event.key.toLowerCase() === 'f';
-
-      if (shouldOpenSearch) {
-        setShowSearch(true);
-        return false;
-      }
-
-      return true;
-    });
-
-    const handleTerminalContextMenu = (event: MouseEvent) => {
-      event.preventDefault();
-      const selection = terminal.getSelection();
-
-      if (selection) {
-        setContextMenu({
-          x: event.clientX,
-          y: event.clientY,
-          selection,
-        });
-        terminal.focus();
-        return;
-      }
-
-      if (!isTerminalReadyRef.current || !settingsRef.current.terminalRightClickPaste) {
-        terminal.focus();
-        return;
-      }
-
-      navigator.clipboard
-        .readText()
-        .then((text) => {
-          if (!text) {
-            terminal.focus();
-            return;
-          }
-
-          terminal.focus();
-          terminal.paste(text);
-        })
-        .catch((error: unknown) => {
-          terminal.writeln(`\r\n${t('terminal.error.pasteFailed', settings.language, { error: getErrorMessage(error) })}`);
-        });
-    };
-
-    host.addEventListener('contextmenu', handleTerminalContextMenu);
-
-    const selectionDisposable = terminal.onSelectionChange(() => {
-      if (!settingsRef.current.terminalCopyOnSelect || !terminal.hasSelection()) {
-        return;
-      }
-
-      const selection = terminal.getSelection();
-
-      if (selection) {
-        navigator.clipboard.writeText(selection).catch(() => undefined);
-      }
-    });
-    const searchResultDisposable = searchAddon.onDidChangeResults((payload) => {
-      setSearchResults({
-        index: payload.resultIndex,
-        count: payload.resultCount,
-      });
+    const detachTerminalInteractions = attachTerminalInteractions({
+      host,
+      terminal,
+      searchAddon,
+      settings,
+      settingsRef,
+      isTerminalReadyRef,
+      setShowSearch,
+      setContextMenu,
+      setSearchResults,
     });
 
     const getTerminalSize = () => {
@@ -1210,142 +438,23 @@ function RemoteTerminal({
       sftpProgressLineLengthRef.current = endLine ? 0 : text.length;
     };
 
-    const renderSftpProgress = (payload: ShellDeskTransferProgress) => {
-      if (!activeSftpTransferRef.current || payload.connectionId !== connectionId) {
-        return;
-      }
+    const { renderSftpProgress, finishSftpProgress } = createSftpProgressHandlers({
+      connectionId,
+      settingsRef,
+      activeSftpTransferRef,
+      sftpTransferClientIdRef,
+      sftpTransferQueueIdRef,
+      sftpTransferEndedRef,
+      writeSftpProgressLine,
+    });
 
-      if (sftpTransferClientIdRef.current && payload.clientId !== sftpTransferClientIdRef.current) {
-        return;
-      }
-
-      if (sftpTransferQueueIdRef.current && payload.queueId && payload.queueId !== sftpTransferQueueIdRef.current) {
-        return;
-      }
-
-      if (!sftpTransferQueueIdRef.current && payload.queueId) {
-        sftpTransferQueueIdRef.current = payload.queueId;
-      }
-
-      writeSftpProgressLine(buildSftpProgressText(payload, settingsRef.current.language));
-    };
-
-    const finishSftpProgress = (payload: ShellDeskTransferEndPayload) => {
-      if (!activeSftpTransferRef.current || payload.connectionId !== connectionId) {
-        return;
-      }
-
-      if (sftpTransferClientIdRef.current && payload.clientId !== sftpTransferClientIdRef.current) {
-        return;
-      }
-
-      if (sftpTransferQueueIdRef.current && payload.queueId && payload.queueId !== sftpTransferQueueIdRef.current) {
-        return;
-      }
-
-      const statusText = payload.success
-        ? t('terminal.transfer.sftpDone', settingsRef.current.language)
-        : t('terminal.transfer.sftpFailed', settingsRef.current.language, { error: payload.error ?? '' });
-      writeSftpProgressLine(buildSftpProgressText(payload, settingsRef.current.language, statusText), true);
-      sftpTransferEndedRef.current = true;
-      activeSftpTransferRef.current = false;
-      sftpTransferClientIdRef.current = '';
-      sftpTransferQueueIdRef.current = '';
-    };
-
-    const settleTerminalCwdProbe = (directory: string) => {
-      const probe = terminalCwdProbeRef.current;
-
-      if (!probe) {
-        return;
-      }
-
-      window.clearTimeout(probe.timer);
-      terminalCwdProbeRef.current = null;
-      probe.resolve(directory);
-    };
-
-    const processTerminalCwdProbeOutput = (data: string) => {
-      const probe = terminalCwdProbeRef.current;
-
-      if (!probe) {
-        return false;
-      }
-
-      const normalizedData = stripTerminalControlSequences(data).replace(/\r/g, '\n');
-      const wasCapturing = probe.hasBeginMarker;
-      const hasProbeMarker = normalizedData.includes(probe.beginMarker) || normalizedData.includes(probe.endMarker);
-      probe.buffer = `${probe.buffer}${normalizedData}`.slice(-terminalCwdProbeBufferLimit);
-      const lines = probe.buffer.split(/\n/u).map((line) => line.trim());
-      const beginIndex = lines.findIndex((line) => line === probe.beginMarker);
-
-      if (beginIndex < 0) {
-        return wasCapturing || hasProbeMarker;
-      }
-
-      probe.hasBeginMarker = true;
-
-      const endIndex = lines.findIndex((line, index) => index > beginIndex && line === probe.endMarker);
-
-      if (endIndex < 0) {
-        return true;
-      }
-
-      const directory = lines
-        .slice(beginIndex + 1, endIndex)
-        .find((line) => line && line !== probe.beginMarker && line !== probe.endMarker) ?? '';
-
-      settleTerminalCwdProbe(directory);
-      return true;
-    };
-
-    const createTerminalCwdProbeCommand = (beginMarker: string, endMarker: string) => {
-      const shell = launchOptionsRef.current?.shell?.toLowerCase() ?? '';
-
-      if (isWindowsSystem(systemType)) {
-        if (/\bcmd(?:\.exe)?\b/u.test(shell)) {
-          return `echo ${beginMarker} & cd & echo ${endMarker}`;
-        }
-
-        return `Write-Output '${beginMarker}'; (Get-Location).Path; Write-Output '${endMarker}'`;
-      }
-
-      return `printf '%s\\n' '${beginMarker}'; pwd -P 2>/dev/null || pwd; printf '%s\\n' '${endMarker}'`;
-    };
-
-    const resolveTerminalWorkingDirectory = async () => {
-      if (!isTerminalReadyRef.current) {
-        return launchOptionsRef.current?.workingDirectory?.trim() || '.';
-      }
-
-      const sequence = Math.random().toString(36).slice(2, 10);
-      const beginMarker = `__SHELLDESK_CWD_${sequence}_BEGIN__`;
-      const endMarker = `__SHELLDESK_CWD_${sequence}_END__`;
-      const previousProbe = terminalCwdProbeRef.current;
-
-      if (previousProbe) {
-        window.clearTimeout(previousProbe.timer);
-        terminalCwdProbeRef.current = null;
-        previousProbe.resolve('');
-      }
-
-      return new Promise<string>((resolve) => {
-        const timer = window.setTimeout(() => {
-          settleTerminalCwdProbe('');
-        }, terminalCwdProbeTimeoutMs);
-
-        terminalCwdProbeRef.current = {
-          beginMarker,
-          endMarker,
-          buffer: '',
-          hasBeginMarker: false,
-          timer,
-          resolve,
-        };
-
-        void writeTerminalInputAsync(`${createTerminalCwdProbeCommand(beginMarker, endMarker)}\r`);
-      }).then((directory) => directory || launchOptionsRef.current?.workingDirectory?.trim() || '.');
-    };
+    const { processTerminalCwdProbeOutput, resolveTerminalWorkingDirectory } = createTerminalCwdProbeController({
+      terminalCwdProbeRef,
+      launchOptionsRef,
+      isTerminalReadyRef,
+      systemType,
+      writeTerminalInputAsync,
+    });
 
     const checkSftpAvailability = async () => {
       const cached = sftpAvailabilityRef.current;
@@ -1363,294 +472,37 @@ function RemoteTerminal({
       return Boolean(result.available);
     };
 
-    const runSftpTransferCommand = async (transferCommand: TerminalTransferCommand) => {
-      let shouldRedrawPrompt = false;
-      const transferClientId = `terminal-transfer-${terminalId}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-      const transferOptions: ShellDeskSudoPasswordOptions = { transferClientId };
-      const beginSftpProgress = () => {
-        activeSftpTransferRef.current = true;
-        sftpTransferClientIdRef.current = transferClientId;
-        sftpTransferQueueIdRef.current = '';
-        sftpTransferEndedRef.current = false;
-        sftpProgressLineLengthRef.current = 0;
-      };
-      const cancelSftpProgress = () => {
-        if (activeSftpTransferRef.current) {
-          activeSftpTransferRef.current = false;
-          sftpTransferClientIdRef.current = '';
-          sftpTransferQueueIdRef.current = '';
-          sftpTransferEndedRef.current = false;
-          sftpProgressLineLengthRef.current = 0;
-        }
-      };
+    const runSftpTransferCommand = createSftpTransferRunner({
+      api,
+      connectionId,
+      terminalId,
+      systemType,
+      settingsRef,
+      activeSftpTransferRef,
+      sftpTransferClientIdRef,
+      sftpTransferQueueIdRef,
+      sftpTransferEndedRef,
+      sftpProgressLineLengthRef,
+      sftpAvailabilityRef,
+      checkSftpAvailability,
+      resolveTerminalWorkingDirectory,
+      writeTerminalInputAsync,
+      writeTerminalNotice,
+      writeSftpProgressLine,
+      focusTerminal: () => terminal.focus(),
+      isDisposed: () => disposed,
+    });
 
-      try {
-        const isSftpAvailable = await checkSftpAvailability();
-
-        if (disposed) {
-          return;
-        }
-
-        if (!isSftpAvailable) {
-          writeTerminalNotice(t('terminal.transfer.sftpFallback', settingsRef.current.language));
-          await writeTerminalInputAsync(transferCommand.inputData);
-          return;
-        }
-
-        shouldRedrawPrompt = true;
-        if (transferCommand.needsLineClear) {
-          await writeTerminalInputAsync('\x15');
-        }
-
-        const isWindowsHost = isWindowsSystem(systemType);
-        const remoteDirectory = await resolveTerminalWorkingDirectory();
-
-        if (disposed) {
-          return;
-        }
-
-        if (transferCommand.action === 'rz') {
-          writeTerminalNotice(t('terminal.transfer.sftpUpload', settingsRef.current.language, { path: remoteDirectory }));
-          beginSftpProgress();
-          const result = await api.connections.uploadFiles(connectionId, remoteDirectory, transferOptions);
-
-          if (result.canceled) {
-            cancelSftpProgress();
-          }
-          return;
-        }
-
-        const remotePaths = transferCommand.remotePaths.map((remotePath) =>
-          joinTransferRemotePath(remoteDirectory, remotePath, isWindowsHost));
-
-        writeTerminalNotice(t('terminal.transfer.sftpDownload', settingsRef.current.language, {
-          count: String(remotePaths.length),
-        }));
-
-        beginSftpProgress();
-        const result = remotePaths.length === 1
-          ? await api.connections.downloadFile(connectionId, remotePaths[0], transferOptions)
-          : await api.connections.downloadPaths(connectionId, remotePaths, transferOptions);
-
-        if (result.canceled) {
-          cancelSftpProgress();
-        }
-      } catch (error) {
-        sftpAvailabilityRef.current = null;
-        const isAlreadyReportedByProgress = sftpTransferEndedRef.current;
-        if (sftpProgressLineLengthRef.current > 0) {
-          writeSftpProgressLine('', true);
-        }
-        cancelSftpProgress();
-        if (!isAlreadyReportedByProgress) {
-          writeTerminalNotice(t('terminal.transfer.sftpFailed', settingsRef.current.language, {
-            error: getErrorMessage(error),
-          }));
-        }
-      } finally {
-        if (shouldRedrawPrompt && !disposed && isTerminalReadyRef.current) {
-          await writeTerminalInputAsync('\r');
-        }
-        terminal.focus();
-      }
-    };
-
-    const sendZmodemBytes = (octets: number[] | Uint8Array) => {
-      const bytes = octets instanceof Uint8Array ? octets : Uint8Array.from(octets);
-
-      api.connections.writeTerminalBytes(connectionId, terminalId, bytes).catch((error: unknown) => {
-        writeTerminalNotice(t('terminal.error.sendFailed', settingsRef.current.language, {
-          error: getErrorMessage(error),
-        }));
-      });
-    };
-
-    const closeZmodemSession = async (session: Zmodem.ZmodemSession) => {
-      try {
-        await session.close();
-      } catch {
-        session.abort?.();
-      }
-    };
-
-    const sendZmodemUploadFile = async (
-      session: Zmodem.ZmodemSession,
-      file: ShellDeskZmodemUploadFile,
-      filesRemaining: number,
-      bytesRemaining: number,
-    ) => {
-      const transfer = await session.send_offer({
-        name: file.name,
-        size: file.size,
-        mtime: new Date(file.lastModified),
-        files_remaining: filesRemaining,
-        bytes_remaining: bytesRemaining,
-      });
-
-      if (!transfer) {
-        return;
-      }
-
-      let offset = transfer.get_offset();
-
-      if (file.size <= offset) {
-        await transfer.end(new Uint8Array());
-        return;
-      }
-
-      while (offset < file.size) {
-        const chunkBuffer = await api.connections.readZmodemUploadFile(
-          file.id,
-          offset,
-          Math.min(zmodemReadChunkSize, file.size - offset),
-        );
-        const chunk = new Uint8Array(chunkBuffer);
-
-        if (!chunk.byteLength) {
-          throw new Error('本地文件读取提前结束。');
-        }
-
-        offset += chunk.byteLength;
-
-        if (offset >= file.size) {
-          await transfer.end(chunk);
-        } else {
-          transfer.send(chunk);
-        }
-      }
-    };
-
-    const handleZmodemSendSession = async (session: Zmodem.ZmodemSession) => {
-      let selectedFileIds: string[] = [];
-
-      try {
-        writeTerminalNotice(t('terminal.transfer.zmodemUploadPrompt', settingsRef.current.language));
-        const selection = await api.connections.selectZmodemUploadFiles();
-
-        if (disposed) {
-          return;
-        }
-
-        if (selection.canceled || !selection.files.length) {
-          writeTerminalNotice(t('terminal.transfer.zmodemCanceled', settingsRef.current.language));
-          session.abort?.();
-          return;
-        }
-
-        selectedFileIds = selection.files.map((file) => file.id);
-        let bytesRemaining = selection.files.reduce((total, file) => total + file.size, 0);
-
-        for (let index = 0; index < selection.files.length; index += 1) {
-          const file = selection.files[index];
-
-          await sendZmodemUploadFile(
-            session,
-            file,
-            selection.files.length - index,
-            bytesRemaining,
-          );
-          bytesRemaining -= file.size;
-        }
-
-        await closeZmodemSession(session);
-        writeTerminalNotice(t('terminal.transfer.zmodemUploadDone', settingsRef.current.language));
-      } catch (error) {
-        session.abort?.();
-        writeTerminalNotice(t('terminal.transfer.zmodemFailed', settingsRef.current.language, {
-          error: getErrorMessage(error),
-        }));
-      } finally {
-        if (selectedFileIds.length) {
-          api.connections.releaseZmodemUploadFiles(selectedFileIds).catch(() => undefined);
-        }
-        terminal.focus();
-      }
-    };
-
-    const handleZmodemOffer = (offer: Zmodem.Offer) => {
-      void (async () => {
-        const details = offer.get_details();
-        const fileName = details.name || 'download';
-        const chunks: Uint8Array[] = [];
-
-        try {
-          writeTerminalNotice(t('terminal.transfer.zmodemDownloadPrompt', settingsRef.current.language, { name: fileName }));
-          await offer.accept({
-            on_input: (chunk) => {
-              chunks.push(Uint8Array.from(chunk));
-            },
-          });
-
-          const merged = mergeZmodemChunks(chunks);
-          const result = await api.connections.saveZmodemFile(fileName, merged);
-
-          if (result.canceled) {
-            writeTerminalNotice(t('terminal.transfer.zmodemCanceled', settingsRef.current.language));
-            return;
-          }
-
-          writeTerminalNotice(t('terminal.transfer.zmodemDownloadSaved', settingsRef.current.language, { name: fileName }));
-        } catch (error) {
-          try {
-            offer.skip();
-          } catch {
-            /* Ignore skip errors after an accepted transfer. */
-          }
-          writeTerminalNotice(t('terminal.transfer.zmodemFailed', settingsRef.current.language, {
-            error: getErrorMessage(error),
-          }));
-        } finally {
-          terminal.focus();
-        }
-      })();
-    };
-
-    const handleZmodemDetection = (detection: Zmodem.Detection) => {
-      try {
-        const session = detection.confirm();
-
-        zmodemSessionRef.current = session;
-        session.on('session_end', () => {
-          if (zmodemSessionRef.current === session) {
-            zmodemSessionRef.current = null;
-          }
-        });
-
-        if (session.type === 'send') {
-          void handleZmodemSendSession(session);
-          return;
-        }
-
-        session.on('offer', (offer) => handleZmodemOffer(offer as Zmodem.Offer));
-        session.start?.();
-      } catch (error) {
-        detection.deny();
-        writeTerminalNotice(t('terminal.transfer.zmodemFailed', settingsRef.current.language, {
-          error: getErrorMessage(error),
-        }));
-      }
-    };
-
-    const terminalOutputDecoder = new TextDecoder();
-    const writeTerminalOutputBytes = (octets: number[]) => {
-      const text = terminalOutputDecoder.decode(Uint8Array.from(octets), { stream: true });
-
-      if (!text) {
-        return;
-      }
-
-      terminal.write(text, () => {
-        if (followOutputRef.current) {
-          terminal.scrollToBottom();
-        }
-      });
-    };
-
-    const zmodemSentry = new Zmodem.Sentry({
-      to_terminal: writeTerminalOutputBytes,
-      sender: sendZmodemBytes,
-      on_detect: handleZmodemDetection,
-      on_retract: () => undefined,
+    const zmodemSentry = createZmodemSentry({
+      api,
+      connectionId,
+      terminalId,
+      terminal,
+      settingsRef,
+      followOutputRef,
+      zmodemSessionRef,
+      isDisposed: () => disposed,
+      writeTerminalNotice,
     });
 
     zmodemSentryRef.current = zmodemSentry;
@@ -1931,8 +783,7 @@ function RemoteTerminal({
       window.cancelAnimationFrame(animationFrame);
       resizeObserver?.disconnect();
       inputDisposable.dispose();
-      selectionDisposable.dispose();
-      searchResultDisposable.dispose();
+      detachTerminalInteractions();
       removeTerminalData();
       removeTerminalExit();
       removeConnectionClosed();
@@ -1952,7 +803,6 @@ function RemoteTerminal({
       zmodemSessionRef.current?.abort?.();
       zmodemSessionRef.current = null;
       zmodemSentryRef.current = null;
-      host.removeEventListener('contextmenu', handleTerminalContextMenu);
       terminal.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
@@ -1963,250 +813,60 @@ function RemoteTerminal({
     };
   }, [connectionId, emitSessionEvent, localWindowsPty, terminalId]);
 
-  useEffect(() => {
-    if (!commandRequest || handledCommandRequestRef.current === commandRequest.id || sessionStatus !== 'running') {
-      return;
-    }
-
-    const terminal = terminalRef.current;
-
-    if (!terminal) {
-      return;
-    }
-
-    handledCommandRequestRef.current = commandRequest.id;
-    terminal.focus();
-
-    if (commandRequest.mode === 'insert') {
-      terminal.paste(commandRequest.command);
-    } else {
-      sendInputRef.current?.(`${commandRequest.command}\r`);
-
-      if (isLikelyForegroundCommand(commandRequest.command)) {
-        foregroundTaskSourceRef.current = 'command';
-        setHasForegroundTask(true);
-      }
-
-      emitSessionEvent({
-        type: 'terminal-command',
-        command: commandRequest.command,
-        source: commandRequest.source ?? 'external',
-      });
-    }
-
-    onCommandRequestHandled?.(commandRequest.id);
-  }, [commandRequest, emitSessionEvent, onCommandRequestHandled, sessionStatus]);
-
-  useEffect(() => {
-    if (!toolRequest || handledToolRequestRef.current === toolRequest.id) {
-      return;
-    }
-
-    handledToolRequestRef.current = toolRequest.id;
-
-    switch (toolRequest.action) {
-      case 'new-terminal':
-        openLaunchDialog();
-        break;
-      case 'search':
-        setShowSearch(true);
-        break;
-      case 'clear':
-        clearTerminal();
-        break;
-      case 'toggle-follow':
-        toggleFollowOutput();
-        break;
-      case 'scroll-bottom':
-        scrollTerminalToBottom();
-        break;
-      case 'restart':
-        restartTerminalRef.current?.();
-        break;
-      case 'settings':
-        setIsSettingsDialogOpen(true);
-        break;
-    }
-
-    onToolRequestHandled?.(toolRequest.id);
-  }, [
-    clearTerminal,
+  useTerminalExternalRequests({
+    commandRequest,
+    toolRequest,
+    sessionStatus,
+    terminalRef,
+    sendInputRef,
+    foregroundTaskSourceRef,
+    handledCommandRequestRef,
+    handledToolRequestRef,
+    setHasForegroundTask,
+    emitSessionEvent,
+    onCommandRequestHandled,
     onToolRequestHandled,
     openLaunchDialog,
-    scrollTerminalToBottom,
+    clearTerminal,
     toggleFollowOutput,
-    toolRequest,
-  ]);
+    scrollTerminalToBottom,
+    restartTerminal: () => restartTerminalRef.current?.(),
+    openSettingsDialog: () => setIsSettingsDialogOpen(true),
+    openSearch: () => setShowSearch(true),
+  });
 
   return (
-    <div className="terminal-pane xterm-terminal-pane" style={terminalPaneStyle}>
-      {showSearch ? (
-        <div className="terminal-searchbar">
-          <input
-            ref={searchInputRef}
-            value={searchQuery}
-            onChange={(event) => {
-              setSearchQuery(event.target.value);
-              searchTerminal('next', event.target.value);
-            }}
-            onKeyDown={handleSearchKeyDown}
-            placeholder={t('terminal.search.placeholder', settings.language)}
-            spellCheck={false}
-          />
-          <span>{searchResults.count ? `${Math.max(searchResults.index + 1, 0)} / ${searchResults.count}` : '0 / 0'}</span>
-          <button type="button" onClick={() => searchTerminal('previous')} aria-label={t('terminal.search.previous', settings.language)} title={t('terminal.search.previous', settings.language)}>↑</button>
-          <button type="button" onClick={() => searchTerminal('next')} aria-label={t('terminal.search.next', settings.language)} title={t('terminal.search.next', settings.language)}>↓</button>
-          <button type="button" onClick={closeSearch} aria-label={t('terminal.search.close', settings.language)} title={t('terminal.search.close', settings.language)}>×</button>
-        </div>
-      ) : null}
-
-      <div ref={terminalHostRef} className="terminal-host" />
-
-      {contextMenu ? createPortal(
-        <>
-          <div className="context-menu-overlay" onClick={() => setContextMenu(null)} onContextMenu={(event) => { event.preventDefault(); setContextMenu(null); }} />
-          <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu">
-            <button type="button" role="menuitem" onClick={() => { writeClipboardText(contextMenu.selection); setContextMenu(null); }}>
-              {t('terminal.context.copy', settings.language)}
-            </button>
-            <button type="button" role="menuitem" onClick={() => { writeClipboardText(formatTroubleshootingSnippet(contextMenu.selection)); setContextMenu(null); }}>
-              {t('terminal.context.copyTroubleshooting', settings.language)}
-            </button>
-            {onOpenNote ? (
-              <button type="button" role="menuitem" onClick={() => {
-                onOpenNote({
-                  title: t('terminal.context.snippetTitle', settings.language, { time: new Date().toLocaleTimeString(getShellDeskLocale()) }),
-                  content: contextMenu.selection,
-                });
-                setContextMenu(null);
-              }}>
-                {t('terminal.context.sendToNotepad', settings.language)}
-              </button>
-            ) : null}
-          </div>
-        </>,
-        document.body,
-      ) : null}
-
-      {isLaunchDialogOpen ? createPortal(
-        <div className="notepad-modal-overlay" role="presentation" onClick={() => setIsLaunchDialogOpen(false)}>
-          <form
-            className="notepad-modal terminal-launch-dialog"
-            onSubmit={submitLaunchDialog}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="notepad-modal-title">{t('terminal.launch.title', settings.language)}</div>
-            <label>
-              <span>{t('terminal.launch.fieldTitle', settings.language)}</span>
-              <input
-                className="notepad-modal-input"
-                value={launchDraft.title}
-                onChange={(event) => setLaunchDraft((currentDraft) => ({ ...currentDraft, title: event.target.value }))}
-                placeholder="SSH Shell"
-              />
-            </label>
-            <label>
-              <span>Shell</span>
-              <select
-                className="notepad-modal-input"
-                value={launchDraft.shell}
-                onChange={(event) => setLaunchDraft((currentDraft) => ({ ...currentDraft, shell: event.target.value }))}
-              >
-                {shellChoices.map((shellChoice) => (
-                  <option key={shellChoice || 'default'} value={shellChoice}>
-                    {shellChoice || t('terminal.launch.defaultShell', settings.language)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>{t('terminal.launch.workingDirectory', settings.language)}</span>
-              <input
-                className="notepad-modal-input"
-                value={launchDraft.workingDirectory}
-                onChange={(event) => setLaunchDraft((currentDraft) => ({ ...currentDraft, workingDirectory: event.target.value }))}
-                placeholder={isWindowsSystem(systemType) ? 'C:/Users' : '/srv/app'}
-              />
-            </label>
-            <label>
-              <span>{t('terminal.launch.initialCommand', settings.language)}</span>
-              <textarea
-                value={launchDraft.initialCommand}
-                onChange={(event) => setLaunchDraft((currentDraft) => ({ ...currentDraft, initialCommand: event.target.value }))}
-                placeholder="uname -a"
-              />
-            </label>
-            <div className="notepad-modal-actions">
-              <button type="button" className="notepad-modal-btn" onClick={() => setIsLaunchDialogOpen(false)}>{t('common.cancel', settings.language)}</button>
-              <button type="submit" className="notepad-modal-btn primary">{t('common.open', settings.language)}</button>
-            </div>
-          </form>
-        </div>,
-        document.body,
-      ) : null}
-
-      {isSettingsDialogOpen ? createPortal(
-        <div className="notepad-modal-overlay" role="presentation" onClick={() => setIsSettingsDialogOpen(false)}>
-          <div className="notepad-modal terminal-settings-dialog" onClick={(event) => event.stopPropagation()}>
-            <div className="notepad-modal-title">{t('terminal.settingsDialog.title', settings.language)}</div>
-            <label>
-              <span>{t('terminal.settingsDialog.colorTheme', settings.language)}</span>
-              <select
-                className="notepad-modal-input"
-                value={settings.terminalTheme}
-                onChange={(event) => updateTerminalSetting('terminalTheme', event.target.value as ShellDeskAppSettings['terminalTheme'])}
-              >
-                {terminalThemeChoices.map((themeChoice) => (
-                  <option key={themeChoice.key} value={themeChoice.key}>{t(themeChoice.labelId, settings.language)}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>{t('terminal.settingsDialog.fontSize', settings.language)}</span>
-              <select
-                className="notepad-modal-input"
-                value={settings.terminalFontSize}
-                onChange={(event) => updateTerminalSetting('terminalFontSize', Number(event.target.value))}
-              >
-                {[11, 12, 13, 14, 15, 16, 18, 20].map((fontSize) => (
-                  <option key={fontSize} value={fontSize}>{fontSize}px</option>
-                ))}
-              </select>
-            </label>
-            <div className="terminal-settings-toggles">
-              <label>
-                <span>{t('terminal.settingsDialog.copyOnSelect', settings.language)}</span>
-                <input
-                  type="checkbox"
-                  checked={settings.terminalCopyOnSelect}
-                  onChange={(event) => updateTerminalSetting('terminalCopyOnSelect', event.target.checked)}
-                />
-              </label>
-              <label>
-                <span>{t('terminal.settingsDialog.rightClickPaste', settings.language)}</span>
-                <input
-                  type="checkbox"
-                  checked={settings.terminalRightClickPaste}
-                  onChange={(event) => updateTerminalSetting('terminalRightClickPaste', event.target.checked)}
-                />
-              </label>
-              <label>
-                <span>{t('terminal.settingsDialog.cursorBlink', settings.language)}</span>
-                <input
-                  type="checkbox"
-                  checked={settings.terminalCursorBlink}
-                  onChange={(event) => updateTerminalSetting('terminalCursorBlink', event.target.checked)}
-                />
-              </label>
-            </div>
-            <div className="notepad-modal-actions">
-              <button type="button" className="notepad-modal-btn primary" onClick={() => setIsSettingsDialogOpen(false)}>{t('terminal.settingsDialog.done', settings.language)}</button>
-            </div>
-          </div>
-        </div>,
-        document.body,
-      ) : null}
-    </div>
+    <TerminalPaneView
+      terminalPaneStyle={terminalPaneStyle}
+      terminalHostRef={terminalHostRef}
+      settings={settings}
+      showSearch={showSearch}
+      searchInputRef={searchInputRef}
+      searchQuery={searchQuery}
+      searchResults={searchResults}
+      contextMenu={contextMenu}
+      isLaunchDialogOpen={isLaunchDialogOpen}
+      isSettingsDialogOpen={isSettingsDialogOpen}
+      launchDraft={launchDraft}
+      shellChoices={shellChoices}
+      systemType={systemType}
+      onSearchQueryChange={(query) => {
+        setSearchQuery(query);
+        searchTerminal('next', query);
+      }}
+      onSearchKeyDown={handleSearchKeyDown}
+      onSearchPrevious={() => searchTerminal('previous')}
+      onSearchNext={() => searchTerminal('next')}
+      onSearchClose={closeSearch}
+      onContextMenuClose={() => setContextMenu(null)}
+      onContextMenuCopy={writeClipboardText}
+      onOpenNote={onOpenNote}
+      onLaunchDialogClose={() => setIsLaunchDialogOpen(false)}
+      onLaunchSubmit={submitLaunchDialog}
+      onLaunchDraftChange={setLaunchDraft}
+      onSettingsDialogClose={() => setIsSettingsDialogOpen(false)}
+      onSettingChange={updateTerminalSetting}
+    />
   );
 }
 
