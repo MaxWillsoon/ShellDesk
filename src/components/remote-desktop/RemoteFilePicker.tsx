@@ -9,6 +9,7 @@ import { createPortal } from 'react-dom';
 
 import { formatDateTime, getErrorMessage } from './desktopUtils';
 import DismissibleAlert from './DismissibleAlert';
+import { formatBytes as formatSharedBytes } from './parseUtils';
 import { isWindowsSystem } from './remoteSystem';
 import type { RemoteSystemType } from './types';
 import {
@@ -40,17 +41,7 @@ export interface RemoteFilePickerProps {
   onCancel: () => void;
 }
 
-function formatBytes(size: number) {
-  if (!Number.isFinite(size) || size < 0) return '-';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let value = size;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
-}
+const formatBytes = (size: number) => formatSharedBytes(size, { invalidText: '-', maxUnit: 'TB', fixedDecimal: true });
 
 function getFileIcon(entry: RemoteFileEntry) {
   if (isDirectoryEntry(entry)) return '\u{1F4C1}';

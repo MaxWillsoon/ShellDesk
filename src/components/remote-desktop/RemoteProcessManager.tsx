@@ -5,6 +5,7 @@ import DismissibleAlert from './DismissibleAlert';
 import { t, translateStructuredText, type AppLanguage, type MessageId } from '../../i18n';
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import MarkdownReport from './MarkdownReport';
+import { clampPercent, readInteger, readNumber } from './parseUtils';
 import { isWindowsSystem, powershellCommand, powershellStdinCommand } from './remoteSystem';
 import { useSudoCommand } from './sudoPrompt';
 import type { RemoteSystemType } from './types';
@@ -150,40 +151,6 @@ function getProcessContextMenuPosition(clientX: number, clientY: number) {
     x: Math.min(Math.max(edgePadding, clientX), maxX),
     y: Math.min(Math.max(edgePadding, clientY), maxY),
   };
-}
-
-function readInteger(value: string | number | undefined | null) {
-  if (typeof value === 'number' && Number.isInteger(value)) {
-    return value;
-  }
-
-  if (typeof value !== 'string') {
-    return undefined;
-  }
-
-  const parsedValue = Number.parseInt(value, 10);
-  return Number.isInteger(parsedValue) ? parsedValue : undefined;
-}
-
-function readNumber(value: string | number | undefined | null) {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value;
-  }
-
-  if (typeof value !== 'string' || !value.trim() || value === '-') {
-    return undefined;
-  }
-
-  const parsedValue = Number.parseFloat(value);
-  return Number.isFinite(parsedValue) ? parsedValue : undefined;
-}
-
-function clampPercent(value: number | undefined) {
-  if (value === undefined) {
-    return 0;
-  }
-
-  return Math.min(Math.max(value, 0), 100);
 }
 
 function formatMetric(value: number | undefined, suffix = '') {

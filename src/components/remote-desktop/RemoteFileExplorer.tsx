@@ -15,6 +15,7 @@ import { t, useCurrentAppLanguage, type AppLanguage, type MessageId } from '../.
 import ContextMenuIcon from './ContextMenuIcon';
 import { formatDateTime, getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import DismissibleAlert from './DismissibleAlert';
+import { formatBytes as formatSharedBytes } from './parseUtils';
 import { isWindowsSystem, powershellCommand } from './remoteSystem';
 import { isTextFile } from './textFileUtils';
 import { clearCachedSudoPassword, getCachedSudoOptions, setCachedSudoPassword } from './sudoPrompt';
@@ -367,22 +368,7 @@ export function getParentRemotePath(remotePath: string, isWindowsHost = false) {
   return normalized.slice(0, slashIndex);
 }
 
-function formatBytes(size: number) {
-  if (!Number.isFinite(size) || size < 0) {
-    return '-';
-  }
-
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let value = size;
-  let unitIndex = 0;
-
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-
-  return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
-}
+const formatBytes = (size: number) => formatSharedBytes(size, { invalidText: '-', maxUnit: 'TB', fixedDecimal: true });
 
 function getFileExtension(name: string) {
   const dotIndex = name.lastIndexOf('.');

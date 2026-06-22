@@ -4,7 +4,9 @@ import DismissibleAlert from './DismissibleAlert';
 
 import { t, useCurrentAppLanguage, type AppLanguage, type MessageId } from '../../i18n';
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
+import { readNumber, readString } from './parseUtils';
 import { isWindowsSystem, powershellCommand, powershellSingleQuote } from './remoteSystem';
+import { shellSingleQuote } from './shellUtils';
 import { useSudoCommand } from './sudoPrompt';
 import type { RemoteSystemType } from './types';
 
@@ -201,68 +203,12 @@ function createDefaultConfigForm(): ContainerConfigForm {
   };
 }
 
-function shellSingleQuote(value: string) {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
 function toRecord(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return undefined;
   }
 
   return value as Record<string, unknown>;
-}
-
-function readString(record: Record<string, unknown> | undefined, ...keys: string[]) {
-  if (!record) {
-    return '';
-  }
-
-  for (const key of keys) {
-    const value = record[key];
-
-    if (typeof value === 'string') {
-      return value.trim();
-    }
-
-    if (typeof value === 'number' || typeof value === 'boolean') {
-      return String(value);
-    }
-
-    if (Array.isArray(value)) {
-      return value
-        .filter((item) => item !== undefined && item !== null)
-        .map((item) => String(item).trim())
-        .filter(Boolean)
-        .join(', ');
-    }
-  }
-
-  return '';
-}
-
-function readNumber(record: Record<string, unknown> | undefined, ...keys: string[]) {
-  if (!record) {
-    return undefined;
-  }
-
-  for (const key of keys) {
-    const value = record[key];
-
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      return value;
-    }
-
-    if (typeof value === 'string') {
-      const parsedValue = Number(value);
-
-      if (Number.isFinite(parsedValue)) {
-        return parsedValue;
-      }
-    }
-  }
-
-  return undefined;
 }
 
 function formatInspectValue(value: unknown) {

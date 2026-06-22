@@ -4,6 +4,7 @@ import DismissibleAlert from './DismissibleAlert';
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import { isWindowsSystem, powershellStdinCommand } from './remoteSystem';
 import type { RemoteProcessManagerLaunchOptions } from './RemoteProcessManager';
+import { shellSingleQuote } from './shellUtils';
 import { useSudoCommand } from './sudoPrompt';
 import type { RemoteSystemType } from './types';
 import { tCurrent } from '../../i18n';
@@ -38,10 +39,6 @@ interface EndpointParts {
 }
 
 const portToolMarker = '__SHELLDESK_PORT_TOOL__';
-
-function shellSingleQuote(value: string) {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
 
 function parseMaybeNumber(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) {

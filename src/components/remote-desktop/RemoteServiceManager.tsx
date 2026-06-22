@@ -4,7 +4,9 @@ import DismissibleAlert from './DismissibleAlert';
 import { useSudoCommand } from './sudoPrompt';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
+import { formatBytes, readInteger, readString } from './parseUtils';
 import { isWindowsSystem, powershellCommand, powershellSingleQuote } from './remoteSystem';
+import { shellSingleQuote } from './shellUtils';
 import type { RemoteSystemType } from './types';
 import { tCurrent, useCurrentAppLanguage, type MessageId } from '../../i18n';
 
@@ -87,41 +89,8 @@ const activeStateOrder: Record<RemoteServiceActiveState, number> = {
   unknown: 5,
 };
 
-function shellSingleQuote(value: string) {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
 function stripServiceSuffix(name: string) {
   return name.endsWith('.service') ? name.slice(0, -8) : name;
-}
-
-function readInteger(value: unknown) {
-  if (typeof value === 'number' && Number.isInteger(value)) {
-    return value;
-  }
-
-  if (typeof value !== 'string' || !value.trim()) {
-    return undefined;
-  }
-
-  const parsedValue = Number.parseInt(value, 10);
-  return Number.isInteger(parsedValue) ? parsedValue : undefined;
-}
-
-function readString(record: Record<string, unknown>, ...keys: string[]) {
-  for (const key of keys) {
-    const value = record[key];
-
-    if (typeof value === 'string') {
-      return value.trim();
-    }
-
-    if (typeof value === 'number' || typeof value === 'boolean') {
-      return String(value);
-    }
-  }
-
-  return '';
 }
 
 function normalizeActiveState(value: unknown): RemoteServiceActiveState {
@@ -212,24 +181,6 @@ function getEnabledStateTone(state?: RemoteServiceEnabledState) {
   return 'unknown';
 }
 
-function formatBytes(value: number) {
-  if (!Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let nextValue = value;
-  let unitIndex = 0;
-
-  while (nextValue >= 1024 && unitIndex < units.length - 1) {
-    nextValue /= 1024;
-    unitIndex += 1;
-  }
-
-  const precision = nextValue >= 100 ? 0 : nextValue >= 10 ? 1 : 2;
-  return `${nextValue.toFixed(precision).replace(/\.0+$/, '')} ${units[unitIndex]}`;
-}
-
 function formatSystemdMemory(value: string | undefined) {
   if (!value || value === '[not set]') {
     return undefined;
@@ -241,7 +192,7 @@ function formatSystemdMemory(value: string | undefined) {
     return undefined;
   }
 
-  return formatBytes(bytes);
+  return formatBytes(bytes, { maxUnit: 'TB' });
 }
 
 function cleanTimestamp(value: string | undefined) {

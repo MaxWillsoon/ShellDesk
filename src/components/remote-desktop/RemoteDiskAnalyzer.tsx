@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import DismissibleAlert from './DismissibleAlert';
 
 import { getErrorMessage } from './desktopUtils';
+import { formatBytes, readNumber, readString } from './parseUtils';
 import { isWindowsSystem, powershellCommand, powershellSingleQuote } from './remoteSystem';
+import { shellSingleQuote } from './shellUtils';
 import { useSudoCommand } from './sudoPrompt';
 import type { RemoteSystemType } from './types';
 import { tCurrent } from '../../i18n';
@@ -36,28 +38,6 @@ type DiskPanel = 'children' | 'large';
 const duMarker = '__SHELLDESK_DU__';
 const metaMarker = '__SHELLDESK_DU_META__';
 const diskAnalyzerDiagnosticMarker = '__SHELLDESK_DISK_ANALYZER_DIAGNOSTICS__';
-
-function shellSingleQuote(value: string) {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
-function formatBytes(bytes: number) {
-  if (!Number.isFinite(bytes) || bytes <= 0) {
-    return '0 B';
-  }
-
-  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-  let value = bytes;
-  let unitIndex = 0;
-
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-
-  const precision = value >= 100 ? 0 : value >= 10 ? 1 : 2;
-  return `${value.toFixed(precision).replace(/\.0+$/, '')} ${units[unitIndex]}`;
-}
 
 function getBaseName(path: string) {
   const normalizedPath = path.replace(/\\/g, '/').replace(/\/+$/, '');
@@ -119,31 +99,6 @@ function toRecord(value: unknown): Record<string, unknown> | undefined {
   return undefined;
 }
 
-function readString(record: Record<string, unknown>, ...keys: string[]) {
-  for (const key of keys) {
-    const value = record[key];
-
-    if (typeof value === 'string') return value.trim();
-    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  }
-
-  return '';
-}
-
-function readNumber(record: Record<string, unknown>, ...keys: string[]) {
-  for (const key of keys) {
-    const value = record[key];
-
-    if (typeof value === 'number' && Number.isFinite(value)) return value;
-    if (typeof value === 'string' && value.trim()) {
-      const parsedValue = Number.parseFloat(value);
-      if (Number.isFinite(parsedValue)) return parsedValue;
-    }
-  }
-
-  return 0;
-}
-
 function parseJsonRows(stdout: string): Record<string, unknown>[] {
   const trimmedText = stdout.trim();
 
@@ -159,8 +114,8 @@ function parseJsonRows(stdout: string): Record<string, unknown>[] {
 
 function parseWindowsMounts(stdout: string): DiskUsageMount[] {
   return parseJsonRows(stdout).map((record) => {
-    const used = readNumber(record, 'Used');
-    const free = readNumber(record, 'Free');
+    const used = readNumber(record, 'Used') ?? 0;
+    const free = readNumber(record, 'Free') ?? 0;
     const total = used + free;
 
     return {
@@ -329,7 +284,7 @@ function parseUnixScan(stdout: string, currentPath: string): { entries: Director
 function parseWindowsScan(stdout: string): DirectorySizeEntry[] {
   return parseJsonRows(stdout)
     .map((record) => {
-      const sizeBytes = readNumber(record, 'SizeBytes');
+      const sizeBytes = readNumber(record, 'SizeBytes') ?? 0;
       const path = readString(record, 'Path');
       return {
         path,
@@ -424,7 +379,7 @@ function parseWindowsLargeFiles(stdout: string): DirectorySizeEntry[] {
   return parseJsonRows(stdout)
     .map((record) => {
       const path = readString(record, 'Path');
-      const sizeBytes = readNumber(record, 'SizeBytes');
+      const sizeBytes = readNumber(record, 'SizeBytes') ?? 0;
       return {
         path,
         name: readString(record, 'Name') || getBaseName(path),
