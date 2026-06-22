@@ -1,7 +1,6 @@
 import {
   lazy,
   Suspense,
-  type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   useCallback,
   useEffect,
@@ -11,301 +10,41 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 
-import { t, translateStructuredText, type AppLanguage, type MessageId } from '../../i18n';
+import { t, type AppLanguage } from '../../i18n';
 import { getErrorMessage } from './desktopUtils';
+import NotepadAiPanel from './NotepadAiPanel';
 import type { NotepadEditorHandle } from './NotepadEditor';
+import { buildDiffPreview, NotepadDiffPreview } from './notepadDiff';
+import {
+  getLanguage,
+  LANGUAGE_OPTIONS,
+  MAX_INTERACTIVE_LANGUAGE_DETECTION_CHARACTERS,
+  normalizeLanguage,
+} from './notepadLanguageDetection';
+import NotepadModals from './NotepadModals';
+import type {
+  EditorSelectionSnapshot,
+  NotepadAiAction,
+  NotepadConflictDialog,
+  NotepadDiffDialog,
+  NotepadSudoOperation,
+  NotepadSudoPrompt,
+  NotepadTab,
+  RemoteNotepadProps,
+  SaveOptions,
+} from './notepadTypes';
 import RemoteFilePicker from './RemoteFilePicker';
 import { clearCachedSudoPassword, getCachedSudoOptions, setCachedSudoPassword } from './sudoPrompt';
-import { getFileExtension, isTextFile } from './textFileUtils';
-import type { RemoteSystemType } from './types';
+import { isTextFile } from './textFileUtils';
 
 const NotepadEditor = lazy(() => import('./NotepadEditor'));
-
-interface NotepadTab {
-  id: string;
-  filePath?: string;
-  title: string;
-  content: string;
-  originalContent: string;
-  dirty: boolean;
-  readOnly: boolean;
-  revisionHint?: string;
-  language: string;
-  languageManuallySet: boolean;
-  isLoading: boolean;
-  isSaving: boolean;
-  error: string;
-}
-
-interface RemoteNotepadProps {
-  connectionId: string;
-  settings: ShellDeskAppSettings;
-  initialFilePath?: string;
-  initialContent?: string;
-  initialTitle?: string;
-  openFileRequest?: NotepadOpenFileRequest;
-  systemType?: RemoteSystemType;
-}
-
-interface NotepadOpenFileRequest {
-  id: string;
-  filePath: string;
-}
-
-interface SaveOptions {
-  closeAfterSave?: boolean;
-  force?: boolean;
-}
-
-interface NotepadConflictDialog {
-  tabId: string;
-  title: string;
-  filePath: string;
-  remoteContent?: string;
-  remoteRevisionHint?: string;
-  readError?: string;
-  closeAfterSave: boolean;
-}
-
-interface NotepadDiffDialog {
-  tabId: string;
-  title: string;
-  beforeLabel: string;
-  beforeContent: string;
-  afterLabel: string;
-  afterContent: string;
-}
-
-type NotepadSudoOperation = 'read' | 'save';
-
-interface NotepadSudoPrompt {
-  operation: NotepadSudoOperation;
-  filePath: string;
-  error: string;
-  password: string;
-}
-
-interface DiffPreviewLine {
-  kind: 'context' | 'added' | 'removed' | 'meta';
-  text: string;
-}
-
-interface DiffPreview {
-  lines: DiffPreviewLine[];
-  truncated: boolean;
-}
-
-type NotepadAiMessageRole = 'user' | 'assistant' | 'tool';
-
-type NotepadAiAction =
-  | {
-      type: 'replace_content' | 'append_content' | 'insert_at_cursor' | 'replace_selection';
-      content: string;
-      summary?: string;
-    }
-  | {
-      type: 'run_command';
-      command: string;
-      reason?: string;
-    };
-
-interface NotepadAiMessage {
-  id: string;
-  role: NotepadAiMessageRole;
-  content: string;
-  createdAt: string;
-  action?: NotepadAiAction;
-  actionApplied?: boolean;
-}
-
-interface EditorSelectionSnapshot {
-  start: number;
-  end: number;
-  text: string;
-}
-
-const EXTENSION_LANGUAGE_MAP: Record<string, string> = {
-  js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
-  ts: 'typescript', tsx: 'typescript', mts: 'typescript', cts: 'typescript',
-  py: 'python', pyw: 'python', pyi: 'python',
-  html: 'html', htm: 'html', xhtml: 'html', svg: 'xml', xml: 'xml', vue: 'xml', svelte: 'html',
-  css: 'css', scss: 'css', sass: 'css', less: 'css', styl: 'css', stylus: 'css', pcss: 'css', postcss: 'css',
-  json: 'json', jsonc: 'json', json5: 'json',
-  sh: 'bash', bash: 'bash', zsh: 'bash', fish: 'bash', ksh: 'bash', csh: 'bash', tcsh: 'bash',
-  ps1: 'powershell', psm1: 'powershell', psd1: 'powershell',
-  yaml: 'yaml', yml: 'yaml',
-  md: 'markdown', markdown: 'markdown', mdx: 'markdown',
-  sql: 'sql', graphql: 'sql', gql: 'sql', prisma: 'sql',
-  go: 'go',
-  rs: 'rust',
-  java: 'java',
-  c: 'c', h: 'c',
-  cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp', hxx: 'cpp',
-  php: 'php',
-  rb: 'ruby',
-  swift: 'swift',
-  kt: 'kotlin', kts: 'kotlin',
-  scala: 'scala',
-  lua: 'lua',
-  pl: 'perl', pm: 'perl',
-  r: 'r',
-  dart: 'dart',
-  zig: 'zig',
-  nim: 'nim',
-  ex: 'elixir', exs: 'elixir',
-  erl: 'erlang', hrl: 'erlang',
-  hs: 'haskell', lhs: 'haskell',
-  ml: 'ocaml', mli: 'ocaml',
-  clj: 'clojure', cljs: 'clojure',
-  lisp: 'lisp', el: 'lisp',
-  jl: 'julia',
-  ini: 'ini', cfg: 'ini', conf: 'ini', env: 'ini', cnf: 'ini',
-  toml: 'ini',
-  nginx: 'nginx',
-  dockerfile: 'dockerfile',
-  diff: 'diff', patch: 'diff',
-  tex: 'latex', cls: 'latex', sty: 'latex', bib: 'bibtex', bibtex: 'bibtex',
-  bat: 'bat', cmd: 'bat',
-  properties: 'properties',
-};
-
-const LANGUAGE_OPTIONS: Array<{ value: string; label?: string; labelId?: MessageId }> = [
-  { value: 'plaintext', labelId: 'notepad.language.plaintext' },
-  { value: 'javascript', label: 'JavaScript' },
-  { value: 'typescript', label: 'TypeScript' },
-  { value: 'html', label: 'HTML' },
-  { value: 'xml', label: 'XML' },
-  { value: 'css', label: 'CSS / SCSS' },
-  { value: 'json', label: 'JSON' },
-  { value: 'yaml', label: 'YAML' },
-  { value: 'bash', label: 'Shell' },
-  { value: 'markdown', label: 'Markdown' },
-  { value: 'sql', label: 'SQL' },
-  { value: 'python', label: 'Python' },
-  { value: 'go', label: 'Go' },
-  { value: 'rust', label: 'Rust' },
-  { value: 'java', label: 'Java' },
-  { value: 'c', label: 'C' },
-  { value: 'cpp', label: 'C++' },
-  { value: 'php', label: 'PHP' },
-  { value: 'ruby', label: 'Ruby' },
-  { value: 'ini', label: 'INI / TOML' },
-  { value: 'nginx', label: 'Nginx' },
-  { value: 'dockerfile', label: 'Dockerfile' },
-  { value: 'diff', label: 'Diff' },
-];
-
-const LANGUAGE_OPTION_VALUES = new Set(LANGUAGE_OPTIONS.map((language) => language.value));
-const MAX_DIFF_INPUT_LINES = 180;
-const MAX_DIFF_OUTPUT_LINES = 280;
-const MAX_LANGUAGE_DETECTION_CHARACTERS = 24000;
-const MAX_INTERACTIVE_LANGUAGE_DETECTION_CHARACTERS = 12000;
-const MAX_AI_FILE_CONTEXT_CHARACTERS = 480000;
-const MAX_AI_FILE_CONTEXT_CHUNK_CHARACTERS = 60000;
-const MAX_AI_SELECTION_CHARACTERS = 6000;
-const MAX_AI_ENVIRONMENT_CHARACTERS = 12000;
-const MAX_AI_COMMAND_OUTPUT_CHARACTERS = 12000;
-const MAX_AI_HISTORY_MESSAGES = 14;
 const elevationRequiredPrefix = 'SHELLDESK_ELEVATION_REQUIRED:';
 const elevationAuthFailedPrefix = 'SHELLDESK_ELEVATION_AUTH_FAILED:';
-
-function normalizeLanguage(language?: string): string {
-  if (language && LANGUAGE_OPTION_VALUES.has(language)) {
-    return language;
-  }
-
-  return 'plaintext';
-}
 
 function getPreferredLightTheme() {
   return typeof window !== 'undefined'
     && typeof window.matchMedia === 'function'
     && window.matchMedia('(prefers-color-scheme: light)').matches;
-}
-
-function getFileNameLanguage(fileName: string): string {
-  const ext = getFileExtension(fileName);
-  if (EXTENSION_LANGUAGE_MAP[ext]) return normalizeLanguage(EXTENSION_LANGUAGE_MAP[ext]);
-  if (fileName === 'Makefile' || fileName === 'makefile') return 'plaintext';
-  if (fileName === 'Dockerfile') return 'dockerfile';
-  if (fileName === '.env') return 'ini';
-  if (fileName === '.gitignore' || fileName === '.editorconfig') return 'plaintext';
-  if (fileName.startsWith('nginx')) return 'nginx';
-  return 'plaintext';
-}
-
-function getShebangLanguage(firstLine: string): string {
-  if (!firstLine.startsWith('#!')) {
-    return 'plaintext';
-  }
-
-  if (/\b(ts-node|deno)\b/iu.test(firstLine)) return 'typescript';
-  if (/\b(node|bun)\b/iu.test(firstLine)) return 'javascript';
-  if (/\bpython\d*\b/iu.test(firstLine)) return 'python';
-  if (/\b(bash|sh|zsh|fish|ksh)\b/iu.test(firstLine)) return 'bash';
-  if (/\bruby\b/iu.test(firstLine)) return 'ruby';
-  if (/\bphp\b/iu.test(firstLine)) return 'php';
-  return 'plaintext';
-}
-
-function looksLikeJson(content: string): boolean {
-  const trimmedContent = content.trim();
-  if (!/^[{\[]/u.test(trimmedContent) || !/[\}\]]$/u.test(trimmedContent)) {
-    return false;
-  }
-
-  try {
-    JSON.parse(trimmedContent);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function detectLanguageFromContent(content: string): string {
-  const sample = content.slice(0, MAX_LANGUAGE_DETECTION_CHARACTERS);
-  const trimmed = sample.trim();
-
-  if (trimmed.length < 3) {
-    return 'plaintext';
-  }
-
-  const firstLine = trimmed.split(/\r?\n/u, 1)[0] ?? '';
-  const shebangLanguage = getShebangLanguage(firstLine);
-  if (shebangLanguage !== 'plaintext') return shebangLanguage;
-  if (/^(diff --git|@@\s|---\s|\+\+\+\s)/mu.test(trimmed)) return 'diff';
-  if (/^<!doctype\s+html\b|<html[\s>]/iu.test(trimmed)) return 'html';
-  if (/^<\?xml\b|<svg[\s>]/iu.test(trimmed)) return 'xml';
-  if (/^<\?php\b|<\?=/iu.test(trimmed)) return 'php';
-  if (looksLikeJson(trimmed)) return 'json';
-  if (/^(FROM|RUN|COPY|ADD|ENTRYPOINT|CMD|ARG|ENV|WORKDIR|EXPOSE)\s+/imu.test(trimmed)) return 'dockerfile';
-  if (/\b(server|location|upstream)\s+[^{;\n]*\{/iu.test(trimmed)) return 'nginx';
-  if (/^#{1,6}\s+\S/mu.test(trimmed) || /```[\s\S]*?```/u.test(trimmed)) return 'markdown';
-  if (/^\s*---\s*$/mu.test(trimmed) && /^\s*[\w.-]+:\s+\S/mu.test(trimmed)) return 'yaml';
-  if (/^\s*\[[^\]\n]+\]\s*$/mu.test(trimmed) && /^\s*[\w.-]+\s*=\s*.+$/mu.test(trimmed)) return 'ini';
-  if (/\b(SELECT|INSERT\s+INTO|UPDATE|DELETE\s+FROM|CREATE\s+TABLE|ALTER\s+TABLE|DROP\s+TABLE)\b/iu.test(trimmed)) return 'sql';
-  if (/\bpackage\s+main\b/iu.test(trimmed) && /\bfunc\s+\w+\s*\(/u.test(trimmed)) return 'go';
-  if (/\bfn\s+main\s*\(|\buse\s+std::|\blet\s+mut\b|\bimpl\s+\w+/u.test(trimmed)) return 'rust';
-  if (/^\s*(def|class)\s+\w+.*:\s*$/mu.test(trimmed) || /^(from\s+\S+\s+import|import\s+\S+)/mu.test(trimmed)) return 'python';
-  if (/\b(interface|type)\s+[A-Z_$]\w*|\b(public|private|readonly)\s+\w+|:\s*(string|number|boolean|unknown|any)\b/u.test(trimmed)) return 'typescript';
-  if (/\b(import|export)\s+|\bconst\s+\w+\s*=|\bfunction\s+\w+\s*\(|=>\s*[{(]/u.test(trimmed)) return 'javascript';
-  if (/\bpublic\s+(final\s+)?class\s+\w+|\bimport\s+java\.|\bSystem\.out\.println/u.test(trimmed)) return 'java';
-  if (/^\s*#include\s+<iostream>/mu.test(trimmed) || /\bstd::\w+|\bcout\s*<</u.test(trimmed)) return 'cpp';
-  if (/^\s*#include\s+<[^>]+>/mu.test(trimmed) && /\bint\s+main\s*\(/u.test(trimmed)) return 'c';
-  if (/^\s*def\s+\w+.*$/mu.test(trimmed) && /\bend\s*$/mu.test(trimmed)) return 'ruby';
-  if (/(^|\n)\s*[@.#a-z][^{\n;]+\{[\s\S]*?:[\s\S]*?\}/iu.test(trimmed)) return 'css';
-  if (/^\s*[\w.-]+:\s+\S/mu.test(trimmed) && /^\s*-\s+\S/mu.test(trimmed)) return 'yaml';
-
-  return 'plaintext';
-}
-
-function getLanguage(fileName: string, content = ''): string {
-  const fileNameLanguage = getFileNameLanguage(fileName);
-  if (fileNameLanguage !== 'plaintext') {
-    return fileNameLanguage;
-  }
-
-  return detectLanguageFromContent(content);
 }
 
 function getFileNameFromPath(filePath: string): string {
@@ -410,236 +149,6 @@ function getLineStartOffset(content: string, targetLine: number) {
   return offset >= 0 ? offset + 1 : content.length;
 }
 
-function normalizeDiffLines(content: string): string[] {
-  return content.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-}
-
-function buildDiffPreview(beforeContent: string, afterContent: string, language: AppLanguage): DiffPreview {
-  const beforeLines = normalizeDiffLines(beforeContent);
-  const afterLines = normalizeDiffLines(afterContent);
-  const beforeSample = beforeLines.slice(0, MAX_DIFF_INPUT_LINES);
-  const afterSample = afterLines.slice(0, MAX_DIFF_INPUT_LINES);
-  const lcs = Array.from(
-    { length: beforeSample.length + 1 },
-    () => Array<number>(afterSample.length + 1).fill(0),
-  );
-
-  for (let beforeIndex = beforeSample.length - 1; beforeIndex >= 0; beforeIndex -= 1) {
-    for (let afterIndex = afterSample.length - 1; afterIndex >= 0; afterIndex -= 1) {
-      lcs[beforeIndex][afterIndex] = beforeSample[beforeIndex] === afterSample[afterIndex]
-        ? lcs[beforeIndex + 1][afterIndex + 1] + 1
-        : Math.max(lcs[beforeIndex + 1][afterIndex], lcs[beforeIndex][afterIndex + 1]);
-    }
-  }
-
-  const lines: DiffPreviewLine[] = [];
-  let beforeIndex = 0;
-  let afterIndex = 0;
-
-  while (beforeIndex < beforeSample.length || afterIndex < afterSample.length) {
-    if (
-      beforeIndex < beforeSample.length
-      && afterIndex < afterSample.length
-      && beforeSample[beforeIndex] === afterSample[afterIndex]
-    ) {
-      lines.push({ kind: 'context', text: beforeSample[beforeIndex] });
-      beforeIndex += 1;
-      afterIndex += 1;
-    } else if (
-      afterIndex < afterSample.length
-      && (
-        beforeIndex >= beforeSample.length
-        || lcs[beforeIndex][afterIndex + 1] >= lcs[beforeIndex + 1][afterIndex]
-      )
-    ) {
-      lines.push({ kind: 'added', text: afterSample[afterIndex] });
-      afterIndex += 1;
-    } else {
-      lines.push({ kind: 'removed', text: beforeSample[beforeIndex] });
-      beforeIndex += 1;
-    }
-
-    if (lines.length >= MAX_DIFF_OUTPUT_LINES) break;
-  }
-
-  const truncated = (
-    beforeLines.length > beforeSample.length
-    || afterLines.length > afterSample.length
-    || beforeIndex < beforeSample.length
-    || afterIndex < afterSample.length
-  );
-
-  if (truncated) {
-    lines.push({ kind: 'meta', text: t('notepad.diff.preview.truncated', language) });
-  }
-
-  if (lines.length === 0) {
-    lines.push({ kind: 'meta', text: t('notepad.diff.preview.noChanges', language) });
-  }
-
-  return { lines, truncated };
-}
-
-function getDiffPrefix(kind: DiffPreviewLine['kind']): string {
-  if (kind === 'added') return '+';
-  if (kind === 'removed') return '-';
-  if (kind === 'meta') return '!';
-  return ' ';
-}
-
-function createNotepadAiMessageId() {
-  return `ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function truncateMiddle(content: string, maxLength: number, language: AppLanguage) {
-  if (content.length <= maxLength) {
-    return content;
-  }
-
-  const headLength = Math.floor(maxLength * 0.58);
-  const tailLength = Math.max(0, maxLength - headLength - 80);
-  return [
-    content.slice(0, headLength),
-    '',
-    t('notepad.truncate.characters', language, { count: content.length - headLength - tailLength }),
-    '',
-    content.slice(-tailLength),
-  ].join('\n');
-}
-
-function limitAiFileContext(content: string, language: AppLanguage) {
-  if (content.length <= MAX_AI_FILE_CONTEXT_CHARACTERS) {
-    return {
-      content,
-      truncated: false,
-      omittedCharacters: 0,
-    };
-  }
-
-  const headLength = Math.floor(MAX_AI_FILE_CONTEXT_CHARACTERS * 0.62);
-  const tailLength = Math.max(0, MAX_AI_FILE_CONTEXT_CHARACTERS - headLength);
-  const omittedCharacters = content.length - headLength - tailLength;
-
-  return {
-    content: [
-      content.slice(0, headLength),
-      '',
-      t('notepad.ai.context.limitNotice', language, { count: omittedCharacters }),
-      '',
-      content.slice(-tailLength),
-    ].join('\n'),
-    truncated: true,
-    omittedCharacters,
-  };
-}
-
-function splitAiFileContext(content: string) {
-  const chunks: string[] = [];
-  let start = 0;
-
-  while (start < content.length) {
-    let end = Math.min(start + MAX_AI_FILE_CONTEXT_CHUNK_CHARACTERS, content.length);
-
-    if (end < content.length) {
-      const newlineIndex = content.lastIndexOf('\n', end);
-      const minimumChunkEnd = start + Math.floor(MAX_AI_FILE_CONTEXT_CHUNK_CHARACTERS * 0.72);
-
-      if (newlineIndex >= minimumChunkEnd) {
-        end = newlineIndex + 1;
-      }
-    }
-
-    chunks.push(content.slice(start, end));
-    start = end;
-  }
-
-  return chunks.length ? chunks : [''];
-}
-
-function stripAiActionBlocks(content: string) {
-  return content
-    .replace(/```shelldesk-action\s*[\s\S]*?```/giu, '')
-    .replace(/```shelldesk-action[\s\S]*$/iu, '')
-    .trim();
-}
-
-function parseAiAction(content: string): NotepadAiAction | undefined {
-  const match = /```shelldesk-action\s*([\s\S]*?)```/iu.exec(content);
-
-  if (!match) {
-    return undefined;
-  }
-
-  try {
-    const parsedAction: unknown = JSON.parse(match[1].trim());
-
-    if (!parsedAction || typeof parsedAction !== 'object') {
-      return undefined;
-    }
-
-    const action = parsedAction as Partial<NotepadAiAction>;
-
-    if (
-      (action.type === 'replace_content' ||
-        action.type === 'append_content' ||
-        action.type === 'insert_at_cursor' ||
-        action.type === 'replace_selection') &&
-      typeof action.content === 'string'
-    ) {
-      return {
-        type: action.type,
-        content: action.content,
-        summary: typeof action.summary === 'string' ? action.summary : undefined,
-      };
-    }
-
-    if (action.type === 'run_command' && typeof action.command === 'string' && action.command.trim()) {
-      return {
-        type: 'run_command',
-        command: action.command.trim(),
-        reason: typeof action.reason === 'string' ? action.reason : undefined,
-      };
-    }
-  } catch {
-    return undefined;
-  }
-
-  return undefined;
-}
-
-function formatCommandResult(
-  command: string,
-  result: { stdout: string; stderr: string; code: number },
-  language: AppLanguage,
-) {
-  const stdout = result.stdout
-    ? truncateMiddle(result.stdout, MAX_AI_COMMAND_OUTPUT_CHARACTERS, language)
-    : t('notepad.command.stdout.empty', language);
-  const stderr = result.stderr
-    ? `\n\n${t('notepad.command.stderr.label', language)}\n${truncateMiddle(result.stderr, 4000, language)}`
-    : '';
-
-  return t('notepad.command.result', language, { command, code: result.code, stdout, stderr });
-}
-
-function getEnvironmentProbeCommand(systemType?: RemoteSystemType) {
-  if (systemType === 'windows') {
-    return [
-      'powershell',
-      '-NoProfile',
-      '-ExecutionPolicy Bypass',
-      '-Command',
-      '"$ErrorActionPreference=\'SilentlyContinue\';',
-      'Write-Output \'# OS\'; Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber, OSArchitecture | Format-List | Out-String;',
-      'Write-Output \'# PowerShell\'; $PSVersionTable | Out-String;',
-      'Write-Output \'# Runtime\'; foreach ($cmd in \'node\',\'python\',\'python3\',\'dotnet\',\'java\',\'go\',\'rustc\',\'php\') { $found = Get-Command $cmd -ErrorAction SilentlyContinue; if ($found) { Write-Output \"## $cmd\"; & $cmd --version 2>&1 | Select-Object -First 3 } };',
-      'Write-Output \'# Paths\'; Get-Location | Out-String"',
-    ].join(' ');
-  }
-
-  return `sh -lc 'printf "# OS\\n"; (cat /etc/os-release 2>/dev/null || sw_vers 2>/dev/null || uname -a); printf "\\n# Kernel\\n"; uname -a 2>/dev/null; printf "\\n# Shell\\n"; printf "%s\\n" "$SHELL"; printf "\\n# Runtime\\n"; for cmd in node npm pnpm yarn python python3 pip pip3 ruby go rustc cargo java javac php composer docker docker-compose nginx apache2 httpd mysql psql sqlite3; do if command -v "$cmd" >/dev/null 2>&1; then printf "## %s\\n" "$cmd"; "$cmd" --version 2>&1 | head -n 3; fi; done; printf "\\n# Working directory\\n"; pwd'`;
-}
-
 let tabSequence = 0;
 
 function createNewTab(language: AppLanguage, initialTitle?: string, initialContent = ''): NotepadTab {
@@ -660,19 +169,6 @@ function createNewTab(language: AppLanguage, initialTitle?: string, initialConte
   };
 }
 
-function NotepadDiffPreview({ preview, language }: { preview: DiffPreview; language: AppLanguage }) {
-  return (
-    <div className="notepad-diff-preview" aria-label={t('notepad.diff.preview.aria', language)}>
-      {preview.lines.map((line, index) => (
-        <div key={`${line.kind}-${index}`} className={`notepad-diff-line ${line.kind}`}>
-          <span className="notepad-diff-prefix">{getDiffPrefix(line.kind)}</span>
-          <span className="notepad-diff-text">{line.text || ' '}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent, initialTitle, openFileRequest, systemType }: RemoteNotepadProps) {
   const language = settings.language;
   const [tabs, setTabs] = useState<NotepadTab[]>(() => [createNewTab(language, initialTitle, initialContent)]);
@@ -686,14 +182,6 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
   const [conflictDialog, setConflictDialog] = useState<NotepadConflictDialog | null>(null);
   const [diffDialog, setDiffDialog] = useState<NotepadDiffDialog | null>(null);
   const [isAiSidebarOpen, setIsAiSidebarOpen] = useState(false);
-  const [aiInput, setAiInput] = useState('');
-  const [aiMessages, setAiMessages] = useState<NotepadAiMessage[]>([]);
-  const [isAiBusy, setIsAiBusy] = useState(false);
-  const [isAiProbing, setIsAiProbing] = useState(false);
-  const [aiError, setAiError] = useState('');
-  const [remoteEnvironment, setRemoteEnvironment] = useState('');
-  const [includeAiFileContext, setIncludeAiFileContext] = useState(true);
-  const [lastAiSelection, setLastAiSelection] = useState<EditorSelectionSnapshot | null>(null);
   const [prefersLightTheme, setPrefersLightTheme] = useState(() => getPreferredLightTheme());
   const [sudoPrompt, setSudoPrompt] = useState<NotepadSudoPrompt | null>(null);
 
@@ -704,8 +192,6 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
 
   const editorRef = useRef<NotepadEditorHandle>(null);
   const goToLineInputRef = useRef<HTMLInputElement>(null);
-  const aiInputRef = useRef<HTMLTextAreaElement>(null);
-  const aiMessagesEndRef = useRef<HTMLDivElement>(null);
   const sudoPasswordInputRef = useRef<HTMLInputElement>(null);
   const sudoPromptResolverRef = useRef<((password: string | null) => void) | null>(null);
   const initialFileHandledRef = useRef(false);
@@ -871,12 +357,6 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
       }
     }
   }, [connectionId, requestSudoPassword, systemType]);
-
-  useEffect(() => {
-    if (isAiSidebarOpen) {
-      aiMessagesEndRef.current?.scrollIntoView({ block: 'end' });
-    }
-  }, [aiMessages, isAiBusy, isAiSidebarOpen]);
 
   const closeTabNow = useCallback((tabId: string) => {
     const currentTabs = tabsRef.current;
@@ -1163,318 +643,7 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
     return editorRef.current?.getSelection() ?? { start: 0, end: 0, text: '' };
   }, []);
 
-  const buildAiContextMessage = useCallback((
-    selection: EditorSelectionSnapshot,
-    options?: { environmentOverride?: string },
-  ) => {
-    const filePath = activeTab.filePath || t('notepad.ai.context.unsavedFile', language);
-    const selectedText = selection.text
-      ? truncateMiddle(selection.text, MAX_AI_SELECTION_CHARACTERS, language)
-      : t('notepad.ai.context.noSelection', language);
-    const environmentSource = options?.environmentOverride ?? remoteEnvironment;
-    const environmentContext = environmentSource
-      ? truncateMiddle(environmentSource, MAX_AI_ENVIRONMENT_CHARACTERS, language)
-      : t('notepad.ai.context.notProbed', language);
-    let fileContextState = t('notepad.ai.context.fileContextCancelled', language);
-
-    if (includeAiFileContext) {
-      const fileContext = limitAiFileContext(activeTab.content, language);
-      const chunkCount = splitAiFileContext(fileContext.content).length;
-      fileContextState = fileContext.truncated
-        ? t('notepad.ai.context.fileContextTruncated', language, {
-            limit: MAX_AI_FILE_CONTEXT_CHARACTERS,
-            chunks: chunkCount,
-            omitted: fileContext.omittedCharacters,
-          })
-        : t('notepad.ai.context.fileContextComplete', language, { chunks: chunkCount });
-    }
-
-    return [
-      t('notepad.ai.context.header', language),
-      t('notepad.ai.context.fileTitle', language, { title: activeTab.title }),
-      t('notepad.ai.context.remotePath', language, { path: filePath }),
-      t('notepad.ai.context.languageMode', language, { language: activeTab.language }),
-      t('notepad.ai.context.fileCharacters', language, { count: activeTab.content.length }),
-      t('notepad.ai.context.readOnlyStatus', language, {
-        status: activeTab.readOnly
-          ? t('notepad.ai.context.readOnly', language)
-          : t('notepad.ai.context.editable', language),
-      }),
-      t('notepad.ai.context.cursor', language, { line: cursorLine, column: cursorCol }),
-      t('notepad.ai.context.selectionRange', language, { start: selection.start, end: selection.end }),
-      '',
-      t('notepad.ai.context.selectedTextHeader', language),
-      selectedText,
-      '',
-      t('notepad.ai.context.environmentHeader', language),
-      environmentContext,
-      '',
-      t('notepad.ai.context.fileContextHeader', language),
-      fileContextState,
-    ].join('\n');
-  }, [activeTab.content, activeTab.filePath, activeTab.language, activeTab.readOnly, activeTab.title, cursorCol, cursorLine, includeAiFileContext, language, remoteEnvironment]);
-
-  const buildAiFileContextMessages = useCallback((): ShellDeskAiChatMessage[] => {
-    if (!includeAiFileContext) {
-      return [];
-    }
-
-    const { content, truncated, omittedCharacters } = limitAiFileContext(activeTab.content, language);
-    const chunks = splitAiFileContext(content);
-    const filePath = activeTab.filePath || t('notepad.ai.context.unsavedFile', language);
-
-    return chunks.map((chunk, index) => ({
-      role: 'user',
-      content: [
-        t('notepad.ai.context.chunkHeader', language, { index: index + 1, total: chunks.length }),
-        t('notepad.ai.context.fileTitle', language, { title: activeTab.title }),
-        t('notepad.ai.context.remotePath', language, { path: filePath }),
-        t('notepad.ai.context.languageMode', language, { language: activeTab.language }),
-        t('notepad.ai.context.fullCharacters', language, { count: activeTab.content.length }),
-        truncated
-          ? t('notepad.ai.context.truncationTruncated', language, { limit: MAX_AI_FILE_CONTEXT_CHARACTERS, omitted: omittedCharacters })
-          : t('notepad.ai.context.truncationNone', language),
-        '```',
-        chunk,
-        '```',
-      ].join('\n'),
-    }));
-  }, [activeTab.content, activeTab.filePath, activeTab.language, activeTab.title, includeAiFileContext, language]);
-
-  const createAiChatMessages = useCallback((
-    nextMessages: NotepadAiMessage[],
-    selection: EditorSelectionSnapshot,
-    options?: { environmentOverride?: string },
-  ): ShellDeskAiChatMessage[] => {
-    const recentMessages = nextMessages.slice(-MAX_AI_HISTORY_MESSAGES).map<ShellDeskAiChatMessage>((message) => ({
-      role: message.role === 'assistant' ? 'assistant' : 'user',
-      content: message.role === 'tool'
-        ? `${t('ai.tool.resultPrefix', language)}\n${message.content}`
-        : message.content,
-    }));
-    const fileContextMessages = buildAiFileContextMessages().map((message) => ({
-      ...message,
-      content: translateStructuredText(message.content, settings.language),
-    }));
-
-    return [
-      { role: 'system', content: t('ai.notepad.systemPrompt', language) },
-      { role: 'user', content: translateStructuredText(buildAiContextMessage(selection, options), language) },
-      ...fileContextMessages,
-      ...recentMessages,
-    ];
-  }, [buildAiContextMessage, buildAiFileContextMessages, language]);
-
-  const runRemoteEnvironmentProbe = useCallback(async () => {
-    const command = getEnvironmentProbeCommand(systemType);
-    const result = await window.guiSSH!.connections.runCommand(connectionId, command);
-    return formatCommandResult(command, result, language);
-  }, [connectionId, language, systemType]);
-
-  const requestAiAssistant = useCallback(async (
-    nextMessages: NotepadAiMessage[],
-    selection: EditorSelectionSnapshot,
-    options?: { environmentOverride?: string },
-  ) => {
-    const aiControls = window.guiSSH?.ai;
-    const chat = aiControls?.chat;
-    const chatStream = aiControls?.chatStream;
-
-    if (!chat && !chatStream) {
-      setAiError(t('notepad.error.noAiChat', language));
-      return;
-    }
-
-    if (
-      !settings.aiApiBaseUrl.trim() ||
-      (settings.aiApiFormat === 'anthropic' && !settings.aiApiKey.trim()) ||
-      !settings.aiModel.trim()
-    ) {
-      setAiError(t('notepad.error.aiConfigRequired', language));
-      return;
-    }
-
-    setIsAiBusy(true);
-    setAiError('');
-
-    try {
-      const chatRequest: ShellDeskAiChatRequest = {
-        provider: settings.aiProvider,
-        apiFormat: settings.aiApiFormat,
-        apiBaseUrl: settings.aiApiBaseUrl,
-        apiKey: settings.aiApiKey,
-        model: settings.aiModel,
-        temperature: 0.2,
-        messages: createAiChatMessages(nextMessages, selection, options),
-      };
-      const assistantMessageId = createNotepadAiMessageId();
-      const assistantCreatedAt = new Date().toISOString();
-      let streamedContent = '';
-      let resultContent = '';
-
-      if (chatStream) {
-        try {
-          const result = await chatStream(chatRequest, {
-            onChunk: (chunk) => {
-              streamedContent += chunk;
-              const partialContent = stripAiActionBlocks(streamedContent) || t('notepad.ai.generating', language);
-              const partialMessage: NotepadAiMessage = {
-                id: assistantMessageId,
-                role: 'assistant',
-                content: partialContent,
-                createdAt: assistantCreatedAt,
-              };
-
-              setAiMessages((currentMessages) => {
-                const existingIndex = currentMessages.findIndex((message) => message.id === assistantMessageId);
-
-                if (existingIndex >= 0) {
-                  return currentMessages.map((message) => (
-                    message.id === assistantMessageId ? { ...message, content: partialContent } : message
-                  ));
-                }
-
-                return [...currentMessages, partialMessage];
-              });
-            },
-          });
-
-          resultContent = result.content || streamedContent;
-        } catch (streamError) {
-          if (streamedContent || !chat) {
-            throw streamError;
-          }
-
-          const result = await chat(chatRequest);
-          resultContent = result.content;
-        }
-      } else if (chat) {
-        const result = await chat(chatRequest);
-        resultContent = result.content;
-      }
-
-      const action = parseAiAction(resultContent);
-      const displayContent = stripAiActionBlocks(resultContent) || (action ? t('notepad.ai.actionReady', language) : resultContent);
-      const assistantMessage: NotepadAiMessage = {
-        id: assistantMessageId,
-        role: 'assistant',
-        content: displayContent,
-        createdAt: assistantCreatedAt,
-        action,
-      };
-
-      setAiMessages([...nextMessages, assistantMessage]);
-    } catch (error) {
-      setAiError(t('notepad.error.aiRequestFailed', language, { error: getErrorMessage(error) }));
-      setAiMessages(nextMessages);
-    } finally {
-      setIsAiBusy(false);
-    }
-  }, [
-    createAiChatMessages,
-    language,
-    settings.aiApiBaseUrl,
-    settings.aiApiFormat,
-    settings.aiApiKey,
-    settings.aiModel,
-    settings.aiProvider,
-  ]);
-
-  const handleAiSubmit = useCallback(async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-
-    const prompt = aiInput.trim();
-    if (!prompt || isAiBusy || isAiProbing) {
-      return;
-    }
-
-    if (!isAiConfigured) {
-      setAiError(t('notepad.error.aiConfigRequired', language));
-      return;
-    }
-
-    const selection = getCurrentEditorSelection();
-    setLastAiSelection(selection);
-    const userMessage: NotepadAiMessage = {
-      id: createNotepadAiMessageId(),
-      role: 'user',
-      content: prompt,
-      createdAt: new Date().toISOString(),
-    };
-    let nextMessages = [...aiMessages, userMessage];
-    let environmentOverride = remoteEnvironment || undefined;
-
-    setAiInput('');
-    setAiMessages(nextMessages);
-
-    if (!environmentOverride) {
-      setIsAiProbing(true);
-      setAiError('');
-
-      try {
-        const toolContent = await runRemoteEnvironmentProbe();
-        const toolMessage: NotepadAiMessage = {
-          id: createNotepadAiMessageId(),
-          role: 'tool',
-          content: t('notepad.ai.probe.success', language, { content: toolContent }),
-          createdAt: new Date().toISOString(),
-        };
-
-        environmentOverride = toolContent;
-        nextMessages = [...nextMessages, toolMessage];
-        setRemoteEnvironment(toolContent);
-        setAiMessages(nextMessages);
-      } catch (error) {
-        const errorMessage = t('notepad.ai.probe.failed', language, { error: getErrorMessage(error) });
-        const toolMessage: NotepadAiMessage = {
-          id: createNotepadAiMessageId(),
-          role: 'tool',
-          content: errorMessage,
-          createdAt: new Date().toISOString(),
-        };
-
-        environmentOverride = errorMessage;
-        nextMessages = [...nextMessages, toolMessage];
-        setAiError(errorMessage);
-        setAiMessages(nextMessages);
-      } finally {
-        setIsAiProbing(false);
-      }
-    }
-
-    await requestAiAssistant(nextMessages, selection, { environmentOverride });
-  }, [
-    aiInput,
-    aiMessages,
-    getCurrentEditorSelection,
-    isAiBusy,
-    isAiConfigured,
-    isAiProbing,
-    language,
-    remoteEnvironment,
-    requestAiAssistant,
-    runRemoteEnvironmentProbe,
-  ]);
-
-  const markAiActionApplied = useCallback((messageId: string) => {
-    setAiMessages((currentMessages) => currentMessages.map((message) => (
-      message.id === messageId ? { ...message, actionApplied: true } : message
-    )));
-  }, []);
-
-  const applyAiTextAction = useCallback((message: NotepadAiMessage) => {
-    const action = message.action;
-
-    if (!action || action.type === 'run_command') {
-      return;
-    }
-
-    if (activeTab.readOnly) {
-      setAiError(t('notepad.error.aiReadOnlyApply', language));
-      return;
-    }
-
-    const selection = lastAiSelection ?? getCurrentEditorSelection();
+  const handleAiApply = useCallback((action: Exclude<NotepadAiAction, { type: 'run_command' }>, selection: EditorSelectionSnapshot) => {
     let nextContent = activeTab.content;
     let nextPosition = 0;
 
@@ -1494,46 +663,7 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
     }
 
     replaceActiveContent(nextContent, nextPosition, nextPosition);
-    markAiActionApplied(message.id);
-  }, [activeTab.content, activeTab.readOnly, getCurrentEditorSelection, language, lastAiSelection, markAiActionApplied, replaceActiveContent]);
-
-  const runAiCommandAction = useCallback(async (message: NotepadAiMessage) => {
-    const action = message.action;
-
-    if (!action || action.type !== 'run_command' || isAiBusy) {
-      return;
-    }
-
-    setIsAiBusy(true);
-    setAiError('');
-
-    try {
-      const result = await window.guiSSH!.connections.runCommand(connectionId, action.command);
-      const toolContent = formatCommandResult(action.command, result, language);
-      const toolMessage: NotepadAiMessage = {
-        id: createNotepadAiMessageId(),
-        role: 'tool',
-        content: toolContent,
-        createdAt: new Date().toISOString(),
-      };
-      const selection = getCurrentEditorSelection();
-      const nextMessages = aiMessages.map((currentMessage) => (
-        currentMessage.id === message.id ? { ...currentMessage, actionApplied: true } : currentMessage
-      ));
-      const continuedMessages = [...nextMessages, toolMessage];
-
-      setLastAiSelection(selection);
-      setRemoteEnvironment((currentEnvironment) => (
-        currentEnvironment ? `${currentEnvironment}\n\n${toolContent}` : toolContent
-      ));
-      setAiMessages(continuedMessages);
-      await requestAiAssistant(continuedMessages, selection);
-    } catch (error) {
-      setAiError(t('notepad.error.commandFailed', language, { error: getErrorMessage(error) }));
-    } finally {
-      setIsAiBusy(false);
-    }
-  }, [aiMessages, connectionId, getCurrentEditorSelection, isAiBusy, language, requestAiAssistant]);
+  }, [activeTab.content, replaceActiveContent]);
 
   const handleGoToLine = useCallback(() => {
     const lineNumber = parseInt(goToLineValue, 10);
@@ -1773,7 +903,6 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
             className={`notepad-tool-btn ${isAiSidebarOpen ? 'active' : ''}`}
             onClick={() => {
               setIsAiSidebarOpen((currentOpen) => !currentOpen);
-              setTimeout(() => aiInputRef.current?.focus(), 0);
             }}
             aria-pressed={isAiSidebarOpen}
             title="SD-Agent"
@@ -1831,114 +960,20 @@ function RemoteNotepad({ connectionId, settings, initialFilePath, initialContent
         )}
 
         {isAiSidebarOpen ? (
-          <aside className="notepad-ai-sidebar" aria-label={t('notepad.ai.sidebar.aria', language)}>
-            <div className="notepad-ai-header">
-              <span>
-                <strong>SD-Agent</strong>
-              </span>
-              <button type="button" className="notepad-ai-close" onClick={() => setIsAiSidebarOpen(false)} aria-label={t('notepad.ai.sidebar.closeAria', language)}>×</button>
-            </div>
-
-            {!isAiConfigured ? (
-              <div className="notepad-ai-warning">
-                {t('notepad.ai.configWarning', language)}
-              </div>
-            ) : null}
-
-            {aiError ? <div className="notepad-ai-error">{aiError}</div> : null}
-
-            <div className="notepad-ai-messages">
-              {aiMessages.length === 0 ? (
-                <div className="notepad-ai-empty">
-                  <strong>{t('notepad.ai.empty.title', language)}</strong>
-                  <span>{t('notepad.ai.empty.summary', language)}</span>
-                </div>
-              ) : null}
-
-              {aiMessages.map((message) => (
-                <div key={message.id} className={`notepad-ai-message ${message.role}`}>
-                  <div className="notepad-ai-message-role">
-                    {message.role === 'assistant' ? 'SD-Agent' : message.role === 'tool' ? t('notepad.ai.role.tool', language) : t('notepad.ai.role.user', language)}
-                  </div>
-                  <div className="notepad-ai-message-content">{message.content}</div>
-                  {message.action ? (
-                    <div className="notepad-ai-action">
-                      {message.action.type === 'run_command' ? (
-                        <>
-                          <strong>{t('notepad.ai.requestCommand', language)}</strong>
-                          {message.action.reason ? <span>{message.action.reason}</span> : null}
-                          <code>{message.action.command}</code>
-                          <button
-                            type="button"
-                            className="notepad-modal-btn primary"
-                            onClick={() => void runAiCommandAction(message)}
-                            disabled={message.actionApplied || isAiBusy}
-                          >
-                            {message.actionApplied ? t('notepad.ai.executed', language) : t('notepad.ai.confirmExecute', language)}
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <strong>{message.action.summary || t('notepad.ai.applyFallback', language)}</strong>
-                          <span>
-                            {message.action.type === 'replace_content'
-                              ? t('notepad.ai.action.replaceContent', language)
-                              : message.action.type === 'replace_selection'
-                                ? t('notepad.ai.action.replaceSelection', language)
-                                : message.action.type === 'append_content'
-                                  ? t('notepad.ai.action.appendContent', language)
-                                  : t('notepad.ai.action.insertAtCursor', language)}
-                          </span>
-                          <button
-                            type="button"
-                            className="notepad-modal-btn primary"
-                            onClick={() => applyAiTextAction(message)}
-                            disabled={message.actionApplied || activeTab.readOnly}
-                          >
-                            {message.actionApplied ? t('notepad.ai.applied', language) : t('notepad.ai.applyChange', language)}
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  ) : null}
-                </div>
-              ))}
-              {isAiProbing ? <div className="notepad-ai-thinking">{t('notepad.ai.probing', language)}</div> : null}
-              {!isAiProbing && isAiBusy ? <div className="notepad-ai-thinking">{t('notepad.ai.thinking', language)}</div> : null}
-              <div ref={aiMessagesEndRef} />
-            </div>
-
-            <form className="notepad-ai-compose" onSubmit={handleAiSubmit}>
-              <textarea
-                ref={aiInputRef}
-                value={aiInput}
-                onChange={(event) => setAiInput(event.target.value)}
-                placeholder={t('notepad.ai.placeholder', language)}
-                rows={4}
-                disabled={isAiBusy || isAiProbing}
-                onKeyDown={(event) => {
-                  if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-                    event.currentTarget.form?.requestSubmit();
-                  }
-                }}
-              />
-              <div className="notepad-ai-compose-footer">
-                <label className="notepad-ai-context-toggle">
-                  <input
-                    type="checkbox"
-                    checked={includeAiFileContext}
-                    onChange={(event) => setIncludeAiFileContext(event.target.checked)}
-                  />
-                  <span>{t('notepad.ai.includeFileContext', language)}</span>
-                </label>
-                <button type="submit" className="notepad-modal-btn primary" disabled={!aiInput.trim() || isAiBusy || isAiProbing || !isAiConfigured}>
-                  {t('notepad.ai.send', language)}
-                </button>
-              </div>
-            </form>
-          </aside>
-        ) : null}
-      </div>
+          <NotepadAiPanel
+            activeTab={activeTab}
+            connectionId={connectionId}
+            cursorLine={cursorLine}
+            cursorCol={cursorCol}
+            getCurrentEditorSelection={getCurrentEditorSelection}
+            isConfigured={isAiConfigured}
+            language={language}
+            settings={settings}
+            systemType={systemType}
+            onApply={handleAiApply}
+            onClose={() => setIsAiSidebarOpen(false)}
+          />
+        ) : null}      </div>
 
       <div className="notepad-statusbar">
         <span>{t('notepad.status.lineColumn', language, { line: cursorLine, column: cursorCol })}</span>
