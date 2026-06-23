@@ -1,4 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { json } from '@codemirror/lang-json';
+import { indentWithTab } from '@codemirror/commands';
+import type { Extension } from '@codemirror/state';
+import { EditorView, keymap } from '@codemirror/view';
+import CodeMirror from '@uiw/react-codemirror';
 import DismissibleAlert from './DismissibleAlert';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
@@ -66,6 +71,52 @@ function RemoteSearchCluster({ connectionId, hostId }: RemoteSearchClusterProps)
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [lastRefreshedAt, setLastRefreshedAt] = useState('');
+  const queryEditorExtensions = useMemo<Extension[]>(() => [
+    keymap.of([indentWithTab]),
+    json(),
+    EditorView.theme({
+      '&': {
+        height: '100%',
+        minHeight: '0',
+        border: '1px solid var(--search-border)',
+        borderRadius: '8px',
+        backgroundColor: 'rgba(5, 10, 16, 0.38)',
+        color: 'var(--search-text)',
+        fontSize: '12px',
+      },
+      '.cm-scroller': {
+        backgroundColor: 'rgba(5, 10, 16, 0.38)',
+        fontFamily: 'var(--font-mono, "Cascadia Mono", Consolas, monospace)',
+        lineHeight: '20px',
+      },
+      '.cm-content': {
+        padding: '10px 0',
+        caretColor: 'var(--search-text)',
+      },
+      '.cm-line': {
+        padding: '0 10px',
+      },
+      '.cm-gutters': {
+        borderRight: '1px solid var(--search-border)',
+        backgroundColor: 'rgba(255, 255, 255, 0.04)',
+        color: 'var(--search-muted)',
+      },
+      '.cm-activeLine': {
+        backgroundColor: 'rgba(103, 183, 255, 0.08)',
+      },
+      '.cm-activeLineGutter': {
+        backgroundColor: 'rgba(103, 183, 255, 0.12)',
+      },
+      '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
+        backgroundColor: 'rgba(103, 183, 255, 0.26)',
+      },
+      '&.cm-focused': {
+        outline: 'none',
+        borderColor: 'rgba(103, 183, 255, 0.45)',
+        boxShadow: '0 0 0 3px rgba(103, 183, 255, 0.12)',
+      },
+    }),
+  ], []);
 
   const config = useMemo(() => ({
     url,
@@ -356,7 +407,25 @@ function RemoteSearchCluster({ connectionId, hostId }: RemoteSearchClusterProps)
                 </div>
               </div>
               <div className="search-query-grid">
-                <textarea value={queryBody} onChange={(event) => setQueryBody(event.target.value)} spellCheck={false} />
+                <CodeMirror
+                  className="search-query-editor"
+                  value={queryBody}
+                  height="100%"
+                  basicSetup={{
+                    lineNumbers: true,
+                    foldGutter: true,
+                    highlightActiveLine: true,
+                    highlightActiveLineGutter: true,
+                    bracketMatching: true,
+                    closeBrackets: true,
+                    autocompletion: true,
+                    searchKeymap: true,
+                    defaultKeymap: true,
+                    history: true,
+                  }}
+                  extensions={queryEditorExtensions}
+                  onChange={setQueryBody}
+                />
                 <pre>{queryResponse || tCurrent('auto.remoteSearchCluster.11tbyaa')}</pre>
               </div>
             </section>
