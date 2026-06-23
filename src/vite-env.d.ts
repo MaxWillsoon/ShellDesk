@@ -1017,9 +1017,13 @@ interface ShellDeskMongoIndex {
 interface ShellDeskMongoQueryRequest {
   database: string;
   collection: string;
+  operation?: 'find' | 'aggregate' | 'insertOne' | 'replaceOne' | 'updateOne' | 'deleteOne';
   filter: string;
   projection?: string;
   sort?: string;
+  pipeline?: string;
+  document?: string;
+  update?: string;
   limit: number;
 }
 
@@ -1027,6 +1031,13 @@ interface ShellDeskMongoQueryResult {
   documents: Record<string, unknown>[];
   count: number;
   limit: number;
+  operation?: string;
+  insertedCount?: number;
+  insertedId?: unknown;
+  matchedCount?: number;
+  modifiedCount?: number;
+  deletedCount?: number;
+  upsertedId?: unknown;
 }
 
 interface ShellDeskSqliteColumn {
