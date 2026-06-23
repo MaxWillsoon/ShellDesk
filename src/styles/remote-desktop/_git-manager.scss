@@ -68,6 +68,8 @@
 .git-branch-control button:disabled,
 .git-commit-actions button:disabled,
 .git-selected-actions button:disabled,
+.git-stash-create button:disabled,
+.git-stash-actions button:disabled,
 .git-diff-actions button:disabled,
 .git-confirm-actions button:disabled {
   opacity: 0.48;
@@ -85,6 +87,7 @@
 .git-repo-picker input,
 .git-sidebar-search input,
 .git-branch-control input,
+.git-stash-create input,
 .git-commit-box textarea,
 .git-history-filterbar select {
   min-width: 0;
@@ -100,6 +103,7 @@
 .git-repo-picker input,
 .git-sidebar-search input,
 .git-branch-control input,
+.git-stash-create input,
 .git-history-filterbar select {
   height: 30px;
   padding: 0 9px;
@@ -109,6 +113,8 @@
 .git-branch-control button,
 .git-commit-actions button,
 .git-selected-actions button,
+.git-stash-create button,
+.git-stash-actions button,
 .git-diff-actions button,
 .git-pane-head button,
 .git-track-remote-btn,
@@ -129,6 +135,8 @@
 .git-branch-control button:hover:not(:disabled),
 .git-commit-actions button:hover:not(:disabled),
 .git-selected-actions button:hover:not(:disabled),
+.git-stash-create button:hover:not(:disabled),
+.git-stash-actions button:hover:not(:disabled),
 .git-diff-actions button:hover:not(:disabled),
 .git-pane-head button:hover:not(:disabled),
 .git-track-remote-btn:hover:not(:disabled),
@@ -139,6 +147,7 @@
 }
 
 .git-commit-actions button.primary,
+.git-stash-create button.primary,
 .git-confirm-actions button.primary {
   border-color: rgba(40, 168, 255, 0.55);
   background: rgba(40, 168, 255, 0.22);
@@ -146,6 +155,7 @@
 }
 
 .git-branch-control button.danger,
+.git-stash-actions button.danger,
 .git-confirm-actions button.danger {
   border-color: rgba(255, 125, 144, 0.34);
   background: rgba(255, 125, 144, 0.14);
@@ -463,6 +473,7 @@
 
 .git-history-table,
 .git-workspace-panel,
+.git-stash-panel,
 .git-diff-panel {
   display: flex;
   min-height: 0;
@@ -602,6 +613,100 @@
 .git-workspace-panel {
   gap: 10px;
   padding: 10px;
+}
+
+.git-stash-panel {
+  gap: 10px;
+  padding: 10px;
+}
+
+.git-stash-create {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  border: 1px solid var(--git-border);
+  border-radius: 4px;
+  padding: 10px;
+  background: #172234;
+}
+
+.git-stash-create label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.git-stash-create span {
+  color: var(--git-muted);
+  font-size: 10.5px;
+  font-weight: 760;
+}
+
+.git-stash-list {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: auto;
+  border: 1px solid var(--git-border);
+  border-radius: 4px;
+  background: #0d1724;
+}
+
+.git-stash-list button {
+  display: grid;
+  width: 100%;
+  min-height: 42px;
+  grid-template-columns: 92px minmax(0, 1fr) 150px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-bottom: 1px solid rgba(150, 177, 210, 0.11);
+  padding: 0 10px;
+  background: transparent;
+  color: var(--git-muted-strong);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.git-stash-list button:hover,
+.git-stash-list button.active {
+  background: rgba(40, 168, 255, 0.16);
+  color: #ffffff;
+}
+
+.git-stash-list code,
+.git-stash-list strong,
+.git-stash-list span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-stash-list code {
+  color: var(--git-accent);
+  font-family: var(--font-mono, "Cascadia Mono", Consolas, monospace);
+  font-size: 11px;
+}
+
+.git-stash-list strong {
+  font-size: 12.5px;
+  font-weight: 780;
+}
+
+.git-stash-list span {
+  color: currentColor;
+  font-size: 11px;
+  opacity: 0.76;
+}
+
+.git-stash-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .git-commit-box {
@@ -830,6 +935,16 @@
   color: #ffffff;
 }
 
+.git-file-list button.conflicted {
+  border-left: 3px solid var(--git-danger);
+  background: rgba(255, 125, 144, 0.08);
+}
+
+.git-file-list button.conflicted.active,
+.git-file-list button.conflicted:hover {
+  background: rgba(255, 125, 144, 0.18);
+}
+
 .git-file-list strong,
 .git-file-list em {
   min-width: 0;
@@ -1046,6 +1161,8 @@
 [data-theme="light"] .git-branch-control button:hover:not(:disabled),
 [data-theme="light"] .git-commit-actions button:hover:not(:disabled),
 [data-theme="light"] .git-selected-actions button:hover:not(:disabled),
+[data-theme="light"] .git-stash-create button:hover:not(:disabled),
+[data-theme="light"] .git-stash-actions button:hover:not(:disabled),
 [data-theme="light"] .git-diff-actions button:hover:not(:disabled),
 [data-theme="light"] .git-pane-head button:hover:not(:disabled),
 [data-theme="light"] .git-track-remote-btn:hover:not(:disabled),
@@ -1056,6 +1173,7 @@
 }
 
 [data-theme="light"] .git-commit-actions button.primary,
+[data-theme="light"] .git-stash-create button.primary,
 [data-theme="light"] .git-confirm-actions button.primary {
   border-color: rgba(21, 101, 148, 0.34);
   background: rgba(21, 101, 148, 0.12);

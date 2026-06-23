@@ -26,6 +26,13 @@ export interface GitBranchSummary {
   upstream?: string;
 }
 
+export interface GitStashEntry {
+  ref: string;
+  shortHash: string;
+  age: string;
+  message: string;
+}
+
 interface GitTagSummary {
   name: string;
   subject?: string;
@@ -51,6 +58,7 @@ export interface GitRepositorySnapshot {
 export type GitAction = 'fetch' | 'pull' | 'push' | 'checkout';
 export type GitBranchAction = 'create' | 'delete' | 'checkoutRemote';
 export type GitStageMode = 'stage' | 'unstage';
+export type GitStashAction = 'push' | 'apply' | 'pop' | 'drop';
 
 const sectionNames = ['root', 'status', 'branches', 'log', 'remotes', 'tags', 'error'] as const;
 type GitSectionName = (typeof sectionNames)[number];
@@ -116,6 +124,10 @@ function validateGitBranchName(value: string) {
   }
 
   return trimmedValue;
+}
+
+function validateGitStashRef(value: string) {
+  return validateText(value, 'Stash', 120);
 }
 
 function createPosixGitSnapshotCommand(path: string) {
@@ -315,6 +327,38 @@ try {
   };
 }
 
+export function createGitStashListCommand(path: string, isWindowsHost: boolean): RemoteCommandInput {
+  const repoPath = validateGitPath(path);
+  const format = '%gd%x09%h%x09%cr%x09%gs';
+
+  if (isWindowsHost) {
+    return powershellStdinCommand(`& git -C ${powershellSingleQuote(repoPath)} stash list --date=relative --format=${powershellSingleQuote(format)}; exit $LASTEXITCODE`);
+  }
+
+  return { command: `git -C ${shellSingleQuote(repoPath)} stash list --date=relative --format=${shellSingleQuote(format)}` };
+}
+
+export function createGitStashActionCommand(path: string, action: GitStashAction, stashRef: string, message: string, isWindowsHost: boolean): RemoteCommandInput {
+  const repoPath = validateGitPath(path);
+
+  if (action === 'push') {
+    const safeMessage = validateText(message || 'ShellDesk stash', 'Stash message', 200);
+
+    if (isWindowsHost) {
+      return powershellStdinCommand(`& git -C ${powershellSingleQuote(repoPath)} stash push -u -m ${powershellSingleQuote(safeMessage)}; exit $LASTEXITCODE`);
+    }
+
+    return { command: `git -C ${shellSingleQuote(repoPath)} stash push -u -m ${shellSingleQuote(safeMessage)}` };
+  }
+
+  const safeRef = validateGitStashRef(stashRef);
+  if (isWindowsHost) {
+    return powershellStdinCommand(`& git -C ${powershellSingleQuote(repoPath)} stash ${action} ${powershellSingleQuote(safeRef)}; exit $LASTEXITCODE`);
+  }
+
+  return { command: `git -C ${shellSingleQuote(repoPath)} stash ${action} ${shellSingleQuote(safeRef)}` };
+}
+
 function splitSections(output: string) {
   const sections: Partial<Record<GitSectionName, string[]>> = {};
   let activeSection: GitSectionName | null = null;
@@ -467,6 +511,24 @@ function parseCommits(lines: string[]): GitCommitSummary[] {
       };
     })
     .filter((commit) => commit.hash && commit.subject);
+}
+
+export function parseGitStashListOutput(stdout: string): GitStashEntry[] {
+  return stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [ref = '', shortHash = '', age = '', ...messageParts] = line.split('\t');
+
+      return {
+        ref,
+        shortHash,
+        age,
+        message: messageParts.join('\t') || ref,
+      };
+    })
+    .filter((stash) => stash.ref);
 }
 
 export function parseGitSnapshotOutput(inputPath: string, stdout: string, stderr: string): GitRepositorySnapshot {

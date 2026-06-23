@@ -11,8 +11,11 @@ import {
   createGitSnapshotCommand,
   createGitStageAllCommand,
   createGitStageCommand,
+  createGitStashActionCommand,
+  createGitStashListCommand,
   getGitStatusLabel,
   parseGitSnapshotOutput,
+  parseGitStashListOutput,
   type GitAction,
   type GitBranchAction,
   type GitBranchSummary,
@@ -20,6 +23,8 @@ import {
   type GitFileChange,
   type GitRepositorySnapshot,
   type GitStageMode,
+  type GitStashAction,
+  type GitStashEntry,
 } from './gitUtils';
 import { isWindowsSystem, type RemoteCommandInput } from './remoteSystem';
 import RemoteFilePicker from './RemoteFilePicker';
@@ -31,9 +36,9 @@ interface RemoteGitManagerProps {
   systemType?: RemoteSystemType;
 }
 
-type GitTab = 'changes' | 'commits' | 'diff' | 'raw';
+type GitTab = 'changes' | 'commits' | 'stash' | 'diff' | 'raw';
 type DiffMode = 'worktree' | 'staged';
-type PendingGitActionKind = GitAction | 'commit' | 'branchCreate' | 'branchDelete' | 'branchCheckoutRemote';
+type PendingGitActionKind = GitAction | 'commit' | 'branchCreate' | 'branchDelete' | 'branchCheckoutRemote' | 'stashPush' | 'stashApply' | 'stashPop' | 'stashDrop';
 
 interface PendingGitAction {
   action: PendingGitActionKind;
@@ -121,13 +126,16 @@ function RemoteGitManager({ connectionId, systemType }: RemoteGitManagerProps) {
   const [selectedBranch, setSelectedBranch] = useState('');
   const [selectedRemoteBranch, setSelectedRemoteBranch] = useState('');
   const [selectedCommitHash, setSelectedCommitHash] = useState('');
+  const [selectedStashRef, setSelectedStashRef] = useState('');
   const [activeTab, setActiveTab] = useState<GitTab>('changes');
   const [diffMode, setDiffMode] = useState<DiffMode>('worktree');
   const [diffText, setDiffText] = useState('');
   const [commitMessage, setCommitMessage] = useState('');
+  const [stashMessage, setStashMessage] = useState('');
   const [newBranchName, setNewBranchName] = useState('');
   const [commitSearch, setCommitSearch] = useState('');
   const [commandOutput, setCommandOutput] = useState('');
+  const [stashEntries, setStashEntries] = useState<GitStashEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [diffLoading, setDiffLoading] = useState(false);
   const [actionRunning, setActionRunning] = useState(false);
@@ -178,6 +186,9 @@ function RemoteGitManager({ connectionId, systemType }: RemoteGitManagerProps) {
   const selectedCommit = useMemo<GitCommitSummary | null>(() => {
     return filteredCommits.find((commit) => commit.hash === selectedCommitHash) ?? filteredCommits[0] ?? null;
   }, [filteredCommits, selectedCommitHash]);
+  const selectedStash = useMemo<GitStashEntry | null>(() => {
+    return stashEntries.find((stash) => stash.ref === selectedStashRef) ?? stashEntries[0] ?? null;
+  }, [selectedStashRef, stashEntries]);
 
   const loadRepository = useCallback(async (path: string) => {
     setLoading(true);
@@ -188,8 +199,20 @@ function RemoteGitManager({ connectionId, systemType }: RemoteGitManagerProps) {
       const command = createGitSnapshotCommand(path, isWindowsHost);
       const result = await runCmd(connectionId, command);
       const nextSnapshot = parseGitSnapshotOutput(path, result.stdout, result.stderr);
+      let nextStashes: GitStashEntry[] = [];
+
+      try {
+        const stashCommand = createGitStashListCommand(nextSnapshot.rootPath, isWindowsHost);
+        const stashResult = await runCmd(connectionId, stashCommand);
+        if (stashResult.code === 0) {
+          nextStashes = parseGitStashListOutput(stashResult.stdout);
+        }
+      } catch {
+        nextStashes = [];
+      }
 
       setSnapshot(nextSnapshot);
+      setStashEntries(nextStashes);
       setRepoPath(nextSnapshot.rootPath);
       rememberedGitRepositoryPaths.set(connectionId, nextSnapshot.rootPath);
       setSelectedBranch((current) => (
@@ -214,11 +237,17 @@ function RemoteGitManager({ connectionId, systemType }: RemoteGitManagerProps) {
           ? current
           : nextSnapshot.commits[0]?.hash ?? ''
       ));
+      setSelectedStashRef((current) => (
+        current && nextStashes.some((stash) => stash.ref === current)
+          ? current
+          : nextStashes[0]?.ref ?? ''
+      ));
       setCommandOutput(nextSnapshot.rawOutput);
       setLastRefreshedAt(new Date().toLocaleTimeString(getShellDeskLocale()));
       setNotice(nextSnapshot.clean ? tCurrent('auto.remoteGitManager.1i65qku') : tCurrent('auto.remoteGitManager.1bm0lc', { value0: nextSnapshot.files.length }));
     } catch (error) {
       setSnapshot(null);
+      setStashEntries([]);
       setSelectedFilePath('');
       setCommandOutput('');
       setError(getErrorMessage(error));
@@ -237,6 +266,7 @@ function RemoteGitManager({ connectionId, systemType }: RemoteGitManagerProps) {
       setSelectedBranch('');
       setSelectedRemoteBranch('');
       setSelectedCommitHash('');
+      setSelectedStashRef('');
       setCommandOutput('');
       setDiffText('');
       setNotice('');
@@ -421,6 +451,37 @@ function RemoteGitManager({ connectionId, systemType }: RemoteGitManagerProps) {
     }
   };
 
+  const prepareStashAction = (action: GitStashAction, stash?: GitStashEntry | null) => {
+    if (!snapshot) return;
+
+    try {
+      const labels: Record<GitStashAction, string> = {
+        push: 'Create stash',
+        apply: 'Apply stash',
+        pop: 'Pop stash',
+        drop: 'Drop stash',
+      };
+      const command = createGitStashActionCommand(snapshot.rootPath, action, stash?.ref ?? '', stashMessage, isWindowsHost);
+      const pendingActions: Record<GitStashAction, PendingGitActionKind> = {
+        push: 'stashPush',
+        apply: 'stashApply',
+        pop: 'stashPop',
+        drop: 'stashDrop',
+      };
+
+      setPendingAction({
+        action: pendingActions[action],
+        label: labels[action],
+        command,
+        branch: action === 'push' ? undefined : stash?.ref,
+        message: action === 'push' ? stashMessage.trim() || 'ShellDesk stash' : stash?.message,
+        danger: action === 'pop' || action === 'drop',
+      });
+    } catch (error) {
+      setError(getErrorMessage(error));
+    }
+  };
+
   const executePendingAction = async () => {
     if (!pendingAction) return;
 
@@ -438,6 +499,9 @@ function RemoteGitManager({ connectionId, systemType }: RemoteGitManagerProps) {
 
       if (pendingAction.action === 'commit') {
         setCommitMessage('');
+      }
+      if (pendingAction.action === 'stashPush') {
+        setStashMessage('');
       }
       if (pendingAction.action === 'branchCreate') {
         setNewBranchName('');
@@ -539,6 +603,9 @@ function RemoteGitManager({ connectionId, systemType }: RemoteGitManagerProps) {
             <button type="button" className={activeTab === 'commits' ? 'active' : ''} onClick={() => setActiveTab('commits')}>
               <span>History</span><em>{snapshot?.commits.length ?? 0}</em>
             </button>
+            <button type="button" className={activeTab === 'stash' ? 'active' : ''} onClick={() => setActiveTab('stash')}>
+              <span>Stash</span><em>{stashEntries.length}</em>
+            </button>
             <button type="button" className={activeTab === 'raw' ? 'active' : ''} onClick={() => setActiveTab('raw')}>
               <span>{tCurrent('auto.remoteGitManager.es77i5')}</span>
             </button>
@@ -625,8 +692,8 @@ function RemoteGitManager({ connectionId, systemType }: RemoteGitManagerProps) {
 
         <main className="git-sourcetree-main">
           <div className="git-history-filterbar">
-            <strong>{activeTab === 'changes' ? tCurrent('auto.remoteGitManager.r163612') : activeTab === 'raw' ? tCurrent('auto.remoteGitManager.es77i52') : 'History'}</strong>
-            <span>{filteredCommits.length} commits · {localBranches.length} local branches · {remoteBranches.length} remote branches</span>
+            <strong>{activeTab === 'changes' ? tCurrent('auto.remoteGitManager.r163612') : activeTab === 'raw' ? tCurrent('auto.remoteGitManager.es77i52') : activeTab === 'stash' ? 'Stash' : 'History'}</strong>
+            <span>{filteredCommits.length} commits · {stashEntries.length} stashes · {localBranches.length} local branches · {remoteBranches.length} remote branches</span>
             <div className={`git-branch-card ${snapshot?.clean ? 'clean' : 'dirty'}`}>
               <strong>{snapshot?.branch ?? tCurrent('auto.remoteGitManager.18vm84u')}</strong>
               <span>{snapshot?.upstream ? `${snapshot.upstream} · +${snapshot.ahead} / -${snapshot.behind}` : lastRefreshedAt || tCurrent('auto.remoteGitManager.exgzv')}</span>
@@ -697,6 +764,38 @@ function RemoteGitManager({ connectionId, systemType }: RemoteGitManagerProps) {
             </section>
           ) : null}
 
+          {activeTab === 'stash' ? (
+            <section className="git-stash-panel">
+              <div className="git-stash-create">
+                <label>
+                  <span>Stash message</span>
+                  <input value={stashMessage} onChange={(event) => setStashMessage(event.target.value)} placeholder="WIP before switching context" disabled={!snapshot || actionRunning} />
+                </label>
+                <button type="button" className="primary" onClick={() => prepareStashAction('push')} disabled={!snapshot || actionRunning || changedCount === 0}>Create stash</button>
+              </div>
+              <div className="git-stash-list">
+                {stashEntries.map((stash) => (
+                  <button
+                    key={stash.ref}
+                    type="button"
+                    className={selectedStash?.ref === stash.ref ? 'active' : ''}
+                    onClick={() => setSelectedStashRef(stash.ref)}
+                  >
+                    <code>{stash.ref}</code>
+                    <strong>{stash.message}</strong>
+                    <span>{stash.shortHash} · {stash.age}</span>
+                  </button>
+                ))}
+                {!stashEntries.length ? <div className="git-empty-state">No stashes</div> : null}
+              </div>
+              <div className="git-stash-actions">
+                <button type="button" onClick={() => prepareStashAction('apply', selectedStash)} disabled={!snapshot || actionRunning || !selectedStash}>Apply</button>
+                <button type="button" onClick={() => prepareStashAction('pop', selectedStash)} disabled={!snapshot || actionRunning || !selectedStash}>Pop</button>
+                <button type="button" className="danger" onClick={() => prepareStashAction('drop', selectedStash)} disabled={!snapshot || actionRunning || !selectedStash}>Drop</button>
+              </div>
+            </section>
+          ) : null}
+
           {activeTab === 'diff' ? (
             <section className="git-diff-panel">
               <div className="git-diff-toolbar">
@@ -745,7 +844,7 @@ function RemoteGitManager({ connectionId, systemType }: RemoteGitManagerProps) {
                   <button
                     key={getChangeKey(file)}
                     type="button"
-                    className={selectedFile?.path === file.path ? 'active' : ''}
+                    className={`${selectedFile?.path === file.path ? 'active' : ''} ${file.kind === 'conflicted' ? 'conflicted' : ''}`}
                     onClick={() => {
                       setSelectedFilePath(file.path);
                       void loadDiff(file);
