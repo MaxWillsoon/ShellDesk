@@ -791,6 +791,33 @@ mod tests {
     }
 
     #[test]
+    fn ssh_args_use_shell_desk_known_hosts_only() {
+        let mut profile = SshProfile {
+            address: "example.com".to_string(),
+            port: 22,
+            username: "administrator".to_string(),
+            auth_method: "password".to_string(),
+            password: String::new(),
+            key_path: String::new(),
+            known_hosts_path: String::new(),
+            proxy_helper_exe: String::new(),
+            proxy: None,
+            jump: None,
+        };
+
+        let args = ssh_args(&profile);
+        let null_known_hosts = if cfg!(windows) { "NUL" } else { "/dev/null" };
+        assert!(args.contains(&format!("UserKnownHostsFile={null_known_hosts}")));
+        assert!(args.contains(&format!("GlobalKnownHostsFile={null_known_hosts}")));
+
+        profile.known_hosts_path = "C:\\ShellDesk\\ssh.known_hosts".to_string();
+        let args = ssh_args(&profile);
+
+        assert!(args.contains(&"UserKnownHostsFile=C:\\ShellDesk\\ssh.known_hosts".to_string()));
+        assert!(args.contains(&format!("GlobalKnownHostsFile={null_known_hosts}")));
+    }
+
+    #[test]
     fn windows_proxy_command_arg_uses_double_quotes_for_paths_with_spaces() {
         let arg = proxy_command_arg_for_platform(
             "UserKnownHostsFile=C:\\Users\\baicai\\AppData\\Roaming\\ShellDesk Data\\known_hosts",

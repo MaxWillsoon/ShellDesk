@@ -119,16 +119,14 @@ async fn ensure_direct_ssh_host_key_trusted(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    if let Some(public_key) =
-        trusted_known_host_public_key(&known_hosts, &profile.address, profile.port)
-    {
-        profile.known_hosts_path =
-            write_connection_known_hosts_from_public_key(state, profile, &public_key)?;
-        return Ok(());
-    }
-    let scanned = scan_ssh_host_key(state, window, profile).await?;
-    let decision =
-        classify_scanned_host_key(&known_hosts, &profile.address, profile.port, &scanned);
+    let scanned_keys = scan_ssh_host_keys(state, window, profile).await?;
+    let (scanned, decision) = select_scanned_host_key_decision(
+        &known_hosts,
+        &profile.address,
+        profile.port,
+        &scanned_keys,
+    )
+    .ok_or_else(|| "未能扫描 SSH 主机密钥。".to_string())?;
     match decision
         .get("status")
         .and_then(Value::as_str)
@@ -210,16 +208,21 @@ async fn request_host_key_decision(
     }
 }
 
-async fn scan_ssh_host_key(
+async fn scan_ssh_host_keys(
     state: &AppState,
     window: &tauri::Window,
     profile: &SshProfile,
-) -> Result<Value, String> {
+) -> Result<Vec<Value>, String> {
     if let Some(jump) = profile.jump.as_deref() {
-        return scan_ssh_host_key_via_jump(state, window, jump, profile).await;
+        return scan_ssh_host_keys_via_jump(state, window, jump, profile).await;
     }
     if !command_exists("ssh-keyscan") {
-        return Err("未找到 ssh-keyscan，无法执行 SSH 主机密钥预检。".to_string());
+        return scan_ssh_host_keys_via_accept_new(
+            state,
+            profile,
+            "未找到 ssh-keyscan，无法执行 SSH 主机密钥预检。",
+        )
+        .await;
     }
     let mut command = Command::new("ssh-keyscan");
     prevent_tokio_process_window(&mut command);
@@ -239,23 +242,109 @@ async fn scan_ssh_host_key(
         .await
         .map_err(error_string)?;
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let Some(public_key) = stdout.lines().find_map(parse_ssh_keyscan_line) else {
+    let scanned_keys = scanned_host_keys_from_keyscan_output(&stdout);
+    if scanned_keys.is_empty() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
+        let keyscan_error = if stderr.is_empty() {
             "未能扫描 SSH 主机密钥。".to_string()
         } else {
             format!("未能扫描 SSH 主机密钥：{stderr}")
-        });
-    };
-    scanned_host_key_from_public_key(&public_key)
+        };
+        return scan_ssh_host_keys_via_accept_new(state, profile, &keyscan_error).await;
+    }
+    Ok(scanned_keys)
 }
 
-async fn scan_ssh_host_key_via_jump(
+async fn scan_ssh_host_keys_via_accept_new(
+    state: &AppState,
+    profile: &SshProfile,
+    keyscan_error: &str,
+) -> Result<Vec<Value>, String> {
+    if !command_exists("ssh") {
+        return Err(format!(
+            "{keyscan_error}；未找到 ssh，无法使用备用主机密钥预检。"
+        ));
+    }
+
+    let known_hosts_dir = state.data_dir.join("known-hosts");
+    fs::create_dir_all(&known_hosts_dir).map_err(error_string)?;
+    let path = known_hosts_dir.join(format!("{}.scan.known_hosts", random_id("ssh")));
+    let path_text = path.to_string_lossy().to_string();
+
+    let mut command = Command::new("ssh");
+    prevent_tokio_process_window(&mut command);
+    let args = vec![
+        "-p".to_string(),
+        profile.port.to_string(),
+        "-o".to_string(),
+        "ConnectTimeout=8".to_string(),
+        "-o".to_string(),
+        "StrictHostKeyChecking=accept-new".to_string(),
+        "-o".to_string(),
+        format!("UserKnownHostsFile={path_text}"),
+        "-o".to_string(),
+        format!("GlobalKnownHostsFile={}", null_known_hosts_path()),
+        "-o".to_string(),
+        "BatchMode=yes".to_string(),
+        "-o".to_string(),
+        "PasswordAuthentication=no".to_string(),
+        "-o".to_string(),
+        "KbdInteractiveAuthentication=no".to_string(),
+        "-o".to_string(),
+        "ChallengeResponseAuthentication=no".to_string(),
+        "-o".to_string(),
+        "NumberOfPasswordPrompts=0".to_string(),
+        ssh_scan_destination(profile),
+        "true".to_string(),
+    ];
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = time::timeout(Duration::from_secs(10), command.output())
+        .await
+        .map_err(|_| format!("{keyscan_error}；备用 SSH 主机密钥预检超时。"))?
+        .map_err(error_string)?;
+
+    let known_hosts_text = fs::read_to_string(&path).unwrap_or_default();
+    let _ = fs::remove_file(&path);
+    let scanned_keys = scanned_host_keys_from_keyscan_output(&known_hosts_text);
+    if scanned_keys.is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("{keyscan_error}；备用 SSH 主机密钥预检未写入 known_hosts。")
+        } else {
+            format!("{keyscan_error}；备用 SSH 主机密钥预检未写入 known_hosts：{stderr}")
+        });
+    }
+
+    Ok(scanned_keys)
+}
+
+fn ssh_scan_destination(profile: &SshProfile) -> String {
+    if profile.username.trim().is_empty() {
+        profile.address.clone()
+    } else {
+        format!("{}@{}", profile.username, profile.address)
+    }
+}
+
+fn null_known_hosts_path() -> &'static str {
+    if cfg!(windows) {
+        "NUL"
+    } else {
+        "/dev/null"
+    }
+}
+
+async fn scan_ssh_host_keys_via_jump(
     state: &AppState,
     window: &tauri::Window,
     jump: &SshProfile,
     profile: &SshProfile,
-) -> Result<Value, String> {
+) -> Result<Vec<Value>, String> {
     let command = format!(
         "ssh-keyscan -T 3 -t ed25519,ecdsa,rsa -p {} {}",
         profile.port,
@@ -270,7 +359,8 @@ async fn scan_ssh_host_key_via_jump(
     )
     .await?;
     let stdout = output.get("stdout").and_then(Value::as_str).unwrap_or("");
-    let Some(public_key) = stdout.lines().find_map(parse_ssh_keyscan_line) else {
+    let scanned_keys = scanned_host_keys_from_keyscan_output(stdout);
+    if scanned_keys.is_empty() {
         let stderr = output
             .get("stderr")
             .and_then(Value::as_str)
@@ -282,8 +372,16 @@ async fn scan_ssh_host_key_via_jump(
         } else {
             format!("未能通过跳板机读取目标主机 SSH 公钥：{stderr}")
         });
-    };
-    scanned_host_key_from_public_key(&public_key)
+    }
+    Ok(scanned_keys)
+}
+
+fn scanned_host_keys_from_keyscan_output(stdout: &str) -> Vec<Value> {
+    stdout
+        .lines()
+        .filter_map(parse_ssh_keyscan_line)
+        .filter_map(|public_key| scanned_host_key_from_public_key(&public_key).ok())
+        .collect()
 }
 
 fn scanned_host_key_from_public_key(public_key: &str) -> Result<Value, String> {
@@ -399,24 +497,6 @@ fn known_host_fingerprint(known_host: &Value) -> String {
         .unwrap_or_default()
 }
 
-pub(super) fn trusted_known_host_public_key(
-    known_hosts: &[Value],
-    hostname: &str,
-    port: u16,
-) -> Option<String> {
-    known_hosts
-        .iter()
-        .filter(|known_host| known_host_matches_host(known_host, hostname, port))
-        .find_map(|known_host| {
-            known_host
-                .get("publicKey")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|public_key| !public_key.is_empty())
-                .map(ToOwned::to_owned)
-        })
-}
-
 pub(super) fn classify_scanned_host_key(
     known_hosts: &[Value],
     hostname: &str,
@@ -453,11 +533,46 @@ pub(super) fn classify_scanned_host_key(
             return json!({
                 "status": "changed",
                 "knownHostId": known_host.get("id").and_then(Value::as_str).unwrap_or(""),
-                "expectedFingerprint": known_host_fingerprint(known_host)
+                "expectedFingerprint": known_host_fingerprint(known_host),
+                "expectedKeyType": known_host.get("keyType").and_then(Value::as_str).unwrap_or("")
             });
         }
     }
-    json!({ "status": "unknown" })
+    let known_host = candidates[0];
+    json!({
+        "status": "changed",
+        "knownHostId": known_host.get("id").and_then(Value::as_str).unwrap_or(""),
+        "expectedFingerprint": known_host_fingerprint(known_host),
+        "expectedKeyType": known_host.get("keyType").and_then(Value::as_str).unwrap_or("")
+    })
+}
+
+pub(super) fn select_scanned_host_key_decision(
+    known_hosts: &[Value],
+    hostname: &str,
+    port: u16,
+    scanned_keys: &[Value],
+) -> Option<(Value, Value)> {
+    let mut first_changed = None;
+    let mut first_unknown = None;
+    for scanned in scanned_keys {
+        let decision = classify_scanned_host_key(known_hosts, hostname, port, scanned);
+        match decision
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+        {
+            "trusted" => return Some((scanned.clone(), decision)),
+            "changed" if first_changed.is_none() => {
+                first_changed = Some((scanned.clone(), decision))
+            }
+            "unknown" if first_unknown.is_none() => {
+                first_unknown = Some((scanned.clone(), decision))
+            }
+            _ => {}
+        }
+    }
+    first_changed.or(first_unknown)
 }
 
 fn upsert_known_host_from_scan(
@@ -472,46 +587,64 @@ fn upsert_known_host_from_scan(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let now_value = now();
+    let next = merge_known_hosts_from_scan(current, profile, scanned, decision, &now_value);
+    store["knownHosts"] = json!(next);
+    write_store(state, &store)
+}
+
+pub(super) fn merge_known_hosts_from_scan(
+    current: Vec<Value>,
+    profile: &SshProfile,
+    scanned: &Value,
+    decision: &Value,
+    now_value: &str,
+) -> Vec<Value> {
     let known_host_id = decision
         .get("knownHostId")
         .and_then(Value::as_str)
         .unwrap_or("");
-    let now_value = now();
     let mut replaced = false;
     let mut next = Vec::new();
     for known_host in current {
         let same_id = !known_host_id.is_empty()
             && known_host.get("id").and_then(Value::as_str) == Some(known_host_id);
         let same_host = known_host_matches_host(&known_host, &profile.address, profile.port);
-        let same_fingerprint = same_host
-            && known_host_fingerprint(&known_host)
-                == normalize_fingerprint(
-                    scanned
-                        .get("fingerprint")
+        if same_id || same_host {
+            if !replaced {
+                let id = known_host
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.trim().is_empty())
+                    .unwrap_or_else(|| {
+                        if known_host_id.is_empty() {
+                            ""
+                        } else {
+                            known_host_id
+                        }
+                    });
+                let id = if id.is_empty() {
+                    random_id("known-host")
+                } else {
+                    id.to_string()
+                };
+                next.push(known_host_record_from_scan(
+                    profile,
+                    scanned,
+                    id,
+                    known_host
+                        .get("discoveredAt")
                         .and_then(Value::as_str)
-                        .unwrap_or(""),
-                );
-        let same_host_type = same_host
-            && !scanned
-                .get("keyType")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .is_empty()
-            && known_host.get("keyType").and_then(Value::as_str)
-                == scanned.get("keyType").and_then(Value::as_str);
-        if same_id || same_fingerprint || same_host_type {
-            let next_known_host = json!({
-                "id": known_host.get("id").and_then(Value::as_str).unwrap_or_else(|| if known_host_id.is_empty() { "" } else { known_host_id }),
-                "hostname": profile.address,
-                "port": profile.port,
-                "keyType": scanned.get("keyType").and_then(Value::as_str).unwrap_or("unknown"),
-                "publicKey": scanned.get("publicKey").and_then(Value::as_str).unwrap_or(""),
-                "fingerprint": scanned.get("fingerprint").and_then(Value::as_str).unwrap_or(""),
-                "discoveredAt": known_host.get("discoveredAt").and_then(Value::as_str).unwrap_or(&now_value),
-                "lastSeen": now_value,
-                "convertedToHostId": known_host.get("convertedToHostId").and_then(Value::as_str).unwrap_or("")
-            });
-            next.push(next_known_host.clone());
+                        .unwrap_or(now_value)
+                        .to_string(),
+                    known_host
+                        .get("convertedToHostId")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    now_value,
+                ));
+            }
             replaced = true;
         } else {
             next.push(known_host);
@@ -520,21 +653,42 @@ fn upsert_known_host_from_scan(
     if !replaced {
         next.insert(
             0,
-            json!({
-                "id": if known_host_id.is_empty() { random_id("known-host") } else { known_host_id.to_string() },
-                "hostname": profile.address,
-                "port": profile.port,
-                "keyType": scanned.get("keyType").and_then(Value::as_str).unwrap_or("unknown"),
-                "publicKey": scanned.get("publicKey").and_then(Value::as_str).unwrap_or(""),
-                "fingerprint": scanned.get("fingerprint").and_then(Value::as_str).unwrap_or(""),
-                "discoveredAt": now_value,
-                "lastSeen": now_value,
-                "convertedToHostId": ""
-            }),
+            known_host_record_from_scan(
+                profile,
+                scanned,
+                if known_host_id.is_empty() {
+                    random_id("known-host")
+                } else {
+                    known_host_id.to_string()
+                },
+                now_value.to_string(),
+                String::new(),
+                now_value,
+            ),
         );
     }
-    store["knownHosts"] = json!(next);
-    write_store(state, &store)
+    next
+}
+
+fn known_host_record_from_scan(
+    profile: &SshProfile,
+    scanned: &Value,
+    id: String,
+    discovered_at: String,
+    converted_to_host_id: String,
+    now_value: &str,
+) -> Value {
+    json!({
+        "id": id,
+        "hostname": profile.address,
+        "port": profile.port,
+        "keyType": scanned.get("keyType").and_then(Value::as_str).unwrap_or("unknown"),
+        "publicKey": scanned.get("publicKey").and_then(Value::as_str).unwrap_or(""),
+        "fingerprint": scanned.get("fingerprint").and_then(Value::as_str).unwrap_or(""),
+        "discoveredAt": discovered_at,
+        "lastSeen": now_value,
+        "convertedToHostId": converted_to_host_id
+    })
 }
 
 fn write_connection_known_hosts(
