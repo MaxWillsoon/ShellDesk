@@ -102,6 +102,12 @@
   color: #dffaff;
 }
 
+.log-tool-button.danger {
+  border-color: rgba(255, 143, 163, 0.28);
+  background: rgba(255, 143, 163, 0.12);
+  color: var(--log-danger);
+}
+
 .log-system-pill {
   display: inline-flex;
   height: 28px;
@@ -174,6 +180,21 @@
 .log-source-input::placeholder,
 .log-keyword-input::placeholder {
   color: var(--log-muted);
+}
+
+.log-regex-toggle {
+  display: inline-flex;
+  height: 30px;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+  color: var(--log-muted-strong);
+  font-size: 11.5px;
+  font-weight: 760;
+}
+
+.log-regex-toggle input {
+  accent-color: var(--log-accent);
 }
 
 .log-alert {

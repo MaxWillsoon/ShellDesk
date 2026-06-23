@@ -37,6 +37,7 @@ interface LogSourceGroup {
 
 interface LogQuery {
   keyword: string;
+  useRegex: boolean;
   level: LogLevelFilter;
   timeRange: TimeRangePreset;
   since: string;
@@ -413,7 +414,7 @@ function getJournalPriorityArg(level: LogLevelFilter) {
 
 function getLinuxJournalCommand(serviceName: string, query: LogQuery) {
   const lines = clampLines(query.lines);
-  const keyword = sanitizeSingleLine(query.keyword);
+  const keyword = query.useRegex ? '' : sanitizeSingleLine(query.keyword);
   const fetchLines = keyword ? Math.min(lines * 8, 8000) : lines;
   const unitArg = serviceName ? `-u ${shellSingleQuote(serviceName)}` : '';
   const timeArgs = getLinuxTimeArgs(query);
@@ -425,7 +426,7 @@ function getLinuxJournalCommand(serviceName: string, query: LogQuery) {
 
 function getLinuxFileLogCommand(filePath: string, query: LogQuery) {
   const lines = clampLines(query.lines);
-  const keyword = sanitizeSingleLine(query.keyword);
+  const keyword = query.useRegex ? '' : sanitizeSingleLine(query.keyword);
   const fetchLines = keyword || query.level !== 'all' || query.timeRange !== 'all' ? Math.min(lines * 10, 10000) : lines;
   const pipelineParts = [`tail -n ${fetchLines} -- "$log_file" 2>&1`];
 
@@ -492,7 +493,7 @@ function getWindowsLevelScript(level: LogLevelFilter) {
 
 function getWindowsEventCommand(logName: string, query: LogQuery) {
   const lines = clampLines(query.lines);
-  const keyword = sanitizeSingleLine(query.keyword);
+  const keyword = query.useRegex ? '' : sanitizeSingleLine(query.keyword);
   const fetchLimit = keyword || query.level !== 'all' ? Math.min(lines * 8, 4000) : lines;
   const keywordScript = keyword ? `
 $needle = ${powershellSingleQuote(keyword)}
@@ -591,28 +592,49 @@ function getSelectedLineText(lines: LogLine[], selectedLineIds: Set<string>) {
     .join('\n');
 }
 
-function renderHighlightedText(text: string, keyword: string) {
+function createSearchPattern(keyword: string, useRegex: boolean) {
   const query = keyword.trim();
+  if (!query) return null;
+  try {
+    return useRegex ? new RegExp(query, 'gi') : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+  } catch {
+    return null;
+  }
+}
 
-  if (!query) {
+function filterLogLinesBySearch(lines: LogLine[], keyword: string, useRegex: boolean) {
+  const pattern = createSearchPattern(keyword, useRegex);
+  if (!keyword.trim() || !pattern) return lines;
+  return lines.filter((line) => {
+    pattern.lastIndex = 0;
+    return pattern.test(line.raw);
+  });
+}
+
+function renderHighlightedText(text: string, keyword: string, useRegex: boolean) {
+  const query = keyword.trim();
+  const pattern = createSearchPattern(query, useRegex);
+
+  if (!query || !pattern) {
     return text;
   }
 
-  const lowerText = text.toLowerCase();
-  const lowerQuery = query.toLowerCase();
   const parts: ReactNode[] = [];
   let cursor = 0;
-  let matchIndex = lowerText.indexOf(lowerQuery, cursor);
+  let match = pattern.exec(text);
   let key = 0;
 
-  while (matchIndex !== -1 && key < 200) {
+  while (match && key < 200) {
+    const matchIndex = match.index;
+    const matchText = match[0] || '';
+    if (!matchText) break;
     if (matchIndex > cursor) {
       parts.push(text.slice(cursor, matchIndex));
     }
 
-    parts.push(<mark key={`hit-${key}`}>{text.slice(matchIndex, matchIndex + query.length)}</mark>);
-    cursor = matchIndex + query.length;
-    matchIndex = lowerText.indexOf(lowerQuery, cursor);
+    parts.push(<mark key={`hit-${key}`}>{matchText}</mark>);
+    cursor = matchIndex + matchText.length;
+    match = pattern.exec(text);
     key += 1;
   }
 
@@ -629,12 +651,14 @@ function RemoteLogViewer({ connectionId, systemType }: RemoteLogViewerProps) {
   const defaultSourceId = isWindowsHost ? 'event:System' : 'journal:system';
   const isMountedRef = useRef(true);
   const queryRequestIdRef = useRef(0);
+  const liveRequestIdRef = useRef(0);
   const initialQueryKeyRef = useRef('');
   const [logFiles, setLogFiles] = useState<LogSource[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState(defaultSourceId);
   const [serviceName, setServiceName] = useState('nginx.service');
   const [filePath, setFilePath] = useState('/var/log/syslog');
   const [keyword, setKeyword] = useState('');
+  const [useRegex, setUseRegex] = useState(false);
   const [level, setLevel] = useState<LogLevelFilter>('all');
   const [timeRange, setTimeRange] = useState<TimeRangePreset>('24h');
   const [since, setSince] = useState('');
@@ -650,6 +674,7 @@ function RemoteLogViewer({ connectionId, systemType }: RemoteLogViewerProps) {
   const [success, setSuccess] = useState('');
   const [loadedAt, setLoadedAt] = useState<number | null>(null);
   const [loadedSourceLabel, setLoadedSourceLabel] = useState('');
+  const [liveMode, setLiveMode] = useState(false);
 
   const sourceGroups = useMemo<LogSourceGroup[]>(() => {
     if (isWindowsHost) {
@@ -733,12 +758,13 @@ function RemoteLogViewer({ connectionId, systemType }: RemoteLogViewerProps) {
 
   const query = useMemo<LogQuery>(() => ({
     keyword,
+    useRegex,
     level,
     timeRange,
     since,
     until,
     lines: clampLines(lines),
-  }), [keyword, level, lines, since, timeRange, until]);
+  }), [keyword, level, lines, since, timeRange, until, useRegex]);
 
   const pageCount = Math.max(1, Math.ceil(logLines.length / pageSize));
   const currentPage = Math.min(page, pageCount - 1);
@@ -811,9 +837,10 @@ function RemoteLogViewer({ connectionId, systemType }: RemoteLogViewerProps) {
       const parsedLines = isWindowsHost
         ? parseWindowsEventOutput(result.stdout || '')
         : parseLinuxLogOutput(result.stdout || '');
-      const nextLines = !isWindowsHost && querySource.type === 'file'
+      const timeFilteredLines = !isWindowsHost && querySource.type === 'file'
         ? filterLinesByTimeRange(parsedLines, query)
         : parsedLines;
+      const nextLines = filterLogLinesBySearch(timeFilteredLines, query.keyword, query.useRegex);
 
       if (result.code !== 0 && nextLines.length === 0) {
         throw new Error(result.stderr || result.stdout || tCurrent('auto.remoteLogViewer.1amadvq'));
@@ -846,6 +873,71 @@ function RemoteLogViewer({ connectionId, systemType }: RemoteLogViewerProps) {
   }, [isWindowsHost, query, resolvedSource, runCommand]);
 
   useEffect(() => {
+    if (!liveMode) {
+      return undefined;
+    }
+
+    const requestId = liveRequestIdRef.current + 1;
+    liveRequestIdRef.current = requestId;
+    let disposed = false;
+    let timerId: number | undefined;
+    const liveQuery: LogQuery = { ...query, timeRange: 'all', lines: Math.min(Math.max(query.lines, 80), 600) };
+
+    const pollLiveLogs = async () => {
+      if (disposed || liveRequestIdRef.current !== requestId) return;
+      try {
+        const command = isWindowsHost
+          ? getWindowsEventCommand(resolvedSource.value || 'System', liveQuery)
+          : resolvedSource.type === 'file'
+            ? getLinuxFileLogCommand(resolvedSource.value, liveQuery)
+            : getLinuxJournalCommand(resolvedSource.value, liveQuery);
+        const result = await runCommand(command);
+        const parsedLines = isWindowsHost
+          ? parseWindowsEventOutput(result.stdout || '')
+          : parseLinuxLogOutput(result.stdout || '');
+        const nextLines = filterLogLinesBySearch(parsedLines, liveQuery.keyword, liveQuery.useRegex);
+
+        if (!disposed && liveRequestIdRef.current === requestId) {
+          setLogLines((currentLines) => {
+            const seen = new Set(currentLines.map((line) => line.raw));
+            const merged = [...currentLines];
+            nextLines.forEach((line) => {
+              if (!seen.has(line.raw)) {
+                seen.add(line.raw);
+                merged.push({ ...line, id: `live-${Date.now()}-${merged.length}-${line.id}` });
+              }
+            });
+            return merged.slice(-maxLines);
+          });
+          setLoadedAt(Date.now());
+          setLoadedSourceLabel(resolvedSource.label);
+          if (result.code !== 0) {
+            setNotice(result.stderr || result.stdout || tCurrent('logViewer.livePartial'));
+          }
+        }
+      } catch (error) {
+        if (!disposed && liveRequestIdRef.current === requestId) {
+          setError(getErrorMessage(error));
+          setLiveMode(false);
+        }
+      } finally {
+        if (!disposed && liveRequestIdRef.current === requestId) {
+          timerId = window.setTimeout(pollLiveLogs, 3000);
+        }
+      }
+    };
+
+    void pollLiveLogs();
+
+    return () => {
+      disposed = true;
+      if (timerId !== undefined) {
+        window.clearTimeout(timerId);
+      }
+    };
+  }, [isWindowsHost, liveMode, query, resolvedSource, runCommand]);
+
+  useEffect(() => {
     isMountedRef.current = true;
 
     return () => {
@@ -855,6 +947,8 @@ function RemoteLogViewer({ connectionId, systemType }: RemoteLogViewerProps) {
 
   useEffect(() => {
     initialQueryKeyRef.current = '';
+    liveRequestIdRef.current += 1;
+    setLiveMode(false);
     setSelectedSourceId(defaultSourceId);
     setLogLines([]);
     setSelectedLineIds(new Set());
@@ -889,6 +983,8 @@ function RemoteLogViewer({ connectionId, systemType }: RemoteLogViewerProps) {
     setSelectedSourceId(source.id);
     setError('');
     setSuccess('');
+    liveRequestIdRef.current += 1;
+    setLiveMode(false);
     let nextSource = source;
 
     if (source.type === 'journal' && source.value && source.value !== '__service__') {
@@ -962,6 +1058,8 @@ function RemoteLogViewer({ connectionId, systemType }: RemoteLogViewerProps) {
   };
 
   const clearResults = () => {
+    liveRequestIdRef.current += 1;
+    setLiveMode(false);
     setLogLines([]);
     setSelectedLineIds(new Set());
     setError('');
@@ -1001,6 +1099,9 @@ function RemoteLogViewer({ connectionId, systemType }: RemoteLogViewerProps) {
             {tCurrent('auto.remoteLogViewer.12qo56a')}</button>
           <button type="button" className="log-tool-button" onClick={clearResults} disabled={!logLines.length && !error}>
             {tCurrent('auto.remoteLogViewer.9mbwb2')}</button>
+          <button type="button" className={`log-tool-button ${liveMode ? 'danger' : ''}`} onClick={() => setLiveMode((current) => !current)} disabled={loading || !resolvedSource.value && resolvedSource.type !== 'journal'}>
+            {liveMode ? tCurrent('logViewer.stopLive') : tCurrent('logViewer.startLive')}
+          </button>
           {!isWindowsHost ? (
             <button type="button" className="log-tool-button" onClick={() => void loadLogFiles()} disabled={filesLoading}>
               {filesLoading ? tCurrent('auto.remoteLogViewer.15wbj2u') : tCurrent('auto.remoteLogViewer.1dovqdy')}
@@ -1068,6 +1169,10 @@ function RemoteLogViewer({ connectionId, systemType }: RemoteLogViewerProps) {
           placeholder={tCurrent('auto.remoteLogViewer.73rkrv')}
           aria-label={tCurrent('auto.remoteLogViewer.kzmopb')}
         />
+        <label className="log-regex-toggle" title={tCurrent('logViewer.regexSearchHint')}>
+          <input type="checkbox" checked={useRegex} onChange={(event) => setUseRegex(event.target.checked)} />
+          <span>{tCurrent('logViewer.regexSearch')}</span>
+        </label>
         {timeRange === 'custom' ? (
           <>
             <input
@@ -1112,7 +1217,7 @@ function RemoteLogViewer({ connectionId, systemType }: RemoteLogViewerProps) {
             <div>
               <span>{loadedSourceLabel || resolvedSource.label}</span>
               <strong>{logLines.length} {tCurrent('auto.remoteLogViewer.1jjui7f')}</strong>
-              <small>{formatLoadedAt(loadedAt)}</small>
+              <small>{liveMode ? tCurrent('logViewer.liveMode') : formatLoadedAt(loadedAt)}</small>
             </div>
             <div className="log-result-actions">
               <button type="button" onClick={toggleCurrentPageSelection} disabled={!pageLines.length}>
@@ -1152,7 +1257,7 @@ function RemoteLogViewer({ connectionId, systemType }: RemoteLogViewerProps) {
                     <span className="log-line-time" title={line.timestamp}>{line.timestamp || '-'}</span>
                     <span className={`log-line-level ${line.level}`}>{getLevelLabel(line.level)}</span>
                     <span className="log-line-service" title={line.service}>{line.service || '-'}</span>
-                    <code title={line.message}>{renderHighlightedText(line.raw, keyword)}</code>
+                    <code title={line.message}>{renderHighlightedText(line.raw, keyword, useRegex)}</code>
                   </label>
                 );
               })
