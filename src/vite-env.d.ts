@@ -788,6 +788,16 @@ interface ShellDeskConnectionControls {
   postgresTables: (connectionId: string, postgresId: string, schema: string) => Promise<ShellDeskPostgresTable[]>;
   postgresColumns: (connectionId: string, postgresId: string, schema: string, table: string) => Promise<ShellDeskPostgresColumn[]>;
   postgresQuery: (connectionId: string, postgresId: string, sql: string) => Promise<ShellDeskPostgresQueryResult>;
+  postgresUpdateCell: (
+    connectionId: string,
+    postgresId: string,
+    schema: string,
+    table: string,
+    column: string,
+    newValue: unknown,
+    pkColumns: string[],
+    pkValues: unknown[],
+  ) => Promise<{ affectedRows: number }>;
   mongoConnect: (connectionId: string, config: ShellDeskMongoConnectConfig) => Promise<ShellDeskMongoConnectResult>;
   mongoDisconnect: (connectionId: string, mongoId: string) => Promise<boolean>;
   mongoDatabases: (connectionId: string, mongoId: string) => Promise<ShellDeskMongoDatabase[]>;
@@ -801,6 +811,7 @@ interface ShellDeskConnectionControls {
   redisGetValue: (connectionId: string, redisId: string, key: string) => Promise<ShellDeskRedisValueResult>;
   redisSetValue: (connectionId: string, redisId: string, key: string, value: unknown, type: string) => Promise<boolean>;
   redisDeleteKey: (connectionId: string, redisId: string, key: string) => Promise<boolean>;
+  redisRemoveListItem: (connectionId: string, redisId: string, key: string, index: number) => Promise<{ removed: number }>;
   redisCommand: (connectionId: string, redisId: string, command: string, args: string[]) => Promise<unknown>;
   vncProbe: (connectionId: string, config: ShellDeskVncConnectConfig) => Promise<ShellDeskVncProbeResult>;
   vncStart: (connectionId: string, config: ShellDeskVncConnectConfig) => Promise<ShellDeskVncProxyInfo>;

@@ -145,13 +145,6 @@ function quotePgString(value: string) {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-function toPgLiteral(value: unknown): string {
-  if (value === null || value === undefined) return 'NULL';
-  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
-  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
-  return quotePgString(String(value));
-}
-
 function valuesEqual(left: unknown, right: unknown): boolean {
   if (left === null || left === undefined) return right === null || right === undefined;
   if (right === null || right === undefined) return false;
@@ -827,15 +820,16 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
     setError('');
 
     try {
-      const whereClause = pendingEdit.pkColumns
-        .map((pkColumn, index) => `${quoteIdentifier(pkColumn, 'postgres')} IS NOT DISTINCT FROM ${toPgLiteral(pendingEdit.pkValues[index])}`)
-        .join(' AND ');
-      const updateSql = [
-        `UPDATE ${quoteIdentifier(pendingEdit.table.schema, 'postgres')}.${quoteIdentifier(pendingEdit.table.name, 'postgres')}`,
-        `SET ${quoteIdentifier(pendingEdit.column, 'postgres')} = ${toPgLiteral(pendingEdit.newValue)}`,
-        `WHERE ${whereClause};`,
-      ].join('\n');
-      const result = await api.postgresQuery(connectionId, postgresId, updateSql);
+      const result = await api.postgresUpdateCell(
+        connectionId,
+        postgresId,
+        pendingEdit.table.schema,
+        pendingEdit.table.name,
+        pendingEdit.column,
+        pendingEdit.newValue,
+        pendingEdit.pkColumns,
+        pendingEdit.pkValues,
+      );
 
       setResultTabs((items) => items.map((tab) => {
         if (tab.id !== pendingEdit.resultId || !tab.result) return tab;
@@ -855,7 +849,7 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
         };
       }));
 
-      setMessage({ type: result.rowCount === 1 ? 'success' : 'info', text: `已更新 ${result.rowCount ?? 0} 行` });
+      setMessage({ type: result.affectedRows === 1 ? 'success' : 'info', text: `已更新 ${result.affectedRows ?? 0} 行` });
       setPendingEdit(null);
     } catch (error) {
       setError(getErrorMessage(error));

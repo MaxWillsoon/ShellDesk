@@ -10,6 +10,7 @@ import {
   useContextMenu,
 } from './databaseUtils';
 import { exportDatabaseRows, type DatabaseExportFormat } from './databaseExport';
+import NotepadEditor from './NotepadEditor';
 import { loadRemoteConnectionProfile, readProfileString, saveRemoteConnectionProfile } from './remoteConnectionProfiles';
 import { tCurrent } from '../../i18n';
 
@@ -40,6 +41,14 @@ interface MongoContextMenuState {
 
 const defaultLimit = 100;
 const defaultMongoPort = 27017;
+
+function getShellDeskEditorTheme(): 'light' | 'dark' {
+  if (typeof document === 'undefined') {
+    return 'dark';
+  }
+
+  return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+}
 
 function formatBytes(value?: number) {
   if (!value || value < 0) return '0 B';
@@ -85,6 +94,32 @@ function tryFormatJsonDraft(value: string) {
   const trimmed = value.trim();
   if (!trimmed) return '{}';
   return stringifyJson(JSON.parse(trimmed));
+}
+
+function MongoJsonEditor({
+  ariaLabel,
+  value,
+  theme,
+  onChange,
+}: {
+  ariaLabel: string;
+  value: string;
+  theme: 'light' | 'dark';
+  onChange: (value: string) => void;
+}) {
+  return (
+    <NotepadEditor
+      ariaLabel={ariaLabel}
+      className="mongo-json-codemirror"
+      content={value}
+      language="json"
+      readOnly={false}
+      theme={theme}
+      wrapEnabled
+      onChange={onChange}
+      onCursorChange={() => undefined}
+    />
+  );
 }
 
 function createDocumentFilter(document: Record<string, unknown> | null): string {
@@ -140,6 +175,7 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
   const [queryRunning, setQueryRunning] = useState(false);
   const [writeRunning, setWriteRunning] = useState<MongoWriteOperation | null>(null);
   const [lastQueryAt, setLastQueryAt] = useState('');
+  const [editorTheme, setEditorTheme] = useState<'light' | 'dark'>(getShellDeskEditorTheme);
   const [contextMenu, setContextMenu] = useState<MongoContextMenuState | null>(null);
 
   const isConnected = status === 'connected';
@@ -207,6 +243,20 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
   useEffect(() => () => {
     void disconnect();
   }, [disconnect]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') {
+      return undefined;
+    }
+
+    const observer = new MutationObserver(() => setEditorTheme(getShellDeskEditorTheme()));
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme'],
+    });
+
+    return () => observer.disconnect();
+  }, []);
 
   const loadCollections = useCallback(async (nextMongoId: string, database: string) => {
     if (!api) return [];
@@ -710,24 +760,24 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
             <>
               <label className="mongo-editor wide">
                 <span>Filter</span>
-                <textarea value={filter} onChange={(event) => setFilter(event.target.value)} spellCheck={false} />
+                <MongoJsonEditor ariaLabel="MongoDB filter" value={filter} theme={editorTheme} onChange={setFilter} />
                 <button type="button" onClick={() => formatDraft('filter')}>{tCurrent('auto.remoteMongo.1hlpjge')}</button>
               </label>
               <label className="mongo-editor">
                 <span>Projection</span>
-                <textarea value={projection} onChange={(event) => setProjection(event.target.value)} placeholder='{"name": 1}' spellCheck={false} />
+                <MongoJsonEditor ariaLabel="MongoDB projection" value={projection} theme={editorTheme} onChange={setProjection} />
                 <button type="button" onClick={() => formatDraft('projection')}>{tCurrent('auto.remoteMongo.1hlpjge2')}</button>
               </label>
               <label className="mongo-editor">
                 <span>Sort</span>
-                <textarea value={sort} onChange={(event) => setSort(event.target.value)} placeholder='{"createdAt": -1}' spellCheck={false} />
+                <MongoJsonEditor ariaLabel="MongoDB sort" value={sort} theme={editorTheme} onChange={setSort} />
                 <button type="button" onClick={() => formatDraft('sort')}>{tCurrent('auto.remoteMongo.1hlpjge3')}</button>
               </label>
             </>
           ) : (
             <label className="mongo-editor wide mongo-pipeline-editor">
               <span>Aggregation Pipeline</span>
-              <textarea value={pipeline} onChange={(event) => setPipeline(event.target.value)} placeholder='[{ "$match": {} }, { "$limit": 20 }]' spellCheck={false} />
+              <MongoJsonEditor ariaLabel="MongoDB aggregation pipeline" value={pipeline} theme={editorTheme} onChange={setPipeline} />
               <button type="button" onClick={() => formatDraft('pipeline')}>格式化 Pipeline</button>
             </label>
           )}
@@ -785,11 +835,16 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
           </div>
         </section>
         <div className="mongo-document-editor">
-          <textarea
-            value={selectedDocument ? selectedDocumentDraft : tCurrent('auto.remoteMongo.1el0ut6')}
-            onChange={(event) => setSelectedDocumentDraft(event.target.value)}
+          <NotepadEditor
+            ariaLabel="MongoDB document"
+            className="mongo-json-codemirror"
+            content={selectedDocument ? selectedDocumentDraft : tCurrent('auto.remoteMongo.1el0ut6')}
+            language="json"
             readOnly={!selectedDocument}
-            spellCheck={false}
+            theme={editorTheme}
+            wrapEnabled
+            onChange={setSelectedDocumentDraft}
+            onCursorChange={() => undefined}
           />
           <div className="mongo-document-actions">
             <button type="button" className="primary" onClick={() => void runWriteOperation('replaceOne')} disabled={!canWriteSelectedDocument || writeRunning !== null}>
@@ -805,7 +860,7 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
             <strong>新增文档</strong>
             <button type="button" onClick={() => formatDraft('newDocument')}>格式化</button>
           </div>
-          <textarea value={newDocumentDraft} onChange={(event) => setNewDocumentDraft(event.target.value)} spellCheck={false} />
+          <MongoJsonEditor ariaLabel="MongoDB new document" value={newDocumentDraft} theme={editorTheme} onChange={setNewDocumentDraft} />
           <button type="button" className="primary" onClick={() => void runWriteOperation('insertOne')} disabled={!selectedCollection || writeRunning !== null}>
             {writeRunning === 'insertOne' ? '新增中...' : '新增文档'}
           </button>

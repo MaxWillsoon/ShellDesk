@@ -102,7 +102,8 @@
 .mongo-connect-grid input,
 .mongo-object-search,
 .mongo-query-actions input,
-.mongo-editor textarea {
+.mongo-editor textarea,
+.mongo-editor .mongo-json-codemirror {
   min-width: 0;
   border: 1px solid var(--mongo-border);
   border-radius: 7px;
@@ -121,19 +122,23 @@
   font-weight: 680;
 }
 
-.mongo-editor textarea {
+.mongo-editor textarea,
+.mongo-editor .mongo-json-codemirror {
   height: 76px;
-  resize: none;
-  padding: 9px;
-  font-family: var(--font-mono, "Cascadia Mono", Consolas, monospace);
   font-size: 12px;
-  line-height: 1.45;
+}
+
+.mongo-json-codemirror .cm-editor {
+  height: 100%;
+  min-height: 0;
+  background: transparent;
 }
 
 .mongo-connect-grid input:focus,
 .mongo-object-search:focus,
 .mongo-query-actions input:focus,
-.mongo-editor textarea:focus {
+.mongo-editor textarea:focus,
+.mongo-editor .mongo-json-codemirror:focus-within {
   border-color: rgba(97, 211, 148, 0.5);
   box-shadow: 0 0 0 3px rgba(97, 211, 148, 0.12);
 }
@@ -477,6 +482,8 @@
 
 .mongo-document-editor textarea,
 .mongo-create-panel textarea,
+.mongo-document-editor .mongo-json-codemirror,
+.mongo-create-panel .mongo-json-codemirror,
 .mongo-index-card code {
   font-family: var(--font-mono, "Cascadia Mono", Consolas, monospace);
   font-size: 11.5px;
@@ -494,7 +501,9 @@
 }
 
 .mongo-document-editor textarea,
-.mongo-create-panel textarea {
+.mongo-create-panel textarea,
+.mongo-document-editor .mongo-json-codemirror,
+.mongo-create-panel .mongo-json-codemirror {
   width: 100%;
   box-sizing: border-box;
   min-height: 0;
@@ -505,9 +514,9 @@
   resize: none;
 }
 
-.mongo-document-editor textarea {
+.mongo-document-editor textarea,
+.mongo-document-editor .mongo-json-codemirror {
   flex: 1 1 auto;
-  padding: 10px;
 }
 
 .mongo-document-actions {
@@ -536,11 +545,11 @@
   font-size: 12px;
 }
 
-.mongo-create-panel textarea {
+.mongo-create-panel textarea,
+.mongo-create-panel .mongo-json-codemirror {
   height: 96px;
   border: 1px solid var(--mongo-border);
   border-radius: 7px;
-  padding: 9px;
 }
 
 .mongo-create-panel button.primary {
@@ -663,7 +672,9 @@
 }
 
 [data-theme="light"] .mongo-document-editor textarea,
-[data-theme="light"] .mongo-create-panel textarea {
+[data-theme="light"] .mongo-create-panel textarea,
+[data-theme="light"] .mongo-document-editor .mongo-json-codemirror,
+[data-theme="light"] .mongo-create-panel .mongo-json-codemirror {
   background: rgba(255, 255, 255, 0.82);
   color: #12251b;
 }

@@ -1,6 +1,7 @@
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, Executor, PgPool, Row};
 
+use super::super::sql::pg_identifier;
 use super::{
     config::PostgresConnectConfig,
     core::{
@@ -215,6 +216,62 @@ pub(crate) async fn postgres_query(state: &AppState, args: Vec<Value>) -> Result
     .map_err(|_| DbTunnelError::QueryTimeout.user_message())?
 }
 
+pub(crate) async fn postgres_update_cell(
+    state: &AppState,
+    args: Vec<Value>,
+) -> Result<Value, String> {
+    let pool = postgres_pool(state, &args)?;
+    let schema = string_arg(&args, 2)?;
+    let table = string_arg(&args, 3)?;
+    let column = string_arg(&args, 4)?;
+    let new_value = args.get(5).cloned().unwrap_or(Value::Null);
+    let pk_columns = args
+        .get(6)
+        .and_then(Value::as_array)
+        .ok_or_else(|| "PostgreSQL 主键列参数无效。".to_string())?;
+    let pk_values = args
+        .get(7)
+        .and_then(Value::as_array)
+        .ok_or_else(|| "PostgreSQL 主键值参数无效。".to_string())?;
+
+    if pk_columns.is_empty() || pk_columns.len() != pk_values.len() {
+        return Err("PostgreSQL 主键条件不完整，无法更新单元格。".to_string());
+    }
+
+    let where_clause = pk_columns
+        .iter()
+        .enumerate()
+        .map(|(index, pk_column)| {
+            let pk_column = pk_column
+                .as_str()
+                .ok_or_else(|| "PostgreSQL 主键列参数无效。".to_string())?;
+            Ok(format!(
+                "{} IS NOT DISTINCT FROM ${}",
+                pg_identifier(pk_column),
+                index + 2
+            ))
+        })
+        .collect::<Result<Vec<_>, String>>()?
+        .join(" AND ");
+    let sql = format!(
+        "UPDATE {}.{} SET {} = $1 WHERE {}",
+        pg_identifier(&schema),
+        pg_identifier(&table),
+        pg_identifier(&column),
+        where_clause
+    );
+    let mut query = sqlx::query(&sql);
+    query = bind_json_value(query, &new_value);
+    for value in pk_values {
+        query = bind_json_value(query, value);
+    }
+    let result = timeout_result(QUERY_TIMEOUT, query.execute(&pool), |error| {
+        DbTunnelError::PostgresQuery(error).user_message()
+    })
+    .await?;
+    Ok(json!({ "affectedRows": result.rows_affected() }))
+}
+
 async fn connect_postgres_direct(
     config: &PostgresConnectConfig,
     host: &str,
@@ -245,6 +302,33 @@ async fn connect_postgres_direct(
         return Err(error);
     }
     Ok(pool)
+}
+
+fn bind_json_value<'q>(
+    query: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
+    value: &Value,
+) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
+    match value {
+        Value::Null => query.bind(Option::<String>::None),
+        Value::Bool(value) => query.bind(*value),
+        Value::Number(number) => {
+            if let Some(value) = number.as_i64() {
+                query.bind(value)
+            } else if let Some(value) = number.as_u64() {
+                if let Ok(value) = i64::try_from(value) {
+                    query.bind(value)
+                } else {
+                    query.bind(value.to_string())
+                }
+            } else if let Some(value) = number.as_f64() {
+                query.bind(value)
+            } else {
+                query.bind(number.to_string())
+            }
+        }
+        Value::String(value) => query.bind(value.clone()),
+        other => query.bind(other.to_string()),
+    }
 }
 
 fn postgres_pool(state: &AppState, args: &[Value]) -> Result<PgPool, String> {

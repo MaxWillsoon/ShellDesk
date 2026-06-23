@@ -8,6 +8,7 @@ import {
   formatTimestamp,
 } from './databaseUtils';
 import DismissibleAlert from './DismissibleAlert';
+import NotepadEditor from './NotepadEditor';
 import { loadRemoteConnectionProfile, readProfileString, saveRemoteConnectionProfile } from './remoteConnectionProfiles';
 import { tCurrent } from '../../i18n';
 
@@ -81,6 +82,14 @@ const mutableRedisCommands = new Set([
   'ZADD',
   'ZREM',
 ]);
+
+function getShellDeskEditorTheme(): 'light' | 'dark' {
+  if (typeof document === 'undefined') {
+    return 'dark';
+  }
+
+  return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+}
 
 function formatTtl(ttl?: number): string {
   if (ttl === undefined || Number.isNaN(ttl)) return tCurrent('auto.remoteRedis.1lpnuh4');
@@ -254,16 +263,34 @@ function getRedisElementEditorType(result: ShellDeskRedisValueResult | null): Re
   return result.type === 'hash' || result.type === 'list' || result.type === 'set' ? result.type : null;
 }
 
-function createRedisListDeleteScript(): string {
-  return [
-    'local idx = tonumber(ARGV[1])',
-    'local len = redis.call("LLEN", KEYS[1])',
-    'if idx < 0 then idx = len + idx end',
-    'if idx < 0 or idx >= len then return 0 end',
-    'local marker = "__shelldesk_delete__:" .. ARGV[2]',
-    'redis.call("LSET", KEYS[1], idx, marker)',
-    'return redis.call("LREM", KEYS[1], 1, marker)',
-  ].join('\n');
+function RedisValueEditor({
+  ariaLabel,
+  value,
+  language,
+  readOnly,
+  theme,
+  onChange,
+}: {
+  ariaLabel: string;
+  value: string;
+  language: string;
+  readOnly: boolean;
+  theme: 'light' | 'dark';
+  onChange: (value: string) => void;
+}) {
+  return (
+    <NotepadEditor
+      ariaLabel={ariaLabel}
+      className="redis-value-codemirror"
+      content={value}
+      language={language}
+      readOnly={readOnly}
+      theme={theme}
+      wrapEnabled
+      onChange={onChange}
+      onCursorChange={() => undefined}
+    />
+  );
 }
 
 function RemoteRedis({ connectionId, hostId }: RemoteRedisProps) {
@@ -298,6 +325,7 @@ function RemoteRedis({ connectionId, hostId }: RemoteRedisProps) {
   const [cmdRunning, setCmdRunning] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingRedisAction | null>(null);
   const [pendingRunning, setPendingRunning] = useState(false);
+  const [editorTheme, setEditorTheme] = useState<'light' | 'dark'>(getShellDeskEditorTheme);
 
   const isReady = status === 'connected';
 
@@ -580,8 +608,8 @@ function RemoteRedis({ connectionId, hostId }: RemoteRedisProps) {
         if (draft.type === 'hash') {
           await runRedisMutation('HDEL', [selectedKey, draft.previousField ?? draft.field]);
         } else if (draft.type === 'list') {
-          const marker = `${Date.now().toString(36)}:${Math.random().toString(36).slice(2)}`;
-          await runRedisMutation('EVAL', [createRedisListDeleteScript(), '1', selectedKey, String(draft.index ?? 0), marker]);
+          if (!api?.connections || !redisId) return;
+          await api.connections.redisRemoveListItem(connectionId, redisId, selectedKey, draft.index ?? 0);
         } else {
           await runRedisMutation('SREM', [selectedKey, draft.previousValue ?? draft.value]);
         }
@@ -590,7 +618,7 @@ function RemoteRedis({ connectionId, hostId }: RemoteRedisProps) {
         await refreshSelectedKey();
       },
     });
-  }, [refreshSelectedKey, runRedisMutation, selectedKey]);
+  }, [api, connectionId, redisId, refreshSelectedKey, runRedisMutation, selectedKey]);
 
   const handleSaveRedisElement = useCallback(async () => {
     if (!elementDraft || !selectedKey || elementSaving) return;
@@ -958,12 +986,13 @@ function RemoteRedis({ connectionId, hostId }: RemoteRedisProps) {
 
         <details className="redis-raw-json-panel">
           <summary>{tCurrent('redis.element.rawJson')}</summary>
-          <textarea
-            className="redis-value-editor"
+          <RedisValueEditor
+            ariaLabel="Redis raw JSON"
             value={keyEditorValue}
-            onChange={(event) => setKeyEditorValue(event.target.value)}
-            disabled={!valueEditable}
-            spellCheck={false}
+            language="json"
+            readOnly={!valueEditable}
+            theme={editorTheme}
+            onChange={setKeyEditorValue}
           />
         </details>
       </div>
@@ -979,6 +1008,12 @@ function RemoteRedis({ connectionId, hostId }: RemoteRedisProps) {
       }
     };
   }, [api, connectionId]);
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => setEditorTheme(getShellDeskEditorTheme()));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => observer.disconnect();
+  }, []);
 
   if (!isReady) {
     return (
@@ -1178,12 +1213,13 @@ function RemoteRedis({ connectionId, hostId }: RemoteRedisProps) {
                     {tCurrent('auto.remoteRedis.fqkypg')}{keyValue.previewLimit ?? 200} {tCurrent('auto.remoteRedis.1m53fin')}</div>
                 ) : null}
                 {elementEditorType ? renderRedisElementEditor() : (
-                  <textarea
-                    className="redis-value-editor"
+                  <RedisValueEditor
+                    ariaLabel="Redis value"
                     value={keyEditorValue}
-                    onChange={(event) => setKeyEditorValue(event.target.value)}
-                    disabled={!valueEditable}
-                    spellCheck={false}
+                    language={keyValue.type === 'string' ? '' : 'json'}
+                    readOnly={!valueEditable}
+                    theme={editorTheme}
+                    onChange={setKeyEditorValue}
                   />
                 )}
               </>
