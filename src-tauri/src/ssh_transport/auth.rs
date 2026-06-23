@@ -20,10 +20,13 @@ pub(crate) fn ssh_args_with_askpass(profile: &SshProfile, allow_askpass: bool) -
     ];
     args.push("-o".to_string());
     args.push("StrictHostKeyChecking=yes".to_string());
-    if !profile.known_hosts_path.is_empty() {
-        args.push("-o".to_string());
-        args.push(format!("UserKnownHostsFile={}", profile.known_hosts_path));
-    }
+    args.push("-o".to_string());
+    args.push(format!(
+        "UserKnownHostsFile={}",
+        connection_known_hosts_path(profile)
+    ));
+    args.push("-o".to_string());
+    args.push(format!("GlobalKnownHostsFile={}", null_known_hosts_path()));
     if profile.auth_method != "password" {
         args.push("-o".to_string());
         args.push("PreferredAuthentications=publickey".to_string());
@@ -47,6 +50,22 @@ pub(crate) fn ssh_args_with_askpass(profile: &SshProfile, allow_askpass: bool) -
         args.push(format!("ProxyCommand={command}"));
     }
     args
+}
+
+fn connection_known_hosts_path(profile: &SshProfile) -> String {
+    if profile.known_hosts_path.trim().is_empty() {
+        null_known_hosts_path().to_string()
+    } else {
+        profile.known_hosts_path.clone()
+    }
+}
+
+fn null_known_hosts_path() -> &'static str {
+    if cfg!(windows) {
+        "NUL"
+    } else {
+        "/dev/null"
+    }
 }
 
 pub(crate) fn should_use_sshpass(profile: &SshProfile) -> bool {

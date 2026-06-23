@@ -20,7 +20,7 @@ use host_keys::ensure_ssh_host_key_trusted;
 #[cfg(test)]
 use host_keys::{
     classify_scanned_host_key, known_host_matches_host, known_hosts_host_pattern,
-    trusted_known_host_public_key,
+    merge_known_hosts_from_scan, select_scanned_host_key_decision,
 };
 pub(crate) use host_keys::{
     confirm_ssh_host_public_key_trusted, ensure_ssh_profile_host_key_trusted,
@@ -827,31 +827,6 @@ mod tests {
     }
 
     #[test]
-    fn trusted_known_host_public_key_reuses_persisted_public_key() {
-        let known_hosts = vec![
-            json!({
-                "hostname": "example.com",
-                "port": 22,
-                "publicKey": "   "
-            }),
-            json!({
-                "hostname": "Example.COM",
-                "port": 22,
-                "publicKey": "ssh-ed25519 AAAATEST"
-            }),
-        ];
-
-        assert_eq!(
-            trusted_known_host_public_key(&known_hosts, "example.com", 22).as_deref(),
-            Some("ssh-ed25519 AAAATEST")
-        );
-        assert_eq!(
-            trusted_known_host_public_key(&known_hosts, "example.com", 2222),
-            None
-        );
-    }
-
-    #[test]
     fn classify_scanned_host_key_reports_changed_for_same_type_mismatch() {
         let known_hosts = vec![json!({
             "id": "known-1",
@@ -875,6 +850,141 @@ mod tests {
             decision.get("expectedFingerprint").and_then(Value::as_str),
             Some("old")
         );
+    }
+
+    #[test]
+    fn classify_scanned_host_key_reports_changed_for_endpoint_key_type_mismatch() {
+        let known_hosts = vec![json!({
+            "id": "known-1",
+            "hostname": "example.com",
+            "port": 22,
+            "keyType": "ssh-rsa",
+            "fingerprint": "old-rsa"
+        })];
+        let scanned = json!({
+            "keyType": "ssh-ed25519",
+            "fingerprint": "new-ed25519",
+            "publicKey": "ssh-ed25519 AAAA"
+        });
+
+        let decision = classify_scanned_host_key(&known_hosts, "example.com", 22, &scanned);
+
+        assert_eq!(
+            decision.get("status").and_then(Value::as_str),
+            Some("changed")
+        );
+        assert_eq!(
+            decision.get("expectedFingerprint").and_then(Value::as_str),
+            Some("old-rsa")
+        );
+    }
+
+    #[test]
+    fn selected_scanned_host_key_prefers_any_trusted_key_before_changed_candidates() {
+        let known_hosts = vec![json!({
+            "id": "known-rsa",
+            "hostname": "example.com",
+            "port": 22,
+            "keyType": "ssh-rsa",
+            "fingerprint": "rsa-current"
+        })];
+        let scanned_keys = vec![
+            json!({
+                "keyType": "ssh-ed25519",
+                "fingerprint": "new-ed25519",
+                "publicKey": "ssh-ed25519 AAAA"
+            }),
+            json!({
+                "keyType": "ssh-rsa",
+                "fingerprint": "rsa-current",
+                "publicKey": "ssh-rsa BBBB"
+            }),
+        ];
+
+        let (_, decision) =
+            select_scanned_host_key_decision(&known_hosts, "example.com", 22, &scanned_keys)
+                .expect("scanned host key decision");
+
+        assert_eq!(
+            decision.get("status").and_then(Value::as_str),
+            Some("trusted")
+        );
+        assert_eq!(
+            decision.get("knownHostId").and_then(Value::as_str),
+            Some("known-rsa")
+        );
+    }
+
+    #[test]
+    fn accepting_changed_host_key_replaces_old_endpoint_records() {
+        let profile = SshProfile {
+            address: "example.com".to_string(),
+            port: 2222,
+            username: "root".to_string(),
+            auth_method: String::new(),
+            password: String::new(),
+            key_path: String::new(),
+            known_hosts_path: String::new(),
+            proxy_helper_exe: String::new(),
+            proxy: None,
+            jump: None,
+        };
+        let current = vec![
+            json!({
+                "id": "old-ed",
+                "hostname": "[example.com]:2222",
+                "port": 2222,
+                "keyType": "ssh-ed25519",
+                "fingerprint": "old-ed",
+                "publicKey": "ssh-ed25519 OLD",
+                "discoveredAt": "2026-01-01T00:00:00Z"
+            }),
+            json!({
+                "id": "old-rsa",
+                "hostname": "[example.com]:2222",
+                "port": 2222,
+                "keyType": "ssh-rsa",
+                "fingerprint": "old-rsa",
+                "publicKey": "ssh-rsa OLD"
+            }),
+            json!({
+                "id": "other",
+                "hostname": "other.example.com",
+                "port": 22,
+                "keyType": "ssh-ed25519",
+                "fingerprint": "other"
+            }),
+        ];
+        let scanned = json!({
+            "keyType": "ssh-ed25519",
+            "fingerprint": "new-ed",
+            "publicKey": "ssh-ed25519 NEW"
+        });
+        let decision = json!({
+            "status": "changed",
+            "knownHostId": "old-ed",
+            "expectedFingerprint": "old-ed"
+        });
+
+        let next = merge_known_hosts_from_scan(
+            current,
+            &profile,
+            &scanned,
+            &decision,
+            "2026-02-01T00:00:00Z",
+        );
+
+        assert_eq!(next.len(), 2);
+        assert_eq!(next[0].get("id").and_then(Value::as_str), Some("old-ed"));
+        assert_eq!(
+            next[0].get("fingerprint").and_then(Value::as_str),
+            Some("new-ed")
+        );
+        assert_eq!(
+            next[0].get("discoveredAt").and_then(Value::as_str),
+            Some("2026-01-01T00:00:00Z")
+        );
+        assert_eq!(next[1].get("id").and_then(Value::as_str), Some("other"));
     }
 
     #[test]
