@@ -252,6 +252,9 @@ function RemoteVncViewer({ connectionId, hostId }: RemoteVncViewerProps) {
   const [showInspector, setShowInspector] = useState(true);
   const [clipboardText, setClipboardText] = useState('');
   const [clipboardNotice, setClipboardNotice] = useState(tCurrent('auto.remoteVncViewer.1ue13zr'));
+  const [transferPath, setTransferPath] = useState('/tmp');
+  const [transferNotice, setTransferNotice] = useState('旁路 SFTP 可在 VNC 会话旁上传文件。');
+  const [transferRunning, setTransferRunning] = useState(false);
   const [isStageFullscreen, setIsStageFullscreen] = useState(false);
 
   const viewOnlyRef = useRef(viewOnly);
@@ -747,6 +750,54 @@ function RemoteVncViewer({ connectionId, hostId }: RemoteVncViewerProps) {
     }
   }, [clipboardText]);
 
+  const uploadFilesViaSftp = useCallback(async () => {
+    if (!api?.connections) {
+      setTransferNotice(tCurrent('auto.remoteVncViewer.xh1cuy'));
+      return;
+    }
+
+    const remotePath = transferPath.trim();
+    if (!remotePath) {
+      setTransferNotice('请先填写远端目标目录。');
+      return;
+    }
+
+    setTransferRunning(true);
+    setTransferNotice('正在选择文件...');
+
+    try {
+      const selection = await api.connections.selectUploadFiles();
+      if (selection.canceled) {
+        setTransferNotice('已取消上传。');
+        return;
+      }
+
+      const uploadItems = selection.items
+        .filter((item) => item.type === 'file')
+        .map((item) => ({ path: item.path, remoteName: item.name }));
+
+      if (!uploadItems.length) {
+        setTransferNotice('请选择至少一个文件。');
+        return;
+      }
+
+      const result = await api.connections.uploadLocalPaths(connectionId, remotePath, uploadItems);
+      if (result.canceled) {
+        setTransferNotice('已取消上传。');
+        return;
+      }
+
+      setTransferNotice(`已上传 ${result.fileCount ?? uploadItems.length} 个文件到 ${remotePath}`);
+      appendDiagnostic('sftp', `上传 ${result.fileCount ?? uploadItems.length} 个文件到 ${remotePath}`, 'success');
+    } catch (error) {
+      const message = getErrorMessage(error);
+      setTransferNotice(message);
+      appendDiagnostic('sftp', message, 'error');
+    } finally {
+      setTransferRunning(false);
+    }
+  }, [api, appendDiagnostic, connectionId, transferPath]);
+
   const toggleStageFullscreen = useCallback(async () => {
     const stage = stageRef.current;
 
@@ -1146,6 +1197,23 @@ function RemoteVncViewer({ connectionId, hostId }: RemoteVncViewerProps) {
                   {tCurrent('auto.remoteVncViewer.1sos7h4')}</button>
               </div>
               <p className="vnc-clipboard-note">{clipboardNotice}</p>
+            </section>
+
+            <section className="vnc-inspector-section">
+              <header className="vnc-section-head">
+                <strong>文件传输</strong>
+                <span>SFTP side channel</span>
+              </header>
+              <label className="vnc-field">
+                <span>远端目录</span>
+                <input value={transferPath} onChange={(event) => setTransferPath(event.target.value)} placeholder="/tmp" spellCheck={false} />
+              </label>
+              <div className="vnc-inline-actions">
+                <button type="button" className="vnc-control-btn primary" onClick={() => void uploadFilesViaSftp()} disabled={transferRunning}>
+                  {transferRunning ? '上传中' : '上传文件'}
+                </button>
+              </div>
+              <p className="vnc-clipboard-note">{transferNotice}</p>
             </section>
 
             <section className="vnc-inspector-section diagnostics">
