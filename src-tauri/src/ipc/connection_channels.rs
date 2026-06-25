@@ -68,6 +68,9 @@ pub(crate) async fn dispatch(
         "connection:check-sftp" => remote_fs::check_connection_sftp(state, args).await,
         "connection:select-upload-files" => remote_fs::select_upload_items(false),
         "connection:select-upload-folders" => remote_fs::select_upload_items(true),
+        "connection:read-local-upload-file-base64" => {
+            remote_fs::read_local_upload_file_base64(args)
+        }
         "connection:download-file" => {
             remote_fs::download_connection_file(state, &window, args).await
         }

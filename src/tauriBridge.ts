@@ -537,6 +537,7 @@ window.guiSSH = {
     downloadPaths: (connectionId, remotePaths, options) => ipc('connection:download-paths', connectionId, remotePaths, options),
     selectUploadFiles: () => ipc('connection:select-upload-files'),
     selectUploadFolders: () => ipc('connection:select-upload-folders'),
+    readLocalUploadFileBase64: (path) => ipc('connection:read-local-upload-file-base64', path),
     uploadFile: (connectionId, remotePath, options) => ipc('connection:upload-file', connectionId, remotePath, options),
     uploadFiles: (connectionId, remotePath, options) => ipc('connection:upload-files', connectionId, remotePath, options),
     uploadPaths: (connectionId, remotePath, options) => ipc('connection:upload-paths', connectionId, remotePath, options),

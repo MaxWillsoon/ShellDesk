@@ -474,7 +474,14 @@ async function createSigningKey(secretKey: string, dateStamp: string, region: st
   return hmac(serviceKey, 'aws4_request');
 }
 
-async function createS3SignedHeaders(config: S3ConnectionConfig, method: 'GET' | 'DELETE', path: string, search = '', bucket?: string) {
+async function createS3SignedHeaders(
+  config: S3ConnectionConfig,
+  method: 'GET' | 'DELETE' | 'PUT',
+  path: string,
+  search = '',
+  bucket?: string,
+  extraHeaders: Record<string, string> = {},
+) {
   const accessKey = validateCredential(config.accessKey, 'Access Key');
   const secretKey = validateCredential(config.secretKey, 'Secret Key');
   const region = config.region.trim() || 'us-east-1';
@@ -483,13 +490,23 @@ async function createS3SignedHeaders(config: S3ConnectionConfig, method: 'GET' |
   const dateStamp = amzDate.slice(0, 8);
   const host = getHostHeader(config, bucket);
   const payloadHash = 'UNSIGNED-PAYLOAD';
+  const headers = Object.entries(extraHeaders).reduce<Record<string, string>>((nextHeaders, [name, value]) => {
+    nextHeaders[name.toLowerCase()] = value.trim();
+    return nextHeaders;
+  }, {});
+  headers.host = host;
+  headers['x-amz-content-sha256'] = payloadHash;
+  headers['x-amz-date'] = amzDate;
   const canonicalQuery = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
   const canonicalQueryString = Array.from(canonicalQuery.entries())
     .sort(([leftKey, leftValue], [rightKey, rightValue]) => leftKey === rightKey ? leftValue.localeCompare(rightValue) : leftKey.localeCompare(rightKey))
     .map(([key, value]) => `${encodePathSegment(key)}=${encodePathSegment(value)}`)
     .join('&');
-  const canonicalHeaders = `host:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`;
-  const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
+  const signedHeaderNames = Object.keys(headers).sort();
+  const canonicalHeaders = signedHeaderNames
+    .map((name) => `${name}:${headers[name].replace(/\s+/g, ' ')}`)
+    .join('\n') + '\n';
+  const signedHeaders = signedHeaderNames.join(';');
   const canonicalRequest = [
     method,
     path,
@@ -510,9 +527,7 @@ async function createS3SignedHeaders(config: S3ConnectionConfig, method: 'GET' |
 
   return {
     Authorization: `AWS4-HMAC-SHA256 Credential=${accessKey}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
-    Host: host,
-    'x-amz-content-sha256': payloadHash,
-    'x-amz-date': amzDate,
+    ...headers,
   };
 }
 
@@ -551,6 +566,28 @@ export function createS3ListObjectsTunnelRequest(mode: S3CliMode, config: S3Conn
 
 export function createS3DeleteObjectTunnelRequest(mode: S3CliMode, config: S3ConnectionConfig, bucket: string, key: string) {
   return createS3TunnelRequest('DELETE', mode, config, createS3Path(config, bucket, key), '', bucket);
+}
+
+export async function createS3UploadObjectTunnelRequest(
+  config: S3ConnectionConfig,
+  bucket: string,
+  key: string,
+  fileContent: string,
+  contentType: string,
+): Promise<ShellDeskHttpTunnelRequest> {
+  const safeBucket = validateBucket(bucket);
+  const safeKey = validateObjectKey(key);
+  const path = createS3Path(config, safeBucket, safeKey);
+  const request = createTunnelBase(config, path, '', safeBucket);
+  const headers = {
+    'content-type': contentType || 'application/octet-stream',
+  };
+
+  request.headers = await createS3SignedHeaders(config, 'PUT', path, '', safeBucket, headers);
+  request.bodyBase64 = fileContent;
+  request.timeoutSeconds = 600;
+
+  return request;
 }
 
 export function createS3ObjectUrl(config: S3ConnectionConfig, bucket: string, key: string) {

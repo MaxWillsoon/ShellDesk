@@ -730,6 +730,7 @@ interface ShellDeskConnectionControls {
   downloadPaths: (connectionId: string, remotePaths: string[], options?: ShellDeskSudoPasswordOptions) => Promise<{ canceled: boolean; directoryPath?: string; size?: number; fileCount?: number; itemCount?: number }>;
   selectUploadFiles: () => Promise<{ canceled: boolean; items: ShellDeskSelectedUploadItem[] }>;
   selectUploadFolders: () => Promise<{ canceled: boolean; items: ShellDeskSelectedUploadItem[] }>;
+  readLocalUploadFileBase64: (path: string) => Promise<{ base64: string; size: number }>;
   uploadFile: (connectionId: string, remotePath: string, options?: ShellDeskSudoPasswordOptions) => Promise<{ canceled: boolean; remotePath?: string; remotePaths?: string[]; size?: number; fileCount?: number; itemCount?: number }>;
   uploadFiles: (connectionId: string, remotePath: string, options?: ShellDeskSudoPasswordOptions) => Promise<{ canceled: boolean; remotePath?: string; remotePaths?: string[]; size?: number; fileCount?: number; itemCount?: number }>;
   uploadPaths: (connectionId: string, remotePath: string, options?: ShellDeskSudoPasswordOptions) => Promise<{ canceled: boolean; remotePath?: string; remotePaths?: string[]; size?: number; fileCount?: number; itemCount?: number }>;
@@ -852,6 +853,7 @@ interface ShellDeskHttpTunnelRequest {
   auth?: ShellDeskHttpTunnelAuth | null;
   headers?: Record<string, string>;
   body?: unknown;
+  bodyBase64?: string;
   ignoreSsl?: boolean;
   secure?: boolean;
   timeoutSeconds?: number;

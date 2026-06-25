@@ -3,6 +3,7 @@ use crate::{
     ssh_tunnel::{config_from_connection_with_window, create_tunnel, SshTunnel, SshTunnelError},
     string_arg, AppState, ConnectionKind,
 };
+use base64::Engine;
 use reqwest::{
     header::{CONTENT_TYPE, HOST},
     StatusCode,
@@ -74,6 +75,16 @@ impl HttpTunnelClient {
             .await
     }
 
+    pub(crate) async fn post_raw(
+        &self,
+        path: &str,
+        body: Vec<u8>,
+        headers: Option<&HashMap<String, String>>,
+    ) -> Result<Value, HttpTunnelError> {
+        self.send(self.client.post(self.url(path)).body(body), headers)
+            .await
+    }
+
     pub(crate) async fn put(
         &self,
         path: &str,
@@ -81,6 +92,16 @@ impl HttpTunnelClient {
         headers: Option<&HashMap<String, String>>,
     ) -> Result<Value, HttpTunnelError> {
         self.send(self.client.put(self.url(path)).json(&body), headers)
+            .await
+    }
+
+    pub(crate) async fn put_raw(
+        &self,
+        path: &str,
+        body: Vec<u8>,
+        headers: Option<&HashMap<String, String>>,
+    ) -> Result<Value, HttpTunnelError> {
+        self.send(self.client.put(self.url(path)).body(body), headers)
             .await
     }
 
@@ -174,6 +195,8 @@ pub(crate) enum HttpTunnelError {
     Json(String),
     #[error("HTTP 请求超时。")]
     Timeout,
+    #[error("HTTP 请求 bodyBase64 无效：{0}")]
+    InvalidBase64(String),
     #[error("HTTP 服务需要认证，请检查用户名和密码。")]
     AuthRequired,
 }
@@ -214,6 +237,7 @@ struct HttpTunnelRequest {
     auth: Option<HttpTunnelAuth>,
     headers: Option<HashMap<String, String>>,
     body: Option<Value>,
+    body_base64: Option<String>,
     #[serde(default)]
     ignore_ssl: bool,
     #[serde(default)]
@@ -304,24 +328,40 @@ async fn execute(
 
     let result = match method {
         "GET" => client.get(&request.path, request.headers.as_ref()).await,
-        "POST" => {
-            client
-                .post(
-                    &request.path,
-                    request.body.clone().unwrap_or(Value::Null),
-                    request.headers.as_ref(),
-                )
-                .await
-        }
-        "PUT" => {
-            client
-                .put(
-                    &request.path,
-                    request.body.clone().unwrap_or(Value::Null),
-                    request.headers.as_ref(),
-                )
-                .await
-        }
+        "POST" => match decode_body_base64(&request) {
+            Ok(Some(bytes)) => {
+                client
+                    .post_raw(&request.path, bytes, request.headers.as_ref())
+                    .await
+            }
+            Ok(None) => {
+                client
+                    .post(
+                        &request.path,
+                        request.body.clone().unwrap_or(Value::Null),
+                        request.headers.as_ref(),
+                    )
+                    .await
+            }
+            Err(error) => Err(error),
+        },
+        "PUT" => match decode_body_base64(&request) {
+            Ok(Some(bytes)) => {
+                client
+                    .put_raw(&request.path, bytes, request.headers.as_ref())
+                    .await
+            }
+            Ok(None) => {
+                client
+                    .put(
+                        &request.path,
+                        request.body.clone().unwrap_or(Value::Null),
+                        request.headers.as_ref(),
+                    )
+                    .await
+            }
+            Err(error) => Err(error),
+        },
         "DELETE" => client.delete(&request.path, request.headers.as_ref()).await,
         _ => unreachable!("unsupported HTTP method"),
     }
@@ -458,10 +498,23 @@ fn parse_request(args: Vec<Value>) -> Result<HttpTunnelRequest, String> {
         auth,
         headers,
         body,
+        body_base64: None,
         ignore_ssl,
         secure,
         timeout_seconds,
     })
+}
+
+fn decode_body_base64(request: &HttpTunnelRequest) -> Result<Option<Vec<u8>>, HttpTunnelError> {
+    request
+        .body_base64
+        .as_ref()
+        .map(|body| {
+            base64::engine::general_purpose::STANDARD
+                .decode(body)
+                .map_err(|error| HttpTunnelError::InvalidBase64(error.to_string()))
+        })
+        .transpose()
 }
 
 fn validate_target(host: &str, port: u16) -> Result<(), String> {

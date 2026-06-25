@@ -8,6 +8,7 @@ use crate::{
     error_string, get_connection, read_string_field, run_connection_command_with_options,
     run_ssh_command_for_profile_interactive, shell_quote, string_arg, AppState, ConnectionKind,
 };
+use base64::Engine;
 use chrono::Utc;
 use serde_json::{json, Value};
 use std::{
@@ -60,6 +61,7 @@ const ALL_FILES_FILTER_NAME: &str = "所有文件";
 const UPLOAD_FILES_TITLE: &str = "选择要上传的文件";
 const UPLOAD_FOLDERS_TITLE: &str = "选择要上传的文件夹";
 const DOWNLOAD_DIRECTORY_TITLE: &str = "选择下载保存目录";
+const MAX_LOCAL_UPLOAD_BASE64_BYTES: u64 = 50 * 1024 * 1024;
 
 pub(crate) async fn list_connection_directory(
     state: &AppState,
@@ -389,6 +391,25 @@ pub(crate) fn select_upload_items(folders: bool) -> Result<Value, String> {
         }));
     }
     Ok(json!({ "canceled": false, "items": items }))
+}
+
+pub(crate) fn read_local_upload_file_base64(args: Vec<Value>) -> Result<Value, String> {
+    let path = string_arg(&args, 0)?;
+    let path = PathBuf::from(path);
+    let metadata = fs::metadata(&path).map_err(error_string)?;
+
+    if !metadata.is_file() {
+        return Err("只能读取本地文件用于 S3 上传。".to_string());
+    }
+    if metadata.len() > MAX_LOCAL_UPLOAD_BASE64_BYTES {
+        return Err("S3 HTTP 隧道上传当前限制为 50 MB 以内的文件。".to_string());
+    }
+
+    let bytes = fs::read(&path).map_err(error_string)?;
+    Ok(json!({
+        "base64": base64::engine::general_purpose::STANDARD.encode(bytes),
+        "size": metadata.len(),
+    }))
 }
 
 pub(crate) async fn upload_selected_paths(

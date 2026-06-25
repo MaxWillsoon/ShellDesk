@@ -11,7 +11,7 @@ import {
   createS3ListBucketsTunnelRequest,
   createS3ListObjectsTunnelRequest,
   createS3ObjectUrl,
-  createS3UploadObjectCommand,
+  createS3UploadObjectTunnelRequest,
   parseS3BucketsResponse,
   parseS3ObjectsResponse,
   type S3BucketEntry,
@@ -43,7 +43,10 @@ interface PendingS3Action {
 interface S3UploadItem {
   path: string;
   name: string;
+  size?: number;
 }
+
+const maxHttpTunnelUploadBytes = 50 * 1024 * 1024;
 
 const defaultConfig: S3ConnectionConfig = {
   endpoint: 'http://127.0.0.1:9000',
@@ -110,13 +113,47 @@ function sanitizeUploadName(name: string) {
   return name.trim().replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_') || 'object.bin';
 }
 
-function joinRemotePath(directory: string, name: string, isWindowsHost: boolean) {
-  const separator = isWindowsHost ? '\\' : '/';
-  return `${directory.replace(/[\\/]+$/, '')}${separator}${name}`;
+async function readFileAsBase64(path: string) {
+  const api = window.guiSSH?.connections;
+
+  if (!api) {
+    throw new Error(tCurrent('auto.remoteS3Browser.g77vf3'));
+  }
+
+  const result = await api.readLocalUploadFileBase64(path);
+  return result.base64;
 }
 
-function getS3UploadTempDirectory(isWindowsHost: boolean) {
-  return isWindowsHost ? 'C:\\Windows\\Temp\\shelldesk-s3-upload' : '/tmp/shelldesk-s3-upload';
+function guessContentType(filename: string) {
+  const extension = filename.split('.').pop()?.toLowerCase() ?? '';
+  const mimeTypes: Record<string, string> = {
+    txt: 'text/plain; charset=utf-8',
+    csv: 'text/csv; charset=utf-8',
+    json: 'application/json',
+    xml: 'application/xml',
+    html: 'text/html; charset=utf-8',
+    htm: 'text/html; charset=utf-8',
+    css: 'text/css; charset=utf-8',
+    js: 'text/javascript; charset=utf-8',
+    mjs: 'text/javascript; charset=utf-8',
+    ts: 'text/typescript; charset=utf-8',
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    svg: 'image/svg+xml',
+    pdf: 'application/pdf',
+    zip: 'application/zip',
+    gz: 'application/gzip',
+    tar: 'application/x-tar',
+    mp4: 'video/mp4',
+    webm: 'video/webm',
+    mp3: 'audio/mpeg',
+    wav: 'audio/wav',
+  };
+
+  return mimeTypes[extension] ?? 'application/octet-stream';
 }
 
 function RemoteS3Browser({ connectionId, hostId, systemType }: RemoteS3BrowserProps) {
@@ -327,43 +364,38 @@ function RemoteS3Browser({ connectionId, hostId, systemType }: RemoteS3BrowserPr
       return;
     }
 
-    const api = window.guiSSH?.connections;
-    if (!api) {
-      throw new Error(tCurrent('auto.remoteS3Browser.g77vf3'));
-    }
-
     setUploading(true);
     setError('');
     setNotice('');
 
     try {
       const targetPrefix = ensurePrefix(uploadPrefix || prefix);
-      const tempDirectory = getS3UploadTempDirectory(isWindowsHost);
       const localItems = items.map((item) => ({
         path: item.path,
         remoteName: sanitizeUploadName(item.name),
+        size: item.size,
       }));
 
-      await api.createDirectory(connectionId, tempDirectory).catch(() => undefined);
-      const uploadResult = await api.uploadLocalPaths(connectionId, tempDirectory, localItems);
-      if (uploadResult.canceled) {
-        setNotice('已取消上传');
-        return;
+      const oversizedItem = localItems.find((item) => item.size !== undefined && item.size > maxHttpTunnelUploadBytes);
+      if (oversizedItem) {
+        throw new Error(`HTTP 隧道上传当前限制为 50 MB：${oversizedItem.remoteName}`);
       }
 
-      const remotePaths = uploadResult.remotePaths?.length === localItems.length
-        ? uploadResult.remotePaths
-        : localItems.map((item) => joinRemotePath(tempDirectory, item.remoteName ?? 'object.bin', isWindowsHost));
+      for (const item of localItems) {
+        const objectKey = `${targetPrefix}${item.remoteName}`;
+        const fileContent = await readFileAsBase64(item.path);
+        const request = await createS3UploadObjectTunnelRequest(
+          config,
+          selectedBucket.name,
+          objectKey,
+          fileContent,
+          guessContentType(item.remoteName),
+        );
 
-      for (let index = 0; index < localItems.length; index += 1) {
-        const remotePath = remotePaths[index];
-        const objectKey = `${targetPrefix}${localItems[index].remoteName ?? 'object.bin'}`;
-        const command = createS3UploadObjectCommand(mode, config, selectedBucket.name, objectKey, remotePath, isWindowsHost);
-        const result = await runCmd(connectionId, command);
-        if (result.code !== 0) {
-          throw new Error(result.stderr || result.stdout || `上传 ${objectKey} 失败`);
-        }
-        await api.deletePath(connectionId, remotePath, 'file').catch(() => undefined);
+        await getHttpTunnelApi().httpTunnelPut({
+          ...request,
+          connectionId,
+        });
       }
 
       setNotice(`已上传 ${localItems.length} 个对象到 ${selectedBucket.name}/${targetPrefix}`);
@@ -373,7 +405,7 @@ function RemoteS3Browser({ connectionId, hostId, systemType }: RemoteS3BrowserPr
     } finally {
       setUploading(false);
     }
-  }, [config, connectionId, isWindowsHost, loadObjects, mode, prefix, selectedBucket, uploadPrefix]);
+  }, [config, connectionId, loadObjects, prefix, selectedBucket, uploadPrefix]);
 
   const selectUploadFiles = async () => {
     try {
@@ -382,6 +414,7 @@ function RemoteS3Browser({ connectionId, hostId, systemType }: RemoteS3BrowserPr
       await uploadItemsToBucket(result.items.filter((item) => item.type === 'file').map((item) => ({
         path: item.path,
         name: item.name,
+        size: item.size,
       })));
     } catch (error) {
       setError(getErrorMessage(error));
@@ -396,6 +429,7 @@ function RemoteS3Browser({ connectionId, hostId, systemType }: RemoteS3BrowserPr
       .map((file) => ({
         path: (file as File & { path?: string }).path ?? '',
         name: file.name,
+        size: file.size,
       }))
       .filter((item) => item.path);
 
