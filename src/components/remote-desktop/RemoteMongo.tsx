@@ -247,6 +247,30 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
   }, [disconnect]);
 
   useEffect(() => {
+    return window.guiSSH?.events?.onDatabaseTunnelIdleTimeout((payload) => {
+      if (
+        payload.kind !== 'mongo' ||
+        payload.connectionId !== connectionId ||
+        payload.sessionId !== mongoIdRef.current
+      ) {
+        return;
+      }
+
+      mongoIdRef.current = '';
+      setMongoId('');
+      setStatus('disconnected');
+      setDatabases([]);
+      setCollectionsByDatabase({});
+      setExpandedDatabases(new Set());
+      setSelectedCollection(null);
+      setQueryResult(null);
+      setIndexes([]);
+      setContextMenu(null);
+      setNotice(`数据库连接已因空闲超过 ${payload.idleMinutes} 分钟自动断开。`);
+    });
+  }, [connectionId]);
+
+  useEffect(() => {
     if (typeof document === 'undefined') {
       return undefined;
     }

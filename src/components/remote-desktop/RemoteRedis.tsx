@@ -1010,6 +1010,24 @@ function RemoteRedis({ connectionId, hostId }: RemoteRedisProps) {
   }, [api, connectionId]);
 
   useEffect(() => {
+    return api?.events?.onDatabaseTunnelIdleTimeout((payload) => {
+      if (
+        payload.kind !== 'redis' ||
+        payload.connectionId !== connectionId ||
+        payload.sessionId !== redisIdRef.current
+      ) {
+        return;
+      }
+
+      redisIdRef.current = '';
+      setRedisId('');
+      setStatus('disconnected');
+      resetWorkspace();
+      setErrorMessage(`数据库连接已因空闲超过 ${payload.idleMinutes} 分钟自动断开。`);
+    });
+  }, [api, connectionId, resetWorkspace]);
+
+  useEffect(() => {
     const observer = new MutationObserver(() => setEditorTheme(getShellDeskEditorTheme()));
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     return () => observer.disconnect();

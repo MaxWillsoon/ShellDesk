@@ -621,6 +621,7 @@ window.guiSSH = {
     onKeyboardInteractive: (callback) => onTauriEvent('connection:keyboard-interactive', callback),
     onHostKeyVerification: (callback) => onTauriEvent('connection:host-key-verification', callback),
     onHostKeyTrusted: (callback) => onTauriEvent('connection:host-key-trusted', callback),
+    onDatabaseTunnelIdleTimeout: (callback) => onTauriEvent('database:tunnel-idle-timeout', callback),
     onWindowMaximizedChange: (callback) => onTauriEvent('window:maximize-state-changed', callback),
     onVaultChanged: (callback) => onTauriEvent('vault:changed', callback),
     onSyncChanged: (callback) => onTauriEvent('sync:changed', callback),

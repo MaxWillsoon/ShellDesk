@@ -337,6 +337,7 @@ async fn cleanup_idle_sessions(state: &AppState, app: &tauri::AppHandle) {
         if let Some(session) = session {
             let parts = key.splitn(3, ':').collect::<Vec<_>>();
             let kind = parts.first().copied().unwrap_or("unknown").to_string();
+            let connection_id = parts.get(1).copied().unwrap_or("unknown").to_string();
             let session_id = parts.get(2).copied().unwrap_or("unknown").to_string();
 
             eprintln!("[database-tunnel] idle timeout: disconnecting {key}");
@@ -346,6 +347,7 @@ async fn cleanup_idle_sessions(state: &AppState, app: &tauri::AppHandle) {
                 json!({
                     "key": key,
                     "kind": kind,
+                    "connectionId": connection_id,
                     "sessionId": session_id,
                     "idleMinutes": IDLE_TIMEOUT.as_secs() / 60,
                 }),

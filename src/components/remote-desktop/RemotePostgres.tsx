@@ -970,6 +970,24 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
   }, [postgresId]);
 
   useEffect(() => {
+    return window.guiSSH?.events?.onDatabaseTunnelIdleTimeout((payload) => {
+      if (
+        payload.kind !== 'postgres' ||
+        payload.connectionId !== connectionId ||
+        payload.sessionId !== postgresIdRef.current
+      ) {
+        return;
+      }
+
+      postgresIdRef.current = '';
+      setPostgresId('');
+      setStatus('disconnected');
+      resetWorkspaceState();
+      setError(`数据库连接已因空闲超过 ${payload.idleMinutes} 分钟自动断开。`);
+    });
+  }, [connectionId, resetWorkspaceState]);
+
+  useEffect(() => {
     setPage(0);
     setEditingCell(null);
   }, [activeResultId]);

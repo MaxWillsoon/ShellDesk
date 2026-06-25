@@ -32,7 +32,7 @@ pub(crate) fn run() {
         eprintln!("failed to create app data dir: {error}");
     }
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(AppState::new(data_dir.clone()))
         .invoke_handler(tauri::generate_handler![ipc_dispatch])
         .setup(move |app| {
@@ -74,6 +74,13 @@ pub(crate) fn run() {
             crate::database::tunnel::start_idle_cleanup(state.clone(), app.handle().clone());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running ShellDesk");
+        .build(tauri::generate_context!())
+        .expect("error while building ShellDesk");
+
+    app.run(|app_handle, event| {
+        if matches!(event, tauri::RunEvent::Exit) {
+            let state = app_handle.state::<AppState>();
+            crate::connection::cleanup_all_temporary_key_files(state.inner());
+        }
+    });
 }

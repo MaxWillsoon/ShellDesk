@@ -1178,6 +1178,24 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
   }, [clickhouseId]);
 
   useEffect(() => {
+    return api?.events?.onDatabaseTunnelIdleTimeout((payload) => {
+      if (
+        payload.kind !== 'clickhouse' ||
+        payload.connectionId !== connectionId ||
+        payload.sessionId !== clickhouseIdRef.current
+      ) {
+        return;
+      }
+
+      clickhouseIdRef.current = '';
+      setClickhouseId('');
+      setStatus('disconnected');
+      resetWorkspaceState();
+      setErrorMessage(`数据库连接已因空闲超过 ${payload.idleMinutes} 分钟自动断开。`);
+    });
+  }, [api, connectionId, resetWorkspaceState]);
+
+  useEffect(() => {
     setPage(0);
   }, [activeResultId]);
 

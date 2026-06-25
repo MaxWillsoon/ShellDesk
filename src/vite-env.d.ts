@@ -1351,6 +1351,14 @@ interface ShellDeskTransferEndPayload {
   error?: string;
 }
 
+interface ShellDeskDatabaseTunnelIdleTimeoutPayload {
+  key: string;
+  kind: 'mysql' | 'postgres' | 'redis' | 'clickhouse' | 'mongo' | string;
+  connectionId: string;
+  sessionId: string;
+  idleMinutes: number;
+}
+
 interface ShellDeskEventControls {
   onTerminalData: (callback: (payload: { connectionId: string; terminalId?: string; data: string; bytes?: ArrayBuffer | ArrayBufferView | number[] }) => void) => () => void;
   onTerminalExit: (callback: (payload: { connectionId: string; terminalId?: string; code?: number | null; signal?: string | null }) => void) => () => void;
@@ -1361,6 +1369,7 @@ interface ShellDeskEventControls {
   onKeyboardInteractive: (callback: (payload: ShellDeskKeyboardInteractiveRequest) => void) => () => void;
   onHostKeyVerification: (callback: (payload: ShellDeskHostKeyVerificationRequest) => void) => () => void;
   onHostKeyTrusted: (callback: (payload: { hostname: string; port: number }) => void) => () => void;
+  onDatabaseTunnelIdleTimeout: (callback: (payload: ShellDeskDatabaseTunnelIdleTimeoutPayload) => void) => () => void;
   onWindowMaximizedChange: (callback: (payload: { maximized: boolean }) => void) => () => void;
   onVaultChanged: (callback: (payload: { kind: 'vault' | 'bookmarks' | 'preference' | 'hostKeyTrust'; scope?: string; key?: string }) => void) => () => void;
   onSyncChanged: (callback: (payload: ShellDeskSyncResult) => void) => () => void;

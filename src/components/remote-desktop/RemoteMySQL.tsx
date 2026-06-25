@@ -1200,6 +1200,24 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
   }, [mysqlId]);
 
   useEffect(() => {
+    return api?.events?.onDatabaseTunnelIdleTimeout((payload) => {
+      if (
+        payload.kind !== 'mysql' ||
+        payload.connectionId !== connectionId ||
+        payload.sessionId !== mysqlIdRef.current
+      ) {
+        return;
+      }
+
+      mysqlIdRef.current = '';
+      setMysqlId('');
+      setStatus('disconnected');
+      resetWorkspaceState();
+      setErrorMessage(`数据库连接已因空闲超过 ${payload.idleMinutes} 分钟自动断开。`);
+    });
+  }, [api, connectionId, resetWorkspaceState]);
+
+  useEffect(() => {
     setPage(0);
     setEditingCell(null);
   }, [activeResultId]);
