@@ -2,7 +2,7 @@ use crate::updater::{
     check_for_update_download, check_release_info, download_update, install_update,
     read_update_state,
 };
-use crate::{app as app_handlers, error_string, AppState};
+use crate::{app as app_handlers, error_string, tray, AppState};
 use serde_json::{json, Value};
 use tauri::Emitter;
 
@@ -53,7 +53,7 @@ pub(crate) async fn dispatch(
         }
         "window:is-maximized" => json!(window.is_maximized().map_err(error_string)?),
         "window:close" => {
-            window.close().map_err(error_string)?;
+            tray::close_window(window, state)?;
             Value::Null
         }
         _ => return Ok(None),

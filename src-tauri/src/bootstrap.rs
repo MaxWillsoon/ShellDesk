@@ -47,6 +47,7 @@ pub(crate) fn run() {
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())
                 .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)?;
+            crate::tray::setup(app)?;
             let state = app.state::<AppState>().inner().clone();
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_title("ShellDesk");

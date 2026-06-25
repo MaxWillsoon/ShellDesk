@@ -42,6 +42,8 @@ pub(crate) mod sync_backend;
 pub(crate) mod system;
 #[path = "terminal.rs"]
 pub(crate) mod terminal;
+#[path = "tray.rs"]
+pub(crate) mod tray;
 #[path = "updater.rs"]
 pub(crate) mod updater;
 #[path = "util.rs"]
