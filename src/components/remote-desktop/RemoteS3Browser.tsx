@@ -8,6 +8,7 @@ import { loadRemoteConnectionProfile, readProfileBoolean, readProfileString, sav
 import {
   createS3DownloadObjectCommand,
   createS3DeleteObjectTunnelRequest,
+  createS3EnsureMcCommand,
   createS3ListBucketsTunnelRequest,
   createS3ListObjectsTunnelRequest,
   createS3ObjectUrl,
@@ -195,6 +196,29 @@ function RemoteS3Browser({ connectionId, hostId, systemType }: RemoteS3BrowserPr
     void detectTools();
   }, [detectTools]);
 
+  const ensureMcAvailable = useCallback(async () => {
+    if (mode !== 'mc') return;
+
+    try {
+      const command = createS3EnsureMcCommand(isWindowsHost);
+      const result = await runCmd(connectionId, command);
+
+      if (result.code !== 0) {
+        throw new Error(result.stderr || result.stdout || 'mc 安装失败');
+      }
+
+      const versionLine = (result.stdout || '')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .reverse()
+        .find((line) => /^mc\s+version/i.test(line) || /^mc\s+/i.test(line));
+      setNotice(`mc 已就绪${versionLine ? `: ${versionLine}` : ''}`);
+    } catch (error) {
+      throw new Error(`mc 命令不可用且自动安装失败: ${getErrorMessage(error)}。请手动安装 mc 或切换到 aws 模式。`);
+    }
+  }, [connectionId, isWindowsHost, mode]);
+
   const loadBuckets = async () => {
     setLoading(true);
     setError('');
@@ -337,6 +361,7 @@ function RemoteS3Browser({ connectionId, hostId, systemType }: RemoteS3BrowserPr
     setNotice('');
 
     try {
+      await ensureMcAvailable();
       const targetPrefix = ensurePrefix(uploadPrefix || prefix);
       const tempDirectory = getS3UploadTempDirectory(isWindowsHost);
       const localItems = items.map((item) => ({
@@ -373,7 +398,7 @@ function RemoteS3Browser({ connectionId, hostId, systemType }: RemoteS3BrowserPr
     } finally {
       setUploading(false);
     }
-  }, [config, connectionId, isWindowsHost, loadObjects, mode, prefix, selectedBucket, uploadPrefix]);
+  }, [config, connectionId, ensureMcAvailable, isWindowsHost, loadObjects, mode, prefix, selectedBucket, uploadPrefix]);
 
   const selectUploadFiles = async () => {
     try {
@@ -424,6 +449,9 @@ function RemoteS3Browser({ connectionId, hostId, systemType }: RemoteS3BrowserPr
         });
         output = typeof response === 'string' ? response || output : JSON.stringify(response, null, 2);
       } else if (pendingAction.command) {
+        if (pendingAction.kind === 'download') {
+          await ensureMcAvailable();
+        }
         const result = await runCmd(connectionId, pendingAction.command);
         output = result.stdout || result.stderr || output;
 

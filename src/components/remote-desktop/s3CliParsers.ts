@@ -130,10 +130,10 @@ function createMcPrefix(config: S3ConnectionConfig, isWindowsHost: boolean) {
   const hostUrl = createMcHostUrl(config);
 
   if (isWindowsHost) {
-    return `$env:MC_HOST_shelldesk = ${powershellSingleQuote(hostUrl)}`;
+    return `$env:PATH = "$env:USERPROFILE\\bin;$env:PATH"\n$env:MC_HOST_shelldesk = ${powershellSingleQuote(hostUrl)}`;
   }
 
-  return `MC_HOST_shelldesk=${shellSingleQuote(hostUrl)} mc`;
+  return `PATH="$HOME/.local/bin:$PATH" MC_HOST_shelldesk=${shellSingleQuote(hostUrl)} mc`;
 }
 
 export function createS3DetectCommand(isWindowsHost: boolean): RemoteCommandInput {
@@ -146,6 +146,65 @@ if (Get-Command aws -ErrorAction SilentlyContinue) { "aws" }
 
   return {
     command: 'for tool in mc aws; do if command -v "$tool" >/dev/null 2>&1; then echo "$tool"; fi; done',
+  };
+}
+
+export function createS3EnsureMcCommand(isWindowsHost: boolean): RemoteCommandInput {
+  if (isWindowsHost) {
+    return powershellStdinCommand(`
+$env:PATH = "$env:USERPROFILE\\bin;$env:PATH"
+if (-not (Get-Command mc -ErrorAction SilentlyContinue)) {
+  $arch = "windows-amd64"
+  $url = "https://dl.min.io/client/mc/release/$arch/mc.exe"
+  $dest = "$env:USERPROFILE\\bin\\mc.exe"
+  New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null
+  Write-Host "Downloading mc from $url ..."
+  Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+  Write-Host "mc installed to $dest"
+}
+mc --version
+`);
+  }
+
+  return {
+    command: `if command -v mc >/dev/null 2>&1; then
+  mc --version
+else
+  export PATH="$HOME/.local/bin:$PATH"
+  if command -v mc >/dev/null 2>&1; then
+    mc --version
+    exit 0
+  fi
+  echo "mc not found, downloading..."
+  OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+  ARCH=$(uname -m)
+  case "$ARCH" in
+    x86_64|amd64) ARCH="amd64" ;;
+    aarch64|arm64) ARCH="arm64" ;;
+    armv7l|armhf) ARCH="arm" ;;
+    *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
+  esac
+  case "$OS" in
+    linux) PLATFORM="linux" ;;
+    darwin) PLATFORM="darwin" ;;
+    *) echo "Unsupported OS: $OS"; exit 1 ;;
+  esac
+  URL="https://dl.min.io/client/mc/release/\${PLATFORM}-\${ARCH}/mc"
+  DEST="$HOME/.local/bin/mc"
+  mkdir -p "$(dirname "$DEST")"
+  echo "Downloading mc from $URL ..."
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$URL" -o "$DEST"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q "$URL" -O "$DEST"
+  else
+    echo "Neither curl nor wget found. Please install mc manually."
+    exit 1
+  fi
+  chmod +x "$DEST"
+  echo "mc installed to $DEST"
+  "$DEST" --version
+fi`,
   };
 }
 
