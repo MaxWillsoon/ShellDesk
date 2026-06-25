@@ -39,13 +39,16 @@ function createPreviewRemoteDesktopLayout(): ShellDeskRemoteDesktopLayout {
   };
 }
 
+// 预览模式默认设置。Rust 后端 vault.rs::default_settings() 为唯一权威源。
+// 本处硬编码仅用于无后端的预览模式，保持与后端一致。
+// 一致性检查：node scripts/check-default-settings-parity.cjs
 function createPreviewSettings(): ShellDeskAppSettings {
   return {
     language: 'zh-CN',
     interfaceFont: 'Microsoft YaHei UI',
     theme: 'dark',
     accentColor: '#0f6bff',
-    defaultHostView: 'list',
+    defaultHostView: 'grid',
     minimizeToTrayOnClose: true,
     autoUpdateEnabled: true,
     desktopWallpaperMode: 'preset',
@@ -65,6 +68,7 @@ function createPreviewSettings(): ShellDeskAppSettings {
     terminalFontFamily: 'Cascadia Mono',
     terminalFontWeight: 400,
     terminalFontWeightBold: 700,
+    terminalLigatures: true,
     terminalFontLigatures: true,
     terminalLineHeight: 1.2,
     terminalTheme: 'shelldesk-dark',
@@ -470,6 +474,7 @@ window.guiSSH = {
   },
   vault: {
     initialPublicSnapshot: null,
+    getDefaultSettings: () => ipc<ShellDeskAppSettings>('vault:get-default-settings'),
     getPublicSnapshot: getPublicVaultSnapshot,
     getSnapshot: () => ipc<ShellDeskVaultSnapshot>('vault:get-snapshot'),
     saveCollections: (payload) => ipc('vault:save-collections', payload),

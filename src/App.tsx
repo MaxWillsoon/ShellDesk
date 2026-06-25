@@ -111,12 +111,15 @@ function createDefaultTerminalSnippets(language: AppLanguage): ShellDeskTerminal
 
 const defaultAppLanguage = getSystemLanguage();
 
+// 默认设置定义。Rust 后端 vault.rs::default_settings() 为唯一权威源。
+// 本处硬编码作为同步 fallback 和预览模式使用，保持与后端一致。
+// 一致性检查：node scripts/check-default-settings-parity.cjs
 const defaultAppSettings: ShellDeskAppSettings = {
   language: defaultAppLanguage,
   interfaceFont: 'Microsoft YaHei UI',
   theme: 'dark',
   accentColor: '#0f6bff',
-  defaultHostView: 'list',
+  defaultHostView: 'grid',
   minimizeToTrayOnClose: true,
   autoUpdateEnabled: true,
   desktopWallpaperMode: 'preset',
@@ -136,6 +139,7 @@ const defaultAppSettings: ShellDeskAppSettings = {
   terminalFontFamily: 'Cascadia Mono',
   terminalFontWeight: 400,
   terminalFontWeightBold: 700,
+  terminalLigatures: true,
   terminalFontLigatures: true,
   terminalLineHeight: 1.2,
   terminalTheme: 'shelldesk-dark',
@@ -195,6 +199,14 @@ function createInitialAppSettings(): ShellDeskAppSettings {
     ...defaultAppSettings,
     theme: readPreloadThemePreference() ?? defaultAppSettings.theme,
   };
+}
+
+async function fetchBackendDefaults(): Promise<Partial<ShellDeskAppSettings>> {
+  try {
+    return (await window.guiSSH?.vault.getDefaultSettings()) ?? {};
+  } catch {
+    return {};
+  }
 }
 
 type AppPage = 'hosts' | 'keys' | 'snippets' | 'proxies' | 'known-hosts' | 'logs' | 'settings';
@@ -2638,6 +2650,18 @@ function App() {
   useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
+
+  useEffect(() => {
+    fetchBackendDefaults().then((backendDefaults) => {
+      if (Object.keys(backendDefaults).length > 0) {
+        setSettings((prev) => {
+          const nextSettings = { ...backendDefaults, ...prev };
+          settingsRef.current = nextSettings;
+          return nextSettings;
+        });
+      }
+    });
+  }, []);
 
   useEffect(() => {
     if (!windowConnectionId) {

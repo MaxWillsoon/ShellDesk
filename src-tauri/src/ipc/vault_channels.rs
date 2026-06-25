@@ -1,8 +1,8 @@
 use crate::vault::{
-    generate_key_pair, get_bookmarks, get_preference, get_remote_connection_profile,
-    import_key_pair, public_snapshot, read_store, save_bookmarks_to_store,
-    save_remote_connection_profile_to_store, set_preference_to_store, snapshot, to_snapshot,
-    upsert_vault_collections, with_store_mut,
+    default_settings, generate_key_pair, get_bookmarks, get_preference,
+    get_remote_connection_profile, import_key_pair, public_snapshot, read_store,
+    save_bookmarks_to_store, save_remote_connection_profile_to_store, set_preference_to_store,
+    snapshot, to_snapshot, upsert_vault_collections, with_store_mut,
 };
 use crate::{string_arg, AppState};
 use serde_json::{json, Value};
@@ -15,6 +15,7 @@ pub(crate) async fn dispatch(
     args: &[Value],
 ) -> Result<Option<Value>, String> {
     let value = match channel {
+        "vault:get-default-settings" => default_settings(),
         "vault:get-public-snapshot" => public_snapshot(state)?,
         "vault:get-snapshot" => snapshot(state)?,
         "vault:save-collections" => {

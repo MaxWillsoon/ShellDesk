@@ -305,6 +305,7 @@ interface ShellDeskAppSettings {
   terminalFontFamily: string;
   terminalFontWeight: number;
   terminalFontWeightBold: number;
+  terminalLigatures: boolean;
   terminalFontLigatures: boolean;
   terminalLineHeight: number;
   terminalTheme:
@@ -470,6 +471,7 @@ interface ShellDeskVaultCollectionsPayload {
 
 interface ShellDeskVaultControls {
   initialPublicSnapshot: ShellDeskVaultSnapshot | null;
+  getDefaultSettings: () => Promise<ShellDeskAppSettings>;
   getPublicSnapshot: () => Promise<ShellDeskVaultSnapshot>;
   getSnapshot: () => Promise<ShellDeskVaultSnapshot>;
   saveCollections: (payload: ShellDeskVaultCollectionsPayload) => Promise<ShellDeskVaultSnapshot>;

@@ -31,6 +31,9 @@ fn default_store(state: &AppState) -> Value {
     })
 }
 
+// 默认设置定义（唯一权威源）。
+// 前端 App.tsx::defaultAppSettings 和 tauriBridge.ts::createPreviewSettings 为同步 fallback。
+// 修改此处后需同步更新前端两处，或运行一致性检查：node scripts/check-default-settings-parity.cjs
 pub(crate) fn default_settings() -> Value {
     let language = default_language();
     json!({
