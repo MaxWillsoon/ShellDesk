@@ -297,7 +297,7 @@ pub(crate) async fn disconnect(
 }
 
 pub(crate) fn start_idle_cleanup(state: AppState, app: tauri::AppHandle) {
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(CLEANUP_INTERVAL).await;
             cleanup_idle_sessions(&state, &app).await;
@@ -321,7 +321,17 @@ async fn cleanup_idle_sessions(state: &AppState, app: &tauri::AppHandle) {
 
     for key in expired_keys {
         let session = match state.database_tunnel_sessions.lock() {
-            Ok(mut sessions) => sessions.remove(&key),
+            Ok(mut sessions) => {
+                let removal_now = Instant::now();
+                let is_still_expired = sessions.get(&key).is_some_and(|session| {
+                    removal_now.duration_since(session.last_activity()) > IDLE_TIMEOUT
+                });
+                if is_still_expired {
+                    sessions.remove(&key)
+                } else {
+                    None
+                }
+            }
             Err(_) => continue,
         };
         if let Some(session) = session {
