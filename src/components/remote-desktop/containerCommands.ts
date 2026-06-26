@@ -173,10 +173,37 @@ export function getComposeListCommand(runtime: ContainerRuntime, isWindowsHost: 
   if (isWindowsHost) {
     return powershellCommand(`
 $runtime = ${powershellSingleQuote(runtime)}
-& $runtime compose ls --format json 2>&1 | ForEach-Object { $_.ToString() }
+& $runtime compose ls --format json 2>&1 | ForEach-Object { $_.ToString() } | Tee-Object -Variable composeOutput
 $exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+if ($exitCode -ne 0 -and $runtime -eq "podman") {
+  $errorText = ($composeOutput | ForEach-Object { $_.ToString() }) -join "\n"
+  if ($errorText -match "invalid choice: 'ls'" -or $errorText -match "podman-compose") {
+    & $runtime ps -a --format '{{json .}}' 2>&1 | ForEach-Object { $_.ToString() }
+    $exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+  }
+}
 exit $exitCode
 `);
+  }
+  if (runtime === 'podman') {
+    return `
+compose_output="$(${runtime} compose ls --format json 2>&1)"
+compose_code=$?
+if [ "$compose_code" -eq 0 ]; then
+  printf '%s\\n' "$compose_output"
+  exit 0
+fi
+case "$compose_output" in
+  *"invalid choice: 'ls'"*|*"podman-compose"*)
+    ${runtime} ps -a --format '{{json .}}' 2>&1
+    exit $?
+    ;;
+  *)
+    printf '%s\\n' "$compose_output" >&2
+    exit "$compose_code"
+    ;;
+esac
+`;
   }
   return `${runtime} compose ls --format json 2>&1`;
 }

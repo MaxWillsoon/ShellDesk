@@ -314,9 +314,23 @@ function RemoteContainerManager({ connectionId, systemType }: RemoteContainerMan
     try {
       const activeRuntime = options?.runtimeOverride ?? await detectRuntime();
       const result = await runCommand(getComposeListCommand(activeRuntime, isWindowsHost));
-      const nextProjects = parseJsonLines(result.stdout || '')
+      const parsedProjects = parseJsonLines(result.stdout || '')
         .map(parseComposeProjectSummary)
-        .filter((project): project is ComposeProjectSummary => Boolean(project))
+        .filter((project): project is ComposeProjectSummary => Boolean(project));
+      const nextProjects = Array.from(parsedProjects.reduce((projectsByName, project) => {
+        const currentProject = projectsByName.get(project.name);
+        if (!currentProject) {
+          projectsByName.set(project.name, project);
+          return projectsByName;
+        }
+        projectsByName.set(project.name, {
+          ...currentProject,
+          status: currentProject.status !== '-' ? currentProject.status : project.status,
+          configFiles: currentProject.configFiles !== '-' ? currentProject.configFiles : project.configFiles,
+          workingDir: currentProject.workingDir !== '-' ? currentProject.workingDir : project.workingDir,
+        });
+        return projectsByName;
+      }, new Map<string, ComposeProjectSummary>()).values())
         .sort((first, second) => first.name.localeCompare(second.name, getShellDeskLocale()));
       if (result.code !== 0 && nextProjects.length === 0) throw new Error(result.stderr || result.stdout || t('container.error.listCompose', language));
       if (!isMountedRef.current) return;

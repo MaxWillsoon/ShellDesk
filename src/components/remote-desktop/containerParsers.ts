@@ -155,17 +155,60 @@ export function parseImageSummary(record: Record<string, unknown>): ImageSummary
     createdAt: readString(record, 'CreatedAt', 'CreatedSince', 'Created', 'createdAt') || undefined,
   };
 }
+function readLabel(record: Record<string, unknown>, ...keys: string[]) {
+  const labels = record.Labels ?? record.labels ?? record.Label ?? record.label;
+  if (!labels) {
+    return '';
+  }
+  if (typeof labels === 'object' && !Array.isArray(labels)) {
+    const labelRecord = labels as Record<string, unknown>;
+    for (const key of keys) {
+      const value = labelRecord[key];
+      if (value !== undefined && value !== null) {
+        const text = String(value).trim();
+        if (text) return text;
+      }
+    }
+    return '';
+  }
+  const labelText = Array.isArray(labels) ? labels.join(',') : String(labels);
+  for (const entry of labelText.split(/,(?=[^,=]+=)/u)) {
+    const separatorIndex = entry.indexOf('=');
+    if (separatorIndex < 0) continue;
+    const key = entry.slice(0, separatorIndex).trim();
+    const value = entry.slice(separatorIndex + 1).trim();
+    if (keys.includes(key) && value) {
+      return value;
+    }
+  }
+  return '';
+}
 export function parseComposeProjectSummary(record: Record<string, unknown>, index: number): ComposeProjectSummary | null {
-  const name = readString(record, 'Name', 'name');
+  const name = readString(record, 'Name', 'name') || readLabel(
+    record,
+    'com.docker.compose.project',
+    'io.podman.compose.project',
+    'io.podman.compose.project.name',
+  );
   if (!name) {
     return null;
   }
   return {
     id: name || `compose-${index}`,
     name,
-    status: readString(record, 'Status', 'status') || '-',
-    configFiles: readString(record, 'ConfigFiles', 'ConfigFilesList', 'config_files', 'Config') || '-',
-    workingDir: readString(record, 'WorkingDir', 'working_dir', 'ProjectDirectory') || '-',
+    status: readString(record, 'Status', 'status', 'State', 'state') || '-',
+    configFiles: readString(record, 'ConfigFiles', 'ConfigFilesList', 'config_files', 'Config') || readLabel(
+      record,
+      'com.docker.compose.project.config_files',
+      'io.podman.compose.project.config_files',
+      'io.podman.compose.config_files',
+    ) || '-',
+    workingDir: readString(record, 'WorkingDir', 'working_dir', 'ProjectDirectory') || readLabel(
+      record,
+      'com.docker.compose.project.working_dir',
+      'io.podman.compose.project.working_dir',
+      'io.podman.compose.working_dir',
+    ) || '-',
   };
 }
 export function parseContainerNetworkSummary(record: Record<string, unknown>): ContainerNetworkSummary | null {

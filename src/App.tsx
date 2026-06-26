@@ -328,6 +328,33 @@ const hostSystemLabels: Record<HostSystemType, string> = {
   unix: 'Unix',
 };
 
+const hostSystemNamePatterns: ReadonlyArray<[HostSystemType, RegExp]> = [
+  ['windows', /windows/i],
+  ['macos', /mac\s?os|darwin/i],
+  ['ubuntu', /ubuntu/i],
+  ['debian', /debian/i],
+  ['redhat', /red\s*hat|rhel/i],
+  ['centos', /centos/i],
+  ['fedora', /fedora/i],
+  ['rocky', /rocky/i],
+  ['almalinux', /alma\s*linux|almalinux/i],
+  ['oracle', /oracle\s+linux/i],
+  ['amazon', /amazon\s+linux|amzn/i],
+  ['arch', /arch\s+linux/i],
+  ['manjaro', /manjaro/i],
+  ['alpine', /alpine/i],
+  ['opensuse', /opensuse|open\s*suse|suse/i],
+  ['linuxmint', /linux\s*mint/i],
+  ['kali', /kali/i],
+  ['raspbian', /raspbian|raspberry\s*pi/i],
+  ['gentoo', /gentoo/i],
+  ['nixos', /nixos/i],
+  ['popos', /pop!_?os|pop\s*os/i],
+  ['elementary', /elementary/i],
+  ['linux', /linux/i],
+  ['unix', /unix/i],
+];
+
 function LazyContentFallback({ language }: { language: AppLanguage }) {
   return (
     <div className="empty-state">
@@ -370,12 +397,11 @@ function getHostSystemType(value: unknown, systemName?: unknown): HostSystemType
     return normalizedValue as HostSystemType;
   }
 
-  if (typeof systemName === 'string' && /windows/i.test(systemName)) {
-    return 'windows';
-  }
-
-  if (typeof systemName === 'string' && /mac\s?os|darwin/i.test(systemName)) {
-    return 'macos';
+  if (typeof systemName === 'string') {
+    const matchedSystem = hostSystemNamePatterns.find(([, pattern]) => pattern.test(systemName));
+    if (matchedSystem) {
+      return matchedSystem[0];
+    }
   }
 
   return 'unknown';
@@ -1081,6 +1107,11 @@ function getFirstHostInfoLine(value: string) {
     .find(Boolean) ?? '';
 }
 
+function getSystemNameFromHostInfoItems(items: HostInfoItem[]) {
+  const osValue = items.find((item) => item.key === 'os')?.value.trim() ?? '';
+  return getFirstHostInfoLine(osValue);
+}
+
 function getHostDetailValue(host: Host, key: string, fallback: string) {
   const value = getFirstHostInfoLine(getHostInfoItemValue(host, key));
   return value || fallback;
@@ -1304,8 +1335,10 @@ function createHostInfoSnapshot(
     return null;
   }
 
-  const effectiveSystemType = systemType !== 'unknown' ? systemType : host.systemType;
-  const effectiveSystemName = systemName || host.systemName;
+  const collectedSystemName = getSystemNameFromHostInfoItems(items);
+  const effectiveSystemName = collectedSystemName || systemName || host.systemName;
+  const systemTypeSource = collectedSystemName ? 'unknown' : systemType !== 'unknown' ? systemType : host.systemType;
+  const effectiveSystemType = getHostSystemType(systemTypeSource, effectiveSystemName);
 
   return {
     address: host.address,
