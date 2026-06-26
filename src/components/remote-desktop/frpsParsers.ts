@@ -77,8 +77,8 @@ export function parseFrpsConfigToml(content: string): FrpsConfig {
     dashboardUser: asString(values['webServer.user'] ?? values.dashboardUser, 'admin'),
     dashboardPassword: asString(values['webServer.password'] ?? values.dashboardPassword, 'admin'),
     logTo: asString(values['log.to'] ?? values.logTo, '/var/log/frps.log'),
-    logLevel: asLogLevel(values.logLevel),
-    logMaxDays: asNumber(values.logMaxDays, 3),
+    logLevel: asLogLevel(values['log.level'] ?? values.logLevel),
+    logMaxDays: asNumber(values['log.maxDays'] ?? values.logMaxDays, 3),
     maxPoolCount: asNumber(values['transport.maxPoolCount'] ?? values.maxPoolCount, 10),
     tcpMux: asBoolean(values['transport.tcpMux'] ?? values.tcpMux, true),
   };
