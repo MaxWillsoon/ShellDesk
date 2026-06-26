@@ -22,6 +22,10 @@ function tomlArray(values: string[]) {
   return `[${values.map(tomlString).join(', ')}]`;
 }
 
+function encodeUtf8Base64(value: string) {
+  return btoa(unescape(encodeURIComponent(value)));
+}
+
 function appendOptionalBoolean(lines: string[], key: keyof FrpcProxy, proxy: FrpcProxy) {
   const value = proxy[key];
   if (typeof value === 'boolean') {
@@ -211,7 +215,7 @@ export function createFrpcLogsCommand(isWindows: boolean, serviceMode: string, l
   if (isWindows) {
     return powershellStdinCommand(`
 $log = Join-Path $env:USERPROFILE ".frp\\frpc.log"
-if (Test-Path $log) { Get-Content $log -Tail ${safeLines} } else { "暂无日志文件" }
+if (Test-Path $log) { Get-Content $log -Tail ${safeLines} } else { "No log file" }
 `);
   }
   if (serviceMode === 'systemd') return command(`journalctl -u frpc --no-pager -n ${safeLines} 2>&1`);
@@ -227,17 +231,16 @@ export function createFrpcReadConfigCommand(configPath: string): RemoteCommandIn
 }
 
 export function createFrpcWriteConfigCommand(configPath: string, content: string): RemoteCommandInput {
+  const base64Content = encodeUtf8Base64(content);
   if (isLikelyWindowsPath(configPath)) {
     const pathExpression = configPath.replace(/^%USERPROFILE%/i, '$env:USERPROFILE');
     return powershellStdinCommand(`
 $path = ${powershellSingleQuote(pathExpression)} -replace '^\\$env:USERPROFILE', $env:USERPROFILE
 New-Item -ItemType Directory -Force -Path (Split-Path $path) | Out-Null
-@'
-${content.replace(/'@/g, "' + '@' + '")}
-'@ | Set-Content -Path $path -Encoding UTF8
+[IO.File]::WriteAllBytes($path, [Convert]::FromBase64String('${base64Content}'))
 `);
   }
-  return command(`mkdir -p "$(dirname ${shellSingleQuote(configPath)})" && cat > ${shellSingleQuote(configPath)} << 'FRPC_EOF'\n${content}\nFRPC_EOF`);
+  return command(`mkdir -p "$(dirname ${shellSingleQuote(configPath)})" && echo '${base64Content}' | base64 -d > ${shellSingleQuote(configPath)}`);
 }
 
 export function createFrpcEnableAutostartCommand(isWindows: boolean, serviceMode: string): RemoteCommandInput {
