@@ -1443,6 +1443,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
   const [focusedWindowId, setFocusedWindowId] = useState('');
   const [isLaunchpadOpen, setIsLaunchpadOpen] = useState(false);
   const [isLaunchpadRendered, setIsLaunchpadRendered] = useState(false);
+  const [launchpadSearch, setLaunchpadSearch] = useState('');
   const [appContextMenu, setAppContextMenu] = useState<DesktopAppContextMenuState | null>(null);
   const [folderContextMenu, setFolderContextMenu] = useState<DesktopFolderContextMenuState | null>(null);
   const [surfaceContextMenu, setSurfaceContextMenu] = useState<DesktopSurfaceContextMenuState | null>(null);
@@ -1463,9 +1464,20 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
   const visibleDesktopItems = getSortedDesktopItems(desktopLayout, settings.language);
   const openFolder = desktopLayout.items.find((item): item is DesktopFolderLayoutItem => item.type === 'folder' && item.id === openFolderId) ?? null;
   const appLocale = getAppLocale(settings.language);
-  const launchpadApps = [...desktopApps].sort((firstApp, secondApp) => (
-    getAppLabel(firstApp, settings.language).localeCompare(getAppLabel(secondApp, settings.language), appLocale)
-  ));
+  const launchpadSearchTerm = launchpadSearch.trim().toLocaleLowerCase(appLocale);
+  const launchpadApps = [...desktopApps]
+    .filter((app) => {
+      if (!launchpadSearchTerm) return true;
+      const searchTarget = [
+        app.key,
+        getAppLabel(app, settings.language),
+        getAppDescription(app, settings.language),
+      ].join(' ').toLocaleLowerCase(appLocale);
+      return searchTarget.includes(launchpadSearchTerm);
+    })
+    .sort((firstApp, secondApp) => (
+      getAppLabel(firstApp, settings.language).localeCompare(getAppLabel(secondApp, settings.language), appLocale)
+    ));
 
   useEffect(() => {
     desktopWindowsRef.current = desktopWindows;
@@ -1601,6 +1613,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
   const closeLaunchpad = () => {
     setIsLaunchpadOpen(false);
     setLaunchpadTooltip(null);
+    setLaunchpadSearch('');
 
     if (launchpadCloseTimerRef.current !== null) {
       window.clearTimeout(launchpadCloseTimerRef.current);
@@ -2816,6 +2829,18 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
               <span>{t('desktop.launchpad.allApps', settings.language)}</span>
               <strong>{t('desktop.launchpad.componentCount', settings.language, { count: launchpadApps.length })}</strong>
             </div>
+            <label className="launchpad-search">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+                <circle cx="7" cy="7" r="4.25" />
+                <path d="m10.25 10.25 3 3" />
+              </svg>
+              <input
+                value={launchpadSearch}
+                onChange={(event) => setLaunchpadSearch(event.target.value)}
+                placeholder={t('desktop.launchpad.searchPlaceholder', settings.language)}
+                aria-label={t('desktop.launchpad.searchPlaceholder', settings.language)}
+              />
+            </label>
             <button type="button" className="launchpad-close" aria-label={t('desktop.launchpad.close', settings.language)} onClick={closeLaunchpad}>
               <svg width="12" height="12" viewBox="0 0 12 12" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
                 <line x1="2" y1="2" x2="10" y2="10" />
@@ -2858,6 +2883,9 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
                 </button>
               );
             })}
+            {!launchpadApps.length ? (
+              <div className="launchpad-empty">{t('desktop.launchpad.noSearchResults', settings.language)}</div>
+            ) : null}
           </div>
         </section>
       </div>,

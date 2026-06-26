@@ -534,6 +534,27 @@
   color: #172033;
 }
 
+[data-theme="light"] .launchpad-search {
+  border-color: rgba(16, 32, 51, 0.12);
+  background: rgba(248, 250, 252, 0.9);
+  color: #526178;
+}
+
+[data-theme="light"] .launchpad-search:focus-within {
+  border-color: rgba(32, 139, 113, 0.42);
+  background: rgba(255, 255, 255, 0.96);
+  color: #172033;
+}
+
+[data-theme="light"] .launchpad-search input {
+  color: #172033;
+}
+
+[data-theme="light"] .launchpad-search input::placeholder,
+[data-theme="light"] .launchpad-empty {
+  color: #6a778c;
+}
+
 [data-theme="light"] .launchpad-overlay,
 [data-theme="light"] .desktop-folder-overlay {
   background: rgba(225, 233, 243, 0.64);
