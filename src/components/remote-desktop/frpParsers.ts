@@ -60,7 +60,7 @@ export function parseFrpcStatusOutput(stdout: string, serviceMode: FrpcServiceMo
   if (serviceMode === 'systemd') {
     return text.split(/\s+/).includes('active');
   }
-  return /^\d+$/.test(text.trim());
+  return text.split(/\s+/).some((token) => /^\d+$/.test(token));
 }
 
 export function parseFrpcConfigToml(content: string): FrpcConfig {

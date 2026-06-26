@@ -4,6 +4,7 @@ import type { FrpcConfig, FrpcProxy } from './frpTypes';
 
 const FRP_VERSION = '0.61.1';
 const LINUX_CONFIG_PATH = '/etc/frp/frpc.toml';
+const MACOS_CONFIG_PATH = '/usr/local/etc/frp/frpc.toml';
 const WINDOWS_CONFIG_PATH = '%USERPROFILE%\\.frp\\frpc.toml';
 
 function command(value: string): RemoteCommandInput {
@@ -12,6 +13,16 @@ function command(value: string): RemoteCommandInput {
 
 function isLikelyWindowsPath(path: string) {
   return /^%USERPROFILE%/i.test(path) || /^[a-z]:\\/i.test(path) || path.includes('\\');
+}
+
+function configPathOrDefault(isWindows: boolean, configPath?: string) {
+  const trimmed = configPath?.trim();
+  return trimmed || (isWindows ? WINDOWS_CONFIG_PATH : LINUX_CONFIG_PATH);
+}
+
+function windowsPathAssignment(configPath: string) {
+  const pathExpression = configPath.replace(/^%USERPROFILE%/i, '$env:USERPROFILE');
+  return `$path = ${powershellSingleQuote(pathExpression)} -replace '^\\$env:USERPROFILE', $env:USERPROFILE`;
 }
 
 function tomlString(value: string) {
@@ -72,7 +83,7 @@ export function generateFrpcToml(config: FrpcConfig) {
   return `${lines.join('\n')}\n`;
 }
 
-export function createFrpcDetectCommand(isWindows: boolean): RemoteCommandInput {
+export function createFrpcDetectCommand(isWindows: boolean, isMac = false): RemoteCommandInput {
   if (isWindows) {
     return powershellStdinCommand(`
 $frpc = Get-Command frpc -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -91,6 +102,7 @@ if ($frpc) {
 `);
   }
 
+  const defaultUnixConfigPath = isMac ? MACOS_CONFIG_PATH : LINUX_CONFIG_PATH;
   return command(`
 if command -v frpc >/dev/null 2>&1; then
   echo "installed=true"
@@ -110,17 +122,19 @@ else
   echo "systemd=false"
 fi
 echo "---CONFIG---"
-if [ -f /etc/frp/frpc.toml ]; then
+if [ -f ${shellSingleQuote(defaultUnixConfigPath)} ]; then
+  echo ${shellSingleQuote(defaultUnixConfigPath)}
+elif [ -f /etc/frp/frpc.toml ]; then
   echo "/etc/frp/frpc.toml"
 elif [ -f ./frpc.toml ]; then
   echo "./frpc.toml"
 else
-  echo "/etc/frp/frpc.toml"
+  echo ${shellSingleQuote(defaultUnixConfigPath)}
 fi
 `);
 }
 
-export function createFrpcInstallCommand(isWindows: boolean): RemoteCommandInput {
+export function createFrpcInstallCommand(isWindows: boolean, isMac = false): RemoteCommandInput {
   if (isWindows) {
     return powershellStdinCommand(`
 $version = "${FRP_VERSION}"
@@ -148,13 +162,14 @@ frpc version
   return command(`
 set -e
 VERSION="${FRP_VERSION}"
+OS="${isMac ? 'darwin' : 'linux'}"
 ARCH="$(uname -m)"
 case "$ARCH" in
   x86_64|amd64) FRP_ARCH="amd64" ;;
   aarch64|arm64) FRP_ARCH="arm64" ;;
   *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
 esac
-BASE="frp_\${VERSION}_linux_\${FRP_ARCH}"
+BASE="frp_\${VERSION}_\${OS}_\${FRP_ARCH}"
 URL="https://github.com/fatedier/frp/releases/download/v\${VERSION}/\${BASE}.tar.gz"
 echo "Downloading $URL"
 if command -v curl >/dev/null 2>&1; then
@@ -172,42 +187,47 @@ chmod +x /usr/local/bin/frpc
 `);
 }
 
-export function createFrpcStartCommand(isWindows: boolean, serviceMode: string): RemoteCommandInput {
+export function createFrpcStartCommand(isWindows: boolean, serviceMode: string, configPath?: string): RemoteCommandInput {
+  const resolvedConfigPath = configPathOrDefault(isWindows, configPath);
   if (isWindows) {
     return powershellStdinCommand(`
-$config = Join-Path $env:USERPROFILE ".frp\\frpc.toml"
-Start-Process -FilePath "frpc" -ArgumentList @("-c", $config) -WindowStyle Hidden
+${windowsPathAssignment(resolvedConfigPath)}
+Start-Process -FilePath "frpc" -ArgumentList @("-c", $path) -WindowStyle Hidden
 `);
   }
   if (serviceMode === 'systemd') return command('systemctl start frpc 2>&1');
-  return command(`nohup frpc -c ${shellSingleQuote(LINUX_CONFIG_PATH)} > /var/log/frpc.log 2>&1 & echo $!`);
+  return command(`nohup frpc -c ${shellSingleQuote(resolvedConfigPath)} > /var/log/frpc.log 2>&1 & echo $!`);
 }
 
-export function createFrpcStopCommand(isWindows: boolean, serviceMode: string): RemoteCommandInput {
+export function createFrpcStopCommand(isWindows: boolean, serviceMode: string, configPath?: string): RemoteCommandInput {
   if (isWindows) {
     return powershellStdinCommand('Get-Process frpc -ErrorAction SilentlyContinue | Stop-Process -Force');
   }
   if (serviceMode === 'systemd') return command('systemctl stop frpc 2>&1');
-  return command(`pkill -f 'frpc -c' 2>/dev/null || true`);
+  const processPattern = `frpc -c ${configPathOrDefault(false, configPath)}`;
+  return command(`pkill -f ${shellSingleQuote(processPattern)} 2>/dev/null || true`);
 }
 
-export function createFrpcRestartCommand(isWindows: boolean, serviceMode: string): RemoteCommandInput {
+export function createFrpcRestartCommand(isWindows: boolean, serviceMode: string, configPath?: string): RemoteCommandInput {
+  const resolvedConfigPath = configPathOrDefault(isWindows, configPath);
   if (isWindows) {
     return powershellStdinCommand(`
 Get-Process frpc -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 1
-$config = Join-Path $env:USERPROFILE ".frp\\frpc.toml"
-Start-Process -FilePath "frpc" -ArgumentList @("-c", $config) -WindowStyle Hidden
+${windowsPathAssignment(resolvedConfigPath)}
+Start-Process -FilePath "frpc" -ArgumentList @("-c", $path) -WindowStyle Hidden
 `);
   }
   if (serviceMode === 'systemd') return command('systemctl restart frpc 2>&1');
-  return command(`pkill -f 'frpc -c' 2>/dev/null || true; nohup frpc -c ${shellSingleQuote(LINUX_CONFIG_PATH)} > /var/log/frpc.log 2>&1 & echo $!`);
+  const processPattern = `frpc -c ${resolvedConfigPath}`;
+  return command(`pkill -f ${shellSingleQuote(processPattern)} 2>/dev/null || true; nohup frpc -c ${shellSingleQuote(resolvedConfigPath)} > /var/log/frpc.log 2>&1 & echo $!`);
 }
 
-export function createFrpcStatusCommand(isWindows: boolean, serviceMode: string): RemoteCommandInput {
+export function createFrpcStatusCommand(isWindows: boolean, serviceMode: string, configPath?: string): RemoteCommandInput {
   if (isWindows) return powershellStdinCommand('Get-Process frpc -ErrorAction SilentlyContinue | Select-Object -First 1 | ForEach-Object { $_.Id }');
   if (serviceMode === 'systemd') return command('systemctl is-active frpc 2>/dev/null || true');
-  return command(`pgrep -f 'frpc -c' 2>/dev/null || true`);
+  const processPattern = `frpc -c ${configPathOrDefault(false, configPath)}`;
+  return command(`pgrep -f ${shellSingleQuote(processPattern)} 2>/dev/null || true`);
 }
 
 export function createFrpcLogsCommand(isWindows: boolean, serviceMode: string, lines: number): RemoteCommandInput {
@@ -224,8 +244,7 @@ if (Test-Path $log) { Get-Content $log -Tail ${safeLines} } else { "No log file"
 
 export function createFrpcReadConfigCommand(configPath: string): RemoteCommandInput {
   if (isLikelyWindowsPath(configPath)) {
-    const pathExpression = configPath.replace(/^%USERPROFILE%/i, '$env:USERPROFILE');
-    return powershellStdinCommand(`$path = ${powershellSingleQuote(pathExpression)} -replace '^\\$env:USERPROFILE', $env:USERPROFILE\nif (Test-Path $path) { Get-Content $path -Raw }`);
+    return powershellStdinCommand(`${windowsPathAssignment(configPath)}\nif (Test-Path $path) { Get-Content $path -Raw }`);
   }
   return command(`cat ${shellSingleQuote(configPath)} 2>/dev/null || true`);
 }
@@ -233,28 +252,29 @@ export function createFrpcReadConfigCommand(configPath: string): RemoteCommandIn
 export function createFrpcWriteConfigCommand(configPath: string, content: string): RemoteCommandInput {
   const base64Content = encodeUtf8Base64(content);
   if (isLikelyWindowsPath(configPath)) {
-    const pathExpression = configPath.replace(/^%USERPROFILE%/i, '$env:USERPROFILE');
     return powershellStdinCommand(`
-$path = ${powershellSingleQuote(pathExpression)} -replace '^\\$env:USERPROFILE', $env:USERPROFILE
+${windowsPathAssignment(configPath)}
 New-Item -ItemType Directory -Force -Path (Split-Path $path) | Out-Null
 [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String('${base64Content}'))
 `);
   }
-  return command(`mkdir -p "$(dirname ${shellSingleQuote(configPath)})" && echo '${base64Content}' | base64 -d > ${shellSingleQuote(configPath)}`);
+  return command(`mkdir -p "$(dirname ${shellSingleQuote(configPath)})" && if base64 -d >/dev/null 2>&1 </dev/null; then echo '${base64Content}' | base64 -d > ${shellSingleQuote(configPath)}; else echo '${base64Content}' | base64 -D > ${shellSingleQuote(configPath)}; fi`);
 }
 
-export function createFrpcEnableAutostartCommand(isWindows: boolean, serviceMode: string): RemoteCommandInput {
+export function createFrpcEnableAutostartCommand(isWindows: boolean, serviceMode: string, configPath?: string): RemoteCommandInput {
+  const resolvedConfigPath = configPathOrDefault(isWindows, configPath);
   if (isWindows) {
     return powershellStdinCommand(`
 $taskName = "ShellDesk frpc"
-$config = Join-Path $env:USERPROFILE ".frp\\frpc.toml"
-$action = New-ScheduledTaskAction -Execute "frpc" -Argument "-c ""$config"""
+${windowsPathAssignment(resolvedConfigPath)}
+$action = New-ScheduledTaskAction -Execute "frpc" -Argument "-c ""$path"""
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Force | Out-Null
 `);
   }
   if (serviceMode === 'systemd') return command('systemctl enable frpc 2>&1');
-  return command(`(crontab -l 2>/dev/null | grep -v 'frpc -c ${LINUX_CONFIG_PATH}'; echo '@reboot nohup frpc -c ${LINUX_CONFIG_PATH} > /var/log/frpc.log 2>&1 &') | crontab -`);
+  const processPattern = `frpc -c ${resolvedConfigPath}`;
+  return command(`(crontab -l 2>/dev/null | grep -v -F ${shellSingleQuote(processPattern)}; echo ${shellSingleQuote(`@reboot nohup frpc -c ${resolvedConfigPath} > /var/log/frpc.log 2>&1 &`)}) | crontab -`);
 }
 
 export function createFrpcAdminStatusCommand(adminAddr: string, adminPort: number): RemoteCommandInput {

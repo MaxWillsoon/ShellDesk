@@ -27,6 +27,7 @@ type FrpTab = 'proxies' | 'logs' | 'settings';
 type ProxyForm = FrpcProxy;
 
 const defaultLinuxConfigPath = '/etc/frp/frpc.toml';
+const defaultMacConfigPath = '/usr/local/etc/frp/frpc.toml';
 const defaultWindowsConfigPath = '%USERPROFILE%\\.frp\\frpc.toml';
 const proxyTypes: FrpcProxyType[] = ['tcp', 'udp', 'http', 'https', 'stcp', 'xtcp'];
 
@@ -91,7 +92,8 @@ function joinList(value?: string[]) {
 
 function RemoteFrpManager({ connectionId, systemType }: FrpManagerProps) {
   const isWindowsHost = isWindowsSystem(systemType);
-  const defaultConfigPath = isWindowsHost ? defaultWindowsConfigPath : defaultLinuxConfigPath;
+  const isMacHost = systemType === 'macos';
+  const defaultConfigPath = isWindowsHost ? defaultWindowsConfigPath : isMacHost ? defaultMacConfigPath : defaultLinuxConfigPath;
   const [status, setStatus] = useState<FrpcStatus>({
     installed: false,
     version: '',
@@ -159,7 +161,7 @@ function RemoteFrpManager({ connectionId, systemType }: FrpManagerProps) {
   }, [connectionId]);
 
   const refreshRuntimeStatus = useCallback(async (nextStatus: FrpcStatus) => {
-    const result = await runCmd(connectionId, createFrpcStatusCommand(isWindowsHost, nextStatus.serviceMode));
+    const result = await runCmd(connectionId, createFrpcStatusCommand(isWindowsHost, nextStatus.serviceMode, nextStatus.configPath));
     const running = parseFrpcStatusOutput(result.stdout || '', nextStatus.serviceMode);
     setStatus((current) => {
       const next = { ...current, running };
@@ -174,7 +176,7 @@ function RemoteFrpManager({ connectionId, systemType }: FrpManagerProps) {
     setError('');
     setNotice('');
     try {
-      const result = await runCmd(connectionId, createFrpcDetectCommand(isWindowsHost));
+      const result = await runCmd(connectionId, createFrpcDetectCommand(isWindowsHost, isMacHost));
       const detected = parseFrpcDetectOutput(result.stdout || '');
       const detectedStatus: Partial<FrpcStatus> = {
         installed: detected.installed,
@@ -197,7 +199,7 @@ function RemoteFrpManager({ connectionId, systemType }: FrpManagerProps) {
     } finally {
       setLoading(false);
     }
-  }, [connectionId, defaultConfigPath, isWindowsHost, loadConfig, refreshRuntimeStatus, persistStatus]);
+  }, [connectionId, defaultConfigPath, isMacHost, isWindowsHost, loadConfig, refreshRuntimeStatus, persistStatus]);
 
   useEffect(() => {
     void detectFrpc();
@@ -208,7 +210,7 @@ function RemoteFrpManager({ connectionId, systemType }: FrpManagerProps) {
     setError('');
     setNotice(tCurrent('auto.frpManager.installing'));
     try {
-      const result = await runCmd(connectionId, createFrpcInstallCommand(isWindowsHost));
+      const result = await runCmd(connectionId, createFrpcInstallCommand(isWindowsHost, isMacHost));
       if (result.code !== 0) throw new Error(result.stderr || result.stdout || tCurrent('auto.frpManager.installFailed'));
       setNotice(result.stdout || tCurrent('auto.frpManager.installed'));
       await detectFrpc();
@@ -225,10 +227,10 @@ function RemoteFrpManager({ connectionId, systemType }: FrpManagerProps) {
     setNotice('');
     try {
       const command = action === 'start'
-        ? createFrpcStartCommand(isWindowsHost, status.serviceMode)
+        ? createFrpcStartCommand(isWindowsHost, status.serviceMode, status.configPath)
         : action === 'stop'
-          ? createFrpcStopCommand(isWindowsHost, status.serviceMode)
-          : createFrpcRestartCommand(isWindowsHost, status.serviceMode);
+          ? createFrpcStopCommand(isWindowsHost, status.serviceMode, status.configPath)
+          : createFrpcRestartCommand(isWindowsHost, status.serviceMode, status.configPath);
       const result = await runCmd(connectionId, command);
       if (result.code !== 0) throw new Error(result.stderr || result.stdout || tCurrent('auto.frpManager.actionFailed'));
       await refreshRuntimeStatus(status);
@@ -249,7 +251,7 @@ function RemoteFrpManager({ connectionId, systemType }: FrpManagerProps) {
       if (result.code !== 0) throw new Error(result.stderr || result.stdout || tCurrent('auto.frpManager.configSaveFailed'));
       saveProfile(status);
       if (restartAfterSave && status.running) {
-        await runCmd(connectionId, createFrpcRestartCommand(isWindowsHost, status.serviceMode));
+        await runCmd(connectionId, createFrpcRestartCommand(isWindowsHost, status.serviceMode, status.configPath));
         await refreshRuntimeStatus(status);
       }
       setNotice(restartAfterSave && status.running ? tCurrent('auto.frpManager.configSavedRestart') : tCurrent('auto.frpManager.configSaved'));
@@ -299,7 +301,7 @@ function RemoteFrpManager({ connectionId, systemType }: FrpManagerProps) {
     setActing('autostart');
     setError('');
     try {
-      const result = await runCmd(connectionId, createFrpcEnableAutostartCommand(isWindowsHost, status.serviceMode));
+      const result = await runCmd(connectionId, createFrpcEnableAutostartCommand(isWindowsHost, status.serviceMode, status.configPath));
       if (result.code !== 0) throw new Error(result.stderr || result.stdout || tCurrent('auto.frpManager.autostartFailed'));
       setNotice(tCurrent('auto.frpManager.autostartDone'));
     } catch (caughtError) {
