@@ -5,9 +5,14 @@ use crate::{
 };
 use crate::{run_ssh_command_for_profile_with_window, shell_quote};
 use base64::Engine;
-use reqwest::header::{CONTENT_ENCODING, CONTENT_TYPE, HOST};
+use reqwest::header::{CONTENT_ENCODING, CONTENT_TYPE, COOKIE, HOST, SET_COOKIE};
 use serde_json::{json, Value};
-use std::{net::SocketAddr, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -27,6 +32,19 @@ struct BrowserRemoteFallback {
     state: AppState,
     window: tauri::Window,
     profile: SshProfile,
+}
+
+#[derive(Clone, Default)]
+struct BrowserCookieJar {
+    cookies: Arc<Mutex<HashMap<String, BrowserCookie>>>,
+}
+
+#[derive(Clone)]
+struct BrowserCookie {
+    name: String,
+    value: String,
+    path: String,
+    secure: bool,
 }
 
 pub(crate) async fn browser_resolve_url(
@@ -313,6 +331,7 @@ async fn start_browser_reverse_proxy(
         .await
         .map_err(error_string)?;
     let proxy_port = listener.local_addr().map_err(error_string)?.port();
+    let cookie_jar = BrowserCookieJar::default();
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
     tauri::async_runtime::spawn(async move {
         loop {
@@ -326,6 +345,7 @@ async fn start_browser_reverse_proxy(
                             let next_request_origin = request_origin.clone();
                             let next_host_header = upstream_host_header.clone();
                             let next_remote_fallback = remote_fallback.clone();
+                            let next_cookie_jar = cookie_jar.clone();
                             tauri::async_runtime::spawn(async move {
                                 let _ = handle_trusted_https_browser_proxy(
                                     stream,
@@ -334,6 +354,7 @@ async fn start_browser_reverse_proxy(
                                     next_request_origin,
                                     next_host_header,
                                     next_remote_fallback,
+                                    next_cookie_jar,
                                 ).await;
                             });
                         }
@@ -406,6 +427,7 @@ async fn handle_trusted_https_browser_proxy(
     request_origin: String,
     upstream_host_header: String,
     remote_fallback: Option<BrowserRemoteFallback>,
+    cookie_jar: BrowserCookieJar,
 ) -> Result<(), String> {
     let (method, target, headers, body) = read_browser_http_request(&mut stream).await?;
     let browser_host = headers
@@ -430,15 +452,26 @@ async fn handle_trusted_https_browser_proxy(
     let method_text = method.as_str().to_string();
     let fallback_headers = headers.clone();
     let fallback_body = body.clone();
+    let request_path = request_path_from_url(&upstream_url);
+    let is_secure_upstream = upstream_url.starts_with("https://");
+    let browser_cookie_header = header_value(&headers, "cookie");
+    let jar_cookie_header = cookie_jar.header_for_request(&request_path, is_secure_upstream);
+    let combined_cookie_header =
+        combine_cookie_headers(jar_cookie_header.as_deref(), browser_cookie_header);
     let mut request = client
         .request(method, upstream_url)
         .header(HOST, upstream_host_header.clone());
     for (name, value) in &headers {
         let name_lower = name.to_ascii_lowercase();
-        if should_skip_browser_request_header(&name_lower) || name_lower == "host" {
+        if should_skip_browser_request_header(&name_lower)
+            || matches!(name_lower.as_str(), "host" | "cookie")
+        {
             continue;
         }
         request = request.header(name.as_str(), value.as_str());
+    }
+    if let Some(cookie_header) = combined_cookie_header.as_deref() {
+        request = request.header(COOKIE, cookie_header);
     }
     if !body.is_empty() {
         request = request.body(body);
@@ -458,6 +491,7 @@ async fn handle_trusted_https_browser_proxy(
                     request_origin,
                     upstream_host_header,
                     browser_host,
+                    cookie_jar,
                 )
                 .await;
             }
@@ -466,6 +500,7 @@ async fn handle_trusted_https_browser_proxy(
     };
     let status = response.status();
     let response_headers = response.headers().clone();
+    cookie_jar.store_from_header_map(&response_headers, &request_path);
     let body = response.bytes().await.map_err(error_string)?.to_vec();
     let content_type = response_headers
         .get(CONTENT_TYPE)
@@ -497,6 +532,9 @@ async fn handle_trusted_https_browser_proxy(
                 if value.is_empty() {
                     continue;
                 }
+            }
+            if name_lower == SET_COOKIE.as_str() {
+                value = rewrite_browser_set_cookie_header(&value);
             }
             if name_lower == "location"
                 && (value.starts_with(&upstream_origin) || value.starts_with(&request_origin))
@@ -584,12 +622,20 @@ async fn handle_remote_browser_proxy(
     request_origin: String,
     upstream_host_header: String,
     browser_host: String,
+    cookie_jar: BrowserCookieJar,
 ) -> Result<(), String> {
+    let request_path = request_path_from_url(&upstream_url);
+    let is_secure_upstream = upstream_url.starts_with("https://");
+    let jar_cookie_header = cookie_jar.header_for_request(&request_path, is_secure_upstream);
+    let browser_cookie_header = header_value(&headers, "cookie");
+    let combined_cookie_header =
+        combine_cookie_headers(jar_cookie_header.as_deref(), browser_cookie_header);
     let command = remote_browser_curl_command(
         &method,
         &upstream_url,
         &upstream_host_header,
         &headers,
+        combined_cookie_header.as_deref(),
         !body.is_empty(),
     );
     let stdin = String::from_utf8_lossy(&body).to_string();
@@ -632,6 +678,7 @@ async fn handle_remote_browser_proxy(
         write_browser_error_response(stream, 502, &reason).await?;
         return Ok(());
     }
+    cookie_jar.store_from_response_bytes(&response_bytes, &request_path);
     write_remote_browser_response(
         stream,
         &response_bytes,
@@ -647,6 +694,7 @@ fn remote_browser_curl_command(
     upstream_url: &str,
     upstream_host_header: &str,
     headers: &[(String, String)],
+    cookie_header: Option<&str>,
     has_body: bool,
 ) -> String {
     let mut parts = vec![
@@ -664,12 +712,16 @@ fn remote_browser_curl_command(
     for (name, value) in headers {
         let name_lower = name.to_ascii_lowercase();
         if should_skip_browser_request_header(&name_lower)
-            || matches!(name_lower.as_str(), "host" | "content-length")
+            || matches!(name_lower.as_str(), "host" | "content-length" | "cookie")
         {
             continue;
         }
         parts.push("-H".to_string());
         parts.push(shell_quote(&format!("{name}: {value}")));
+    }
+    if let Some(cookie_header) = cookie_header.filter(|value| !value.trim().is_empty()) {
+        parts.push("-H".to_string());
+        parts.push(shell_quote(&format!("Cookie: {cookie_header}")));
     }
     if has_body {
         parts.push("--data-binary".to_string());
@@ -680,6 +732,238 @@ fn remote_browser_curl_command(
         "{} | (base64 2>/dev/null || openssl base64 -A) | tr -d '\\r\\n'",
         parts.join(" ")
     )
+}
+
+impl BrowserCookieJar {
+    fn store_from_header_map(&self, headers: &reqwest::header::HeaderMap, request_path: &str) {
+        for value in headers.get_all(SET_COOKIE).iter() {
+            if let Ok(value) = value.to_str() {
+                self.store_set_cookie(value, request_path);
+            }
+        }
+    }
+
+    fn store_from_response_bytes(&self, response_bytes: &[u8], request_path: &str) {
+        let Some(header_end) = find_http_header_end(response_bytes) else {
+            return;
+        };
+        let header_text = String::from_utf8_lossy(&response_bytes[..header_end]);
+        for line in header_text.lines().skip(1) {
+            let line = line.trim_end_matches('\r');
+            let Some((name, value)) = line.split_once(':') else {
+                continue;
+            };
+            if name.eq_ignore_ascii_case(SET_COOKIE.as_str()) {
+                self.store_set_cookie(value.trim(), request_path);
+            }
+        }
+    }
+
+    fn store_set_cookie(&self, value: &str, request_path: &str) {
+        let Some(parsed) = parse_browser_set_cookie(value, request_path) else {
+            return;
+        };
+        let key = browser_cookie_key(&parsed.name, &parsed.path);
+        let Ok(mut cookies) = self.cookies.lock() else {
+            return;
+        };
+        if parsed.delete {
+            cookies.remove(&key);
+            return;
+        }
+        cookies.insert(
+            key,
+            BrowserCookie {
+                name: parsed.name,
+                value: parsed.value,
+                path: parsed.path,
+                secure: parsed.secure,
+            },
+        );
+    }
+
+    fn header_for_request(&self, request_path: &str, is_secure_upstream: bool) -> Option<String> {
+        let Ok(cookies) = self.cookies.lock() else {
+            return None;
+        };
+        let mut matching = cookies
+            .values()
+            .filter(|cookie| {
+                (!cookie.secure || is_secure_upstream)
+                    && browser_cookie_path_matches(request_path, &cookie.path)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        matching.sort_by(|left, right| {
+            right
+                .path
+                .len()
+                .cmp(&left.path.len())
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        let header = matching
+            .into_iter()
+            .map(|cookie| format!("{}={}", cookie.name, cookie.value))
+            .collect::<Vec<_>>()
+            .join("; ");
+        (!header.is_empty()).then_some(header)
+    }
+}
+
+struct ParsedBrowserCookie {
+    name: String,
+    value: String,
+    path: String,
+    secure: bool,
+    delete: bool,
+}
+
+fn parse_browser_set_cookie(value: &str, request_path: &str) -> Option<ParsedBrowserCookie> {
+    let mut parts = value.split(';');
+    let (name, cookie_value) = parts.next()?.trim().split_once('=')?;
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let mut path = default_cookie_path(request_path);
+    let mut secure = false;
+    let mut delete = false;
+
+    for part in parts {
+        let part = part.trim();
+        if part.eq_ignore_ascii_case("secure") {
+            secure = true;
+            continue;
+        }
+        let Some((attr_name, attr_value)) = part.split_once('=') else {
+            continue;
+        };
+        if attr_name.trim().eq_ignore_ascii_case("path") {
+            let candidate = attr_value.trim();
+            path = if candidate.starts_with('/') {
+                candidate.to_string()
+            } else {
+                "/".to_string()
+            };
+            continue;
+        }
+        if attr_name.trim().eq_ignore_ascii_case("max-age") {
+            if attr_value.trim().parse::<i64>().is_ok_and(|age| age <= 0) {
+                delete = true;
+            }
+            continue;
+        }
+        if attr_name.trim().eq_ignore_ascii_case("expires") {
+            let expires = attr_value.trim().to_ascii_lowercase();
+            if expires.contains("thu, 01 jan 1970") || expires.contains("1970") {
+                delete = true;
+            }
+        }
+    }
+
+    Some(ParsedBrowserCookie {
+        name: name.to_string(),
+        value: cookie_value.trim().to_string(),
+        path,
+        secure,
+        delete,
+    })
+}
+
+fn default_cookie_path(request_path: &str) -> String {
+    if !request_path.starts_with('/') || request_path == "/" {
+        return "/".to_string();
+    }
+    let Some(last_slash) = request_path.rfind('/') else {
+        return "/".to_string();
+    };
+    if last_slash == 0 {
+        "/".to_string()
+    } else {
+        request_path[..last_slash].to_string()
+    }
+}
+
+fn browser_cookie_key(name: &str, path: &str) -> String {
+    format!("{}\n{path}", name.to_ascii_lowercase())
+}
+
+fn browser_cookie_path_matches(request_path: &str, cookie_path: &str) -> bool {
+    if cookie_path == "/" || request_path == cookie_path {
+        return true;
+    }
+    request_path
+        .strip_prefix(cookie_path)
+        .is_some_and(|remaining| remaining.starts_with('/'))
+}
+
+fn request_path_from_url(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .map(|url| {
+            let path = url.path();
+            if path.is_empty() {
+                "/".to_string()
+            } else {
+                path.to_string()
+            }
+        })
+        .unwrap_or_else(|_| "/".to_string())
+}
+
+fn combine_cookie_headers(primary: Option<&str>, secondary: Option<&str>) -> Option<String> {
+    let primary = primary.map(str::trim).filter(|value| !value.is_empty());
+    let secondary = secondary.map(str::trim).filter(|value| !value.is_empty());
+    match (primary, secondary) {
+        (None, None) => None,
+        (Some(value), None) | (None, Some(value)) => Some(value.to_string()),
+        (Some(primary), Some(secondary)) => {
+            let primary_names = cookie_header_names(primary);
+            let mut pairs = primary
+                .split(';')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            pairs.extend(
+                secondary
+                    .split(';')
+                    .map(str::trim)
+                    .filter(|part| {
+                        !part.is_empty()
+                            && part
+                                .split_once('=')
+                                .map(|(name, _)| {
+                                    !primary_names.contains(&name.trim().to_ascii_lowercase())
+                                })
+                                .unwrap_or(false)
+                    })
+                    .map(str::to_string),
+            );
+            (!pairs.is_empty()).then(|| pairs.join("; "))
+        }
+    }
+}
+
+fn cookie_header_names(header: &str) -> HashSet<String> {
+    header
+        .split(';')
+        .filter_map(|part| part.trim().split_once('='))
+        .map(|(name, _)| name.trim().to_ascii_lowercase())
+        .collect()
+}
+
+fn rewrite_browser_set_cookie_header(value: &str) -> String {
+    value
+        .split(';')
+        .filter(|part| {
+            !part
+                .trim_start()
+                .split_once('=')
+                .map(|(name, _)| name.trim().eq_ignore_ascii_case("domain"))
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 fn is_hop_by_hop_request_header(name_lower: &str) -> bool {
@@ -904,6 +1188,9 @@ async fn write_remote_browser_response(
             if value.is_empty() {
                 continue;
             }
+        }
+        if name_lower == SET_COOKIE.as_str() {
+            value = rewrite_browser_set_cookie_header(&value);
         }
         if name_lower == "location"
             && (value.starts_with(upstream_origin) || value.starts_with(request_origin))
@@ -1147,11 +1434,13 @@ mod tests {
             "http://127.0.0.1:3000/app?q=1",
             "127.0.0.1:3000",
             &headers,
+            Some("sid=proxy"),
             false,
         );
 
         assert!(command.contains("'Host: 127.0.0.1:3000'"));
         assert!(command.contains("'Accept: text/html'"));
+        assert!(command.contains("'Cookie: sid=proxy'"));
         assert!(!command.contains("127.0.0.1:51234"));
         assert!(!command.contains("'Connection: keep-alive'"));
         assert!(!command.contains("Accept-Encoding"));
@@ -1244,5 +1533,53 @@ mod tests {
         assert!(!is_skipped_browser_response_header(
             "content-security-policy"
         ));
+    }
+
+    #[test]
+    fn browser_cookie_jar_replays_set_cookie_for_matching_path() {
+        let jar = BrowserCookieJar::default();
+
+        jar.store_set_cookie(
+            "sid=abc123; Path=/admin; HttpOnly; SameSite=Lax",
+            "/admin/login",
+        );
+        jar.store_set_cookie("theme=dark; Path=/; Domain=127.0.0.1", "/admin/login");
+
+        assert_eq!(
+            jar.header_for_request("/admin/dashboard", false).unwrap(),
+            "sid=abc123; theme=dark"
+        );
+        assert_eq!(jar.header_for_request("/api", false).unwrap(), "theme=dark");
+    }
+
+    #[test]
+    fn browser_cookie_jar_honors_secure_and_delete_attributes() {
+        let jar = BrowserCookieJar::default();
+
+        jar.store_set_cookie("sid=abc123; Path=/; Secure", "/login");
+        assert!(jar.header_for_request("/", false).is_none());
+        assert_eq!(jar.header_for_request("/", true).unwrap(), "sid=abc123");
+
+        jar.store_set_cookie("sid=deleted; Path=/; Max-Age=0", "/login");
+        assert!(jar.header_for_request("/", true).is_none());
+    }
+
+    #[test]
+    fn browser_cookie_headers_merge_proxy_cookie_before_browser_cookie() {
+        assert_eq!(
+            combine_cookie_headers(
+                Some("sid=proxy; theme=dark"),
+                Some("sid=browser; locale=zh")
+            ),
+            Some("sid=proxy; theme=dark; locale=zh".to_string())
+        );
+    }
+
+    #[test]
+    fn browser_set_cookie_domain_is_removed_before_returning_to_iframe() {
+        assert_eq!(
+            rewrite_browser_set_cookie_header("sid=abc; Domain=127.0.0.1; Path=/; HttpOnly"),
+            "sid=abc; Path=/; HttpOnly"
+        );
     }
 }

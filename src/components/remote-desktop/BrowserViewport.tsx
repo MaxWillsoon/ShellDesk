@@ -48,6 +48,14 @@ function BrowserViewport({
       {showStartPage ? (
         <BrowserQuickStart services={startPageCards} portStatus={startPagePortStatus} onNavigate={onNavigate} />
       ) : null}
+      {isLoading && !showStartPage ? (
+        <div className="browser-loading-overlay" role="status" aria-live="polite">
+          <div className="browser-loading-mark" aria-hidden="true">
+            <span />
+          </div>
+          <strong>{tCurrent('auto.remoteBrowser.1hlxe0e')}</strong>
+        </div>
+      ) : null}
       <iframe
         key={browserFrameKey}
         ref={(element) => {

@@ -203,7 +203,8 @@ async fn ensure_direct_ssh_host_key_trusted(
         .unwrap_or("unknown")
     {
         "trusted" => {
-            profile.known_hosts_path = write_connection_known_hosts(state, profile, &scanned)?;
+            profile.known_hosts_path =
+                write_connection_known_hosts_from_scans(state, profile, &scanned_keys)?;
             Ok(())
         }
         "unknown" | "changed" => {
@@ -224,7 +225,8 @@ async fn ensure_direct_ssh_host_key_trusted(
                 upsert_known_host_from_scan(state, profile, &scanned, &decision)?;
                 let _ = window.emit("vault:changed", json!({ "kind": "hostKeyTrust" }));
             }
-            profile.known_hosts_path = write_connection_known_hosts(state, profile, &scanned)?;
+            profile.known_hosts_path =
+                write_connection_known_hosts_from_scans(state, profile, &scanned_keys)?;
             Ok(())
         }
         _ => Err("SSH 主机密钥校验失败。".to_string()),
@@ -829,32 +831,57 @@ fn known_host_record_from_scan(
     })
 }
 
-fn write_connection_known_hosts(
-    state: &AppState,
-    profile: &SshProfile,
-    scanned: &Value,
-) -> Result<String, String> {
-    let public_key = scanned
-        .get("publicKey")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "SSH 主机公钥为空。".to_string())?;
-    write_connection_known_hosts_from_public_key(state, profile, public_key)
-}
-
 fn write_connection_known_hosts_from_public_key(
     state: &AppState,
     profile: &SshProfile,
     public_key: &str,
 ) -> Result<String, String> {
-    let public_key = public_key.trim();
-    if public_key.is_empty() {
+    write_connection_known_hosts_from_public_keys(state, profile, &[public_key.to_string()])
+}
+
+fn write_connection_known_hosts_from_scans(
+    state: &AppState,
+    profile: &SshProfile,
+    scanned_keys: &[Value],
+) -> Result<String, String> {
+    let mut public_keys = Vec::new();
+    for scanned in scanned_keys {
+        let public_key = scanned
+            .get("publicKey")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if public_key.is_empty() || public_keys.iter().any(|value| value == public_key) {
+            continue;
+        }
+        public_keys.push(public_key.to_string());
+    }
+    write_connection_known_hosts_from_public_keys(state, profile, &public_keys)
+}
+
+fn write_connection_known_hosts_from_public_keys(
+    state: &AppState,
+    profile: &SshProfile,
+    public_keys: &[String],
+) -> Result<String, String> {
+    let public_keys = public_keys
+        .iter()
+        .map(|public_key| public_key.trim())
+        .filter(|public_key| !public_key.is_empty())
+        .collect::<Vec<_>>();
+    if public_keys.is_empty() {
         return Err("SSH 主机公钥为空。".to_string());
     }
     let known_hosts_dir = state.data_dir.join("known-hosts");
     fs::create_dir_all(&known_hosts_dir).map_err(error_string)?;
     let path = known_hosts_dir.join(format!("{}.known_hosts", random_id("ssh")));
     let host_pattern = known_hosts_host_pattern(&profile.address, profile.port);
-    fs::write(&path, format!("{host_pattern} {public_key}\n")).map_err(error_string)?;
+    let content = public_keys
+        .iter()
+        .map(|public_key| format!("{host_pattern} {public_key}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&path, format!("{content}\n")).map_err(error_string)?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -863,5 +890,48 @@ pub(super) fn known_hosts_host_pattern(address: &str, port: u16) -> String {
         address.to_string()
     } else {
         format!("[{address}]:{port}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_profile() -> SshProfile {
+        SshProfile {
+            address: "192.168.51.217".to_string(),
+            port: 22,
+            username: "root".to_string(),
+            auth_method: "password".to_string(),
+            password: String::new(),
+            key_path: String::new(),
+            known_hosts_path: String::new(),
+            proxy_helper_exe: String::new(),
+            proxy: None,
+            jump: None,
+        }
+    }
+
+    #[test]
+    fn known_hosts_file_includes_all_scanned_host_key_algorithms() {
+        let data_dir =
+            std::env::temp_dir().join(format!("shelldesk-host-key-test-{}", random_id("case")));
+        let state = AppState::new(data_dir.clone());
+        let profile = test_profile();
+        let scanned_keys = vec![
+            json!({ "publicKey": "ssh-ed25519 AAAAed25519" }),
+            json!({ "publicKey": "ecdsa-sha2-nistp256 AAAAecdsa" }),
+            json!({ "publicKey": "ssh-ed25519 AAAAed25519" }),
+        ];
+
+        let path = write_connection_known_hosts_from_scans(&state, &profile, &scanned_keys)
+            .expect("known_hosts file should be written");
+        let content = fs::read_to_string(&path).expect("known_hosts file should be readable");
+
+        assert!(content.contains("192.168.51.217 ssh-ed25519 AAAAed25519"));
+        assert!(content.contains("192.168.51.217 ecdsa-sha2-nistp256 AAAAecdsa"));
+        assert_eq!(content.matches("ssh-ed25519 AAAAed25519").count(), 1);
+
+        let _ = fs::remove_dir_all(data_dir);
     }
 }

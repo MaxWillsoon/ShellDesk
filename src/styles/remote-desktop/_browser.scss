@@ -473,6 +473,61 @@
   opacity: 1;
 }
 
+.browser-loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  color: #eaf2ff;
+  background: radial-gradient(circle at center, rgba(12, 21, 34, 0.52), rgba(12, 18, 28, 0.18) 42%, rgba(12, 18, 28, 0.04));
+  pointer-events: none;
+}
+
+.browser-loading-overlay strong {
+  min-width: 96px;
+  padding: 7px 12px;
+  border: 1px solid rgba(154, 177, 210, 0.28);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 760;
+  text-align: center;
+  background: rgba(9, 15, 24, 0.72);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.24);
+}
+
+.browser-loading-mark {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: 1px solid rgba(154, 177, 210, 0.24);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.03)),
+    rgba(9, 15, 24, 0.76);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.28);
+}
+
+.browser-loading-mark::before {
+  content: '';
+  position: absolute;
+  inset: 10px;
+  border-radius: 50%;
+  border: 3px solid rgba(154, 177, 210, 0.22);
+  border-top-color: #6ab0ff;
+  animation: browser-loading-spin 0.9s linear infinite;
+}
+
+.browser-loading-mark span {
+  position: absolute;
+  inset: 21px;
+  border-radius: 50%;
+  background: #7dd7a4;
+  box-shadow: 0 0 18px rgba(125, 215, 164, 0.7);
+}
+
 .remote-webview {
   display: flex;
   width: 100%;
@@ -492,6 +547,12 @@
 
   100% {
     transform: translateX(320%);
+  }
+}
+
+@keyframes browser-loading-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 /* Browser remote-context redesign */

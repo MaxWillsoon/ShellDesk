@@ -497,7 +497,11 @@ function RemoteBrowser({ connectionId, partition, bookmarkScope, context, onChro
       if (browserNavigationRequestRef.current !== requestId) {
         return;
       }
-      setBrowserSrc(resolved?.browserUrl || nextUrl);
+      const nextBrowserSrc = resolved?.browserUrl || nextUrl;
+      if (!showStartPage && nextBrowserSrc === browserSrc) {
+        setBrowserFrameKey((value) => value + 1);
+      }
+      setBrowserSrc(nextBrowserSrc);
     } catch (error) {
       if (browserNavigationRequestRef.current !== requestId) {
         return;
