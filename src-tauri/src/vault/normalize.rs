@@ -42,7 +42,6 @@ const TERMINAL_THEME_CHOICES: &[&str] = &[
 ];
 const TERMINAL_CURSOR_INACTIVE_STYLE_CHOICES: &[&str] =
     &["outline", "block", "bar", "underline", "none"];
-const AI_PROVIDER_CHOICES: &[&str] = &["openai", "anthropic", "openai-compatible", "custom"];
 const AI_API_FORMAT_CHOICES: &[&str] = &["openai", "anthropic"];
 const MAX_DESKTOP_WALLPAPER_BYTES: usize = 5 * 1024 * 1024;
 const MAX_DESKTOP_WALLPAPER_DATA_URL_LENGTH: usize =
@@ -54,9 +53,8 @@ pub(crate) fn normalize_app_settings(raw_settings: &Value) -> Result<Value, Stri
         return Ok(defaults);
     };
 
-    let ai_provider = read_choice(
+    let ai_provider = read_ai_provider(
         settings.get("aiProvider"),
-        AI_PROVIDER_CHOICES,
         defaults["aiProvider"].as_str().unwrap_or("openai"),
     );
     let ai_api_format_default = if ai_provider == "anthropic" {
@@ -213,6 +211,15 @@ fn read_choice(value: Option<&Value>, choices: &[&str], fallback: &str) -> Strin
         .to_string()
 }
 
+fn read_ai_provider(value: Option<&Value>, fallback: &str) -> String {
+    match value.and_then(Value::as_str) {
+        Some("openai") => "openai".to_string(),
+        Some("anthropic") => "anthropic".to_string(),
+        Some("custom" | "openai-compatible") => "custom".to_string(),
+        _ => fallback.to_string(),
+    }
+}
+
 fn read_bool(value: Option<&Value>, fallback: bool) -> bool {
     value.and_then(Value::as_bool).unwrap_or(fallback)
 }
@@ -297,7 +304,6 @@ fn default_ai_api_base_url(provider: &str) -> String {
 fn default_ai_provider_name(provider: &str) -> String {
     match provider {
         "anthropic" => "Claude / Anthropic".to_string(),
-        "openai-compatible" => "OpenAI 兼容".to_string(),
         "custom" => "自定义提供商".to_string(),
         _ => "OpenAI".to_string(),
     }

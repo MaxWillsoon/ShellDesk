@@ -34,11 +34,15 @@ type PiUsageSummary = {
   cost: number;
 };
 
-const CUSTOM_PROVIDER_ID = 'shelldesk-openai-compatible';
+const CUSTOM_PROVIDER_ID = 'shelldesk-custom';
 const modelsCache = new Map<string, Models>();
 
+function isCustomAiProvider(provider: ShellDeskAiProvider) {
+  return provider === 'custom' || provider === 'openai-compatible';
+}
+
 function getProviderId(settings: ShellDeskAppSettings): string {
-  if (settings.aiProvider === 'custom' || settings.aiProvider === 'openai-compatible') {
+  if (isCustomAiProvider(settings.aiProvider)) {
     return CUSTOM_PROVIDER_ID;
   }
 
@@ -106,7 +110,7 @@ export function isAiConfigured(settings: ShellDeskAppSettings): boolean {
 }
 
 export function createModelsForSettings(settings: ShellDeskAppSettings): Models {
-  if (settings.aiProvider === 'custom' || settings.aiProvider === 'openai-compatible') {
+  if (isCustomAiProvider(settings.aiProvider)) {
     const models = createModels();
     const isAnthropicCompatible = settings.aiApiFormat === 'anthropic';
     const model = isAnthropicCompatible
@@ -115,11 +119,11 @@ export function createModelsForSettings(settings: ShellDeskAppSettings): Models 
 
     models.setProvider(createProvider({
       id: CUSTOM_PROVIDER_ID,
-      name: settings.aiProviderName.trim() || 'OpenAI Compatible',
+      name: settings.aiProviderName.trim() || 'Custom Provider',
       baseUrl: model.baseUrl,
       auth: {
         apiKey: {
-          name: settings.aiProviderName.trim() || 'OpenAI Compatible',
+          name: settings.aiProviderName.trim() || 'Custom Provider',
           resolve: async () => ({ auth: settings.aiApiKey.trim() ? { apiKey: settings.aiApiKey.trim() } : {} }),
         },
       },

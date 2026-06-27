@@ -1,7 +1,6 @@
 import { type ChangeEvent, type CSSProperties, useCallback, useEffect, useMemo, useState } from 'react';
 import { builtinModels } from '@earendil-works/pi-ai/providers/all';
 
-import { createModelsForSettings } from '../ai';
 import {
   getTerminalThemeChoice,
   terminalBoldWeightChoices,
@@ -108,13 +107,6 @@ const aiProviderChoices: Array<{
     defaultApiBaseUrl: 'https://api.anthropic.com',
   },
   {
-    value: 'openai-compatible',
-    labelId: 'settings.ai.provider.openaiCompatible.label',
-    summaryId: 'settings.ai.provider.openaiCompatible.summary',
-    apiFormat: 'openai',
-    defaultApiBaseUrl: '',
-  },
-  {
     value: 'custom',
     labelId: 'settings.ai.provider.custom.label',
     summaryId: 'settings.ai.provider.custom.summary',
@@ -126,6 +118,10 @@ const shellDeskRepositoryUrl = 'https://github.com/liubaicai/ShellDesk';
 const shellDeskReleasesUrl = `${shellDeskRepositoryUrl}/releases`;
 const defaultSyncRemotePath = '/ShellDesk/shelldesk-sync.json';
 const syncIntervalChoices = [5, 15, 30, 60, 120, 360];
+
+function isCustomAiProvider(provider: ShellDeskAiProvider) {
+  return provider === 'custom' || provider === 'openai-compatible';
+}
 
 function createDefaultUpdateStatus(): ShellDeskUpdateStatus {
   return {
@@ -334,7 +330,7 @@ function getAiModelDetail(model: ShellDeskAiModelInfo) {
 }
 
 function getPiProviderId(settings: ShellDeskAppSettings) {
-  if (settings.aiProvider === 'custom' || settings.aiProvider === 'openai-compatible') {
+  if (isCustomAiProvider(settings.aiProvider)) {
     return '';
   }
 
@@ -355,6 +351,31 @@ function piModelToShellDeskModelInfo(model: { id: string; name?: string; provide
     name: model.name || model.id,
     ownedBy: model.provider,
   };
+}
+
+async function fetchRemoteAiModels(settings: ShellDeskAppSettings): Promise<ShellDeskAiModelInfo[]> {
+  const listModels = window.guiSSH?.ai?.listModels;
+
+  if (!listModels) {
+    throw new Error(t('settings.ai.model.error.noApi', settings.language));
+  }
+
+  const result = await listModels({
+    provider: settings.aiProvider,
+    apiFormat: settings.aiApiFormat,
+    apiBaseUrl: settings.aiApiBaseUrl,
+    apiKey: settings.aiApiKey,
+  });
+
+  return result.models;
+}
+
+function getBuiltinAiModels(settings: ShellDeskAppSettings): ShellDeskAiModelInfo[] {
+  const providerId = getPiProviderId(settings);
+
+  return builtinModels()
+    .getModels(providerId || undefined)
+    .map(piModelToShellDeskModelInfo);
 }
 
 interface SettingsPageProps {
@@ -430,7 +451,8 @@ function SettingsPage({
     });
   };
   const selectedTerminalTheme = getTerminalThemeChoice(settings.terminalTheme);
-  const selectedAiProvider = aiProviderChoices.find((choice) => choice.value === settings.aiProvider) ?? aiProviderChoices[0];
+  const visibleAiProvider = isCustomAiProvider(settings.aiProvider) ? 'custom' : settings.aiProvider;
+  const selectedAiProvider = aiProviderChoices.find((choice) => choice.value === visibleAiProvider) ?? aiProviderChoices[0];
   const selectedAiModelInList = aiModelOptions.some((model) => model.id === settings.aiModel);
   const visibleAiModelOptions = selectedAiModelInList || !settings.aiModel
     ? aiModelOptions
@@ -566,7 +588,7 @@ function SettingsPage({
   };
 
   const fetchAiModels = async () => {
-    if ((settings.aiProvider === 'custom' || settings.aiProvider === 'openai-compatible') && !settings.aiApiBaseUrl.trim()) {
+    if (isCustomAiProvider(settings.aiProvider) && !settings.aiApiBaseUrl.trim()) {
       setAiModelsError(t('settings.ai.model.error.apiBaseUrlRequired', settings.language));
       setAiModelsMessage('');
       return;
@@ -583,13 +605,9 @@ function SettingsPage({
     setAiModelsMessage('');
 
     try {
-      const providerId = getPiProviderId(settings);
-      const modelCollection = settings.aiProvider === 'custom' || settings.aiProvider === 'openai-compatible'
-        ? createModelsForSettings(settings)
-        : builtinModels();
-      const models = modelCollection
-        .getModels(providerId || undefined)
-        .map(piModelToShellDeskModelInfo);
+      const models = isCustomAiProvider(settings.aiProvider)
+        ? await fetchRemoteAiModels(settings)
+        : getBuiltinAiModels(settings);
 
       setAiModelOptions(models);
       setAiModelsMessage(t('settings.ai.model.loaded', settings.language, { count: String(models.length) }));
@@ -1743,7 +1761,7 @@ function SettingsPage({
                       <small>{t(selectedAiProvider.summaryId, settings.language)}</small>
                     </span>
                     <select
-                      value={settings.aiProvider}
+                      value={visibleAiProvider}
                       onChange={(event) => updateAiProvider(event.target.value as ShellDeskAiProvider)}
                     >
                       {aiProviderChoices.map((providerChoice) => (
@@ -1752,7 +1770,7 @@ function SettingsPage({
                     </select>
                   </label>
 
-                  {settings.aiProvider === 'custom' ? (
+                  {isCustomAiProvider(settings.aiProvider) ? (
                     <label className="settings-row">
                       <span>
                         <strong>{t('settings.ai.providerName.label', settings.language)}</strong>
@@ -1782,7 +1800,7 @@ function SettingsPage({
                         setIsAiModelListOpen(false);
                         updateSetting('aiApiFormat', event.target.value as ShellDeskAiApiFormat);
                       }}
-                      disabled={settings.aiProvider !== 'custom'}
+                      disabled={!isCustomAiProvider(settings.aiProvider)}
                     >
                       <option value="openai">OpenAI compatible</option>
                       <option value="anthropic">Claude / Anthropic</option>

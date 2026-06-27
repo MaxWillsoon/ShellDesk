@@ -495,6 +495,24 @@ mod tests {
     }
 
     #[test]
+    fn normalize_app_settings_migrates_openai_compatible_provider_to_custom() {
+        let settings = normalize_app_settings(&json!({
+            "aiProvider": "openai-compatible",
+            "aiProviderName": "",
+            "aiApiFormat": "openai",
+            "aiApiBaseUrl": "https://example.com/v1",
+            "aiModel": "example-model"
+        }))
+        .unwrap();
+
+        assert_eq!(settings["aiProvider"], "custom");
+        assert_eq!(settings["aiProviderName"], "自定义提供商");
+        assert_eq!(settings["aiApiFormat"], "openai");
+        assert_eq!(settings["aiApiBaseUrl"], "https://example.com/v1");
+        assert_eq!(settings["aiModel"], "example-model");
+    }
+
+    #[test]
     fn normalize_app_settings_matches_legacy_ranges_and_fallbacks() {
         let settings = normalize_app_settings(&json!({
             "language": "fr-FR",
