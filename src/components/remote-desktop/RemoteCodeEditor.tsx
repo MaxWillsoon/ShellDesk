@@ -20,10 +20,18 @@ import {
 import { createSharedTools, getDefaultChatPrompt, usePiAgent } from '../../ai';
 import { t, type AppLanguage } from '../../i18n';
 import { getErrorMessage } from './desktopUtils';
+import {
+  CODE_EDITOR_DIRECTORY_WATCH_INTERVAL_MS,
+  CODE_EDITOR_FILE_WATCH_INTERVAL_MS,
+  CODE_EDITOR_MAX_WATCHED_FILES,
+  CODE_EDITOR_MAX_WATCHED_DIRECTORIES,
+  createDirectoryEntriesSignature,
+} from './directoryWatchUtils';
+import { MarkdownMessage } from './RemoteAiChat';
 import { resolveRemoteHomeDirectory } from './RemoteFileExplorer';
 import RemoteFilePicker from './RemoteFilePicker';
 import { listDirectory } from './fileExplorerSftp';
-import type { RemoteFileEntry } from './fileExplorerTypes';
+import type { RemoteDirectoryResult, RemoteFileEntry } from './fileExplorerTypes';
 import { detectLanguageFromContent } from './notepadLanguageDetection';
 import NotepadEditor from './NotepadEditor';
 import { loadRemoteConnectionProfile, readProfileString, saveRemoteConnectionProfile } from './remoteConnectionProfiles';
@@ -57,6 +65,7 @@ interface CodeEditorTab {
   dirty: boolean;
   loading: boolean;
   error: string;
+  remoteChanged: boolean;
 }
 
 interface CodeEditorTerminalTab {
@@ -160,6 +169,21 @@ function sortEntries(entries: RemoteFileEntry[]) {
   });
 }
 
+function createTreeNodes(result: RemoteDirectoryResult, rootPath: string, patterns: string[]) {
+  return sortEntries(result.entries)
+    .filter((entry) => !ignoredDirectoryNames.has(entry.name))
+    .filter((entry) => {
+      const childPath = joinRemotePath(result.path, entry.name);
+      return !isIgnoredByPatterns(relativeProjectPath(rootPath, childPath), entry.name, patterns);
+    })
+    .map<CodeEditorTreeNode>((entry) => ({
+      path: joinRemotePath(result.path, entry.name),
+      name: entry.name,
+      type: entry.type,
+      size: entry.size,
+    }));
+}
+
 function createTerminalId() {
   return `code-editor-terminal-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -197,6 +221,7 @@ function CodeEditorAiPanel({
   systemType?: RemoteSystemType;
 }) {
   const [draft, setDraft] = useState('');
+  const messagesRef = useRef<HTMLDivElement>(null);
   const tools = useMemo(() => createSharedTools(connectionId, { systemType }), [connectionId, systemType]);
   const {
     messages,
@@ -226,6 +251,20 @@ function CodeEditorAiPanel({
     void sendMessage(`${prompt}\n\nProject root: ${projectRoot}`);
   }, [draft, isBusy, isConfigured, projectRoot, sendMessage]);
 
+  const messagesScrollKey = messages.map((message) => `${message.id}:${message.content}`).join('\x1e');
+
+  useEffect(() => {
+    const frameId = window.requestAnimationFrame(() => {
+      const messagesElement = messagesRef.current;
+
+      if (messagesElement) {
+        messagesElement.scrollTop = messagesElement.scrollHeight;
+      }
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [busyText, error, isBusy, messagesScrollKey]);
+
   return (
     <aside className="code-editor-ai">
       <header>
@@ -237,13 +276,15 @@ function CodeEditorAiPanel({
           </button>
         </div>
       </header>
-      <div className="code-editor-ai-messages">
+      <div className="code-editor-ai-messages" ref={messagesRef}>
         {!isConfigured ? <div className="code-editor-ai-empty">{t('auto.aiChat.notConfiguredSummary', language)}</div> : null}
         {messages.length === 0 && isConfigured ? <div className="code-editor-ai-empty">{t('codeEditor.ai.empty', language)}</div> : null}
         {messages.map((message) => (
           <article key={message.id} className={`code-editor-ai-message ${message.role}`}>
             <span>{message.role === 'assistant' ? t('auto.aiChat.assistant', language) : t('auto.aiChat.user', language)}</span>
-            <pre>{message.content}</pre>
+            {message.role === 'assistant'
+              ? <MarkdownMessage content={message.content} />
+              : <p data-i18n-skip>{message.content}</p>}
           </article>
         ))}
         {isBusy ? <div className="code-editor-ai-thinking">{busyText || t('auto.aiChat.thinking', language)}</div> : null}
@@ -295,6 +336,10 @@ export default function RemoteCodeEditor({
   const [activeTerminalId, setActiveTerminalId] = useState(() => terminalTabs[0]?.id ?? '');
   const [terminalSessionStates, setTerminalSessionStates] = useState<Record<string, RemoteTerminalSessionState>>({});
   const initializedRef = useRef(false);
+  const directorySignaturesRef = useRef<Record<string, string>>({});
+  const loadingPathsRef = useRef<Set<string>>(new Set());
+  const tabsRef = useRef<CodeEditorTab[]>([]);
+  const activePathRef = useRef('');
   const activeTab = tabs.find((tab) => tab.path === activePath) ?? null;
   const activeTerminalTab = terminalTabs.find((tab) => tab.id === activeTerminalId) ?? terminalTabs[0] ?? null;
 
@@ -363,19 +408,9 @@ export default function RemoteCodeEditor({
 
     try {
       const result = await listDirectory(connectionId, path);
-      const children = sortEntries(result.entries)
-        .filter((entry) => !ignoredDirectoryNames.has(entry.name))
-        .filter((entry) => {
-          const childPath = joinRemotePath(result.path, entry.name);
-          return !isIgnoredByPatterns(relativeProjectPath(rootOverride, childPath), entry.name, patternsOverride);
-        })
-        .map<CodeEditorTreeNode>((entry) => ({
-          path: joinRemotePath(result.path, entry.name),
-          name: entry.name,
-          type: entry.type,
-          size: entry.size,
-        }));
+      const children = createTreeNodes(result, rootOverride, patternsOverride);
 
+      directorySignaturesRef.current[path] = createDirectoryEntriesSignature(result.entries);
       setDirectoryChildren((current) => ({
         ...current,
         [path]: children,
@@ -399,6 +434,7 @@ export default function RemoteCodeEditor({
     setProjectRoot(nextRoot);
     setTabs([]);
     setActivePath('');
+    directorySignaturesRef.current = {};
     setDirectoryChildren({});
     setExpandedPaths(new Set([nextRoot]));
     setError('');
@@ -454,6 +490,185 @@ export default function RemoteCodeEditor({
     })();
   }, [connectionId, hostId, isWindowsHost, openProject]);
 
+  useEffect(() => {
+    loadingPathsRef.current = loadingPaths;
+  }, [loadingPaths]);
+
+  useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
+
+  useEffect(() => {
+    activePathRef.current = activePath;
+  }, [activePath]);
+
+  useEffect(() => {
+    if (!window.guiSSH?.connections) {
+      return;
+    }
+
+    let cancelled = false;
+    let polling = false;
+
+    const pollExpandedDirectories = async () => {
+      if (cancelled || polling || document.visibilityState === 'hidden') {
+        return;
+      }
+
+      const watchedPaths = [...expandedPaths]
+        .filter((path) => directoryChildren[path] && !loadingPathsRef.current.has(path))
+        .slice(0, CODE_EDITOR_MAX_WATCHED_DIRECTORIES);
+
+      if (!watchedPaths.length) {
+        return;
+      }
+
+      polling = true;
+
+      try {
+        const changedDirectories: Record<string, CodeEditorTreeNode[]> = {};
+        const changedSignatures: Record<string, string> = {};
+
+        for (const path of watchedPaths) {
+          if (cancelled) {
+            return;
+          }
+
+          try {
+            const result = await listDirectory(connectionId, path);
+            const nextSignature = createDirectoryEntriesSignature(result.entries);
+
+            if (nextSignature !== directorySignaturesRef.current[path]) {
+              changedSignatures[path] = nextSignature;
+              changedDirectories[path] = createTreeNodes(result, projectRoot, gitignorePatterns);
+            }
+          } catch {
+            // Polling is best effort; explicit expand/refresh still reports errors.
+          }
+        }
+
+        if (cancelled || !Object.keys(changedDirectories).length) {
+          return;
+        }
+
+        directorySignaturesRef.current = {
+          ...directorySignaturesRef.current,
+          ...changedSignatures,
+        };
+        setDirectoryChildren((current) => ({
+          ...current,
+          ...changedDirectories,
+        }));
+      } finally {
+        polling = false;
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      void pollExpandedDirectories();
+    }, CODE_EDITOR_DIRECTORY_WATCH_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [connectionId, directoryChildren, expandedPaths, gitignorePatterns, projectRoot]);
+
+  useEffect(() => {
+    if (!window.guiSSH?.connections) {
+      return;
+    }
+
+    let cancelled = false;
+    let polling = false;
+
+    const pollOpenFiles = async () => {
+      if (cancelled || polling || document.visibilityState === 'hidden') {
+        return;
+      }
+
+      const activeFilePath = activePathRef.current;
+      const watchedTabs = tabsRef.current
+        .filter((tab) => !tab.loading && !tab.error)
+        .sort((left, right) => {
+          if (left.path === activeFilePath) return -1;
+          if (right.path === activeFilePath) return 1;
+          return 0;
+        })
+        .slice(0, CODE_EDITOR_MAX_WATCHED_FILES);
+
+      if (!watchedTabs.length) {
+        return;
+      }
+
+      polling = true;
+
+      try {
+        for (const tab of watchedTabs) {
+          if (cancelled) {
+            return;
+          }
+
+          let remoteContent = '';
+
+          try {
+            remoteContent = await window.guiSSH!.connections.readFile(connectionId, tab.path);
+          } catch {
+            continue;
+          }
+
+          if (cancelled) {
+            return;
+          }
+
+          setTabs((current) => current.map((currentTab) => {
+            if (currentTab.path !== tab.path || currentTab.loading || currentTab.error || remoteContent === currentTab.savedContent) {
+              return currentTab;
+            }
+
+            if (remoteContent === currentTab.content) {
+              return {
+                ...currentTab,
+                savedContent: remoteContent,
+                dirty: false,
+                remoteChanged: false,
+                language: detectLanguageFromContent(remoteContent),
+              };
+            }
+
+            if (currentTab.dirty) {
+              return {
+                ...currentTab,
+                savedContent: remoteContent,
+                remoteChanged: true,
+              };
+            }
+
+            return {
+              ...currentTab,
+              content: remoteContent,
+              savedContent: remoteContent,
+              dirty: false,
+              remoteChanged: false,
+              language: detectLanguageFromContent(remoteContent),
+            };
+          }));
+        }
+      } finally {
+        polling = false;
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      void pollOpenFiles();
+    }, CODE_EDITOR_FILE_WATCH_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [connectionId]);
+
   const toggleDirectory = useCallback((path: string) => {
     setExpandedPaths((current) => {
       const next = new Set(current);
@@ -489,6 +704,7 @@ export default function RemoteCodeEditor({
       dirty: false,
       loading: true,
       error: '',
+      remoteChanged: false,
     };
 
     setTabs((current) => [...current, loadingTab]);
@@ -505,6 +721,7 @@ export default function RemoteCodeEditor({
               savedContent: content,
               language: detectLanguageFromContent(content),
               loading: false,
+              remoteChanged: false,
             }
           : tab
       )));
@@ -538,7 +755,7 @@ export default function RemoteCodeEditor({
     try {
       await window.guiSSH!.connections.writeFile(connectionId, activeTab.path, activeTab.content);
       setTabs((current) => current.map((tab) => (
-        tab.path === activeTab.path ? { ...tab, savedContent: tab.content, dirty: false } : tab
+        tab.path === activeTab.path ? { ...tab, savedContent: tab.content, dirty: false, remoteChanged: false } : tab
       )));
     } catch (saveError) {
       setError(getErrorMessage(saveError));
@@ -552,7 +769,31 @@ export default function RemoteCodeEditor({
 
     setTabs((current) => current.map((tab) => (
       tab.path === activeTab.path
-        ? { ...tab, content, dirty: content !== tab.savedContent, language: detectLanguageFromContent(content) }
+        ? {
+            ...tab,
+            content,
+            dirty: content !== tab.savedContent,
+            remoteChanged: content !== tab.savedContent && tab.remoteChanged,
+            language: detectLanguageFromContent(content),
+          }
+        : tab
+    )));
+  }, [activeTab]);
+
+  const reloadActiveRemoteVersion = useCallback(() => {
+    if (!activeTab) {
+      return;
+    }
+
+    setTabs((current) => current.map((tab) => (
+      tab.path === activeTab.path
+        ? {
+            ...tab,
+            content: tab.savedContent,
+            dirty: false,
+            remoteChanged: false,
+            language: detectLanguageFromContent(tab.savedContent),
+          }
         : tab
     )));
   }, [activeTab]);
@@ -632,7 +873,7 @@ export default function RemoteCodeEditor({
                 onClick={() => setActivePath(tab.path)}
                 title={tab.path}
               >
-                <span>{tab.dirty ? '● ' : ''}{tab.name}</span>
+                <span>{tab.dirty ? '● ' : ''}{tab.remoteChanged ? '! ' : ''}{tab.name}</span>
                 <X size={13} onClick={(event) => {
                   event.stopPropagation();
                   closeTab(tab.path);
@@ -648,16 +889,28 @@ export default function RemoteCodeEditor({
               ) : activeTab.error ? (
                 <div className="code-editor-placeholder error">{activeTab.error}</div>
               ) : (
-                <NotepadEditor
-                  ariaLabel={activeTab.name}
-                  content={activeTab.content}
-                  language={activeTab.language}
-                  readOnly={false}
-                  theme={settings.theme === 'light' ? 'light' : 'dark'}
-                  wrapEnabled={false}
-                  onChange={updateActiveContent}
-                  onCursorChange={() => undefined}
-                />
+                <>
+                  {activeTab.remoteChanged ? (
+                    <div className="code-editor-file-alert">
+                      <span>{t('codeEditor.file.remoteChanged', language)}</span>
+                      <button type="button" onClick={reloadActiveRemoteVersion}>
+                        <RefreshCw size={13} />{t('codeEditor.file.reloadRemote', language)}
+                      </button>
+                    </div>
+                  ) : null}
+                  <div className="code-editor-editor-body">
+                    <NotepadEditor
+                      ariaLabel={activeTab.name}
+                      content={activeTab.content}
+                      language={activeTab.language}
+                      readOnly={false}
+                      theme={settings.theme === 'light' ? 'light' : 'dark'}
+                      wrapEnabled={false}
+                      onChange={updateActiveContent}
+                      onCursorChange={() => undefined}
+                    />
+                  </div>
+                </>
               )
             ) : (
               <div className="code-editor-placeholder">{t('codeEditor.editor.empty', language)}</div>

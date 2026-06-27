@@ -234,12 +234,20 @@
 }
 
 .code-editor-editor {
-  display: grid;
+  display: flex;
   flex: 1 1 0;
   min-width: 0;
   min-height: 0;
+  flex-direction: column;
   overflow: hidden;
   background: var(--surface);
+
+  .code-editor-editor-body {
+    display: grid;
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden;
+  }
 
   .notepad-editor-host,
   .cm-editor,
@@ -251,6 +259,7 @@
 
 .code-editor-placeholder {
   display: grid;
+  flex: 1 1 0;
   height: 100%;
   place-items: center;
   color: var(--muted);
@@ -261,6 +270,41 @@
   &.error {
     color: #fecaca;
   }
+}
+
+.code-editor-file-alert {
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid rgba(245, 158, 11, 0.28);
+  background: rgba(120, 53, 15, 0.24);
+  color: #fde68a;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.code-editor-file-alert span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-editor-file-alert button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  border-radius: 6px;
+  background: rgba(251, 191, 36, 0.1);
+  color: #fff7ed;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
 }
 
 .code-editor-terminal {
@@ -537,7 +581,7 @@
     font-weight: 720;
   }
 
-  pre {
+  > p {
     margin: 0;
     white-space: pre-wrap;
     word-break: break-word;
@@ -551,8 +595,35 @@
     line-height: 1.5;
   }
 
-  &.user pre {
+  &.user > p {
     background: rgba(67, 199, 255, 0.1);
+  }
+
+  .ai-chat-markdown {
+    margin-top: 0;
+    font-size: 12px;
+  }
+
+  .ai-chat-markdown h2 {
+    font-size: 15px;
+  }
+
+  .ai-chat-markdown h3 {
+    font-size: 14px;
+  }
+
+  .ai-chat-markdown h4,
+  .ai-chat-markdown h5 {
+    font-size: 13px;
+  }
+
+  .ai-chat-markdown table {
+    font-size: 12px;
+  }
+
+  .ai-chat-code-block pre {
+    max-height: 260px;
+    padding: 10px;
   }
 }
 

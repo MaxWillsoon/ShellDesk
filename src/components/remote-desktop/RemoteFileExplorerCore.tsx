@@ -17,6 +17,10 @@ import FileExplorerContextMenu from './FileExplorerContextMenu';
 import FileExplorerSidebar from './FileExplorerSidebar';
 import { formatDateTime, getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import DismissibleAlert from './DismissibleAlert';
+import {
+  createDirectoryEntriesSignature,
+  FILE_EXPLORER_DIRECTORY_WATCH_INTERVAL_MS,
+} from './directoryWatchUtils';
 import { isWindowsSystem } from './remoteSystem';
 import { isTextFile } from './textFileUtils';
 import { clearCachedSudoPassword, getCachedSudoOptions, setCachedSudoPassword } from './sudoPrompt';
@@ -200,7 +204,9 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
   const sudoPromptResolverRef = useRef<((password: string | null) => void) | null>(null);
   const tableRef = useRef<HTMLDivElement>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fileEntriesSignatureRef = useRef('');
   const initialPathRef = useRef(initialRemotePath);
+  const isFilesLoadingRef = useRef(false);
   const pendingDefaultPathRef = useRef(!getExplicitInitialPath(initialPath, isWindowsHost));
   const tableScrollFrameRef = useRef<number | null>(null);
 
@@ -396,6 +402,10 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
   }, []);
 
   useEffect(() => {
+    isFilesLoadingRef.current = isFilesLoading;
+  }, [isFilesLoading]);
+
+  useEffect(() => {
     if (!window.guiSSH?.connections) {
       setFilesError(t('fileExplorer.error.sftpUnsupported', language));
       return;
@@ -424,6 +434,7 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
 
         if (!cancelled) {
           pendingDefaultPathRef.current = false;
+          fileEntriesSignatureRef.current = createDirectoryEntriesSignature(result.entries);
           setFileEntries(result.entries);
           setRemotePath(result.path);
           setPathDraft(result.path);
@@ -448,6 +459,7 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
             return;
           }
 
+          fileEntriesSignatureRef.current = '';
           setFileEntries([]);
           setFilesError(getErrorMessage(error));
         }
@@ -464,6 +476,68 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
       cancelled = true;
     };
   }, [connectionId, filesRefreshToken, historyIndex, isResolvingDefaultPath, language, remotePath, runWithSudoRetry]);
+
+  useEffect(() => {
+    if (!window.guiSSH?.connections || isResolvingDefaultPath) {
+      return;
+    }
+
+    let cancelled = false;
+    let polling = false;
+
+    const pollCurrentDirectory = async () => {
+      if (
+        cancelled
+        || polling
+        || isFilesLoadingRef.current
+        || renamingName
+        || isCreatingNew
+        || document.visibilityState === 'hidden'
+      ) {
+        return;
+      }
+
+      polling = true;
+
+      try {
+        const result = await listDirectory(connectionId, remotePath, getCachedSudoOptions(connectionId) ?? undefined);
+
+        if (cancelled) {
+          return;
+        }
+
+        const nextSignature = createDirectoryEntriesSignature(result.entries);
+
+        if (nextSignature === fileEntriesSignatureRef.current && result.path === remotePath) {
+          return;
+        }
+
+        const nextEntryNames = new Set(result.entries.map((entry) => entry.name));
+        fileEntriesSignatureRef.current = nextSignature;
+        pendingDefaultPathRef.current = false;
+        setFileEntries(result.entries);
+        setRemotePath(result.path);
+        setPathDraft(result.path);
+        setSelectedNames((currentNames) => {
+          const nextNames = new Set([...currentNames].filter((name) => nextEntryNames.has(name)));
+          return nextNames.size === currentNames.size ? currentNames : nextNames;
+        });
+      } catch {
+        // Polling is best effort; manual refresh keeps surfacing actionable errors.
+      } finally {
+        polling = false;
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      void pollCurrentDirectory();
+    }, FILE_EXPLORER_DIRECTORY_WATCH_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [connectionId, isCreatingNew, isResolvingDefaultPath, remotePath, renamingName]);
 
   useEffect(() => {
     if (renamingName && renameInputRef.current) {

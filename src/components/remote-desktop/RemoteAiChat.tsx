@@ -251,7 +251,7 @@ function renderTextMarkdown(content: string, keyPrefix: string) {
   return elements;
 }
 
-function MarkdownMessage({ content }: { content: string }) {
+export function MarkdownMessage({ content }: { content: string }) {
   const blocks = useMemo(() => parseMarkdownBlocks(content), [content]);
   const [copiedBlock, setCopiedBlock] = useState<number | null>(null);
 
