@@ -260,8 +260,23 @@ interface ShellDeskAiModelListResult {
 }
 
 interface ShellDeskAiChatMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  toolCallId?: string;
+  toolName?: string;
+  toolCalls?: ShellDeskAiToolCall[];
+}
+
+interface ShellDeskAiChatTool {
+  name: string;
+  description?: string;
+  parameters?: unknown;
+}
+
+interface ShellDeskAiToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
 }
 
 interface ShellDeskAiChatRequest {
@@ -271,6 +286,7 @@ interface ShellDeskAiChatRequest {
   apiKey: string;
   model: string;
   messages: ShellDeskAiChatMessage[];
+  tools?: ShellDeskAiChatTool[];
   temperature?: number;
   maxTokens?: number;
 }
@@ -278,6 +294,7 @@ interface ShellDeskAiChatRequest {
 interface ShellDeskAiChatResult {
   endpoint: string;
   content: string;
+  toolCalls?: ShellDeskAiToolCall[];
 }
 
 interface ShellDeskAiChatStreamCallbacks {

@@ -196,6 +196,7 @@ function RemoteAiChat({ settings, language, connectionId, onOpenSettings }: Remo
   const {
     messages,
     isBusy,
+    busyText,
     error,
     isConfigured,
     sendMessage,
@@ -280,7 +281,7 @@ function RemoteAiChat({ settings, language, connectionId, onOpenSettings }: Remo
         ))}
         {isBusy ? (
           <div className="ai-chat-thinking" role="status" aria-live="polite">
-            {tCurrent('auto.aiChat.thinking')}
+            {busyText || tCurrent('auto.aiChat.thinking')}
           </div>
         ) : null}
       </div>

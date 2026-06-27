@@ -28,6 +28,11 @@ type PiRequestContext = {
   tools?: AgentTool[];
   temperature?: number;
 };
+type PiRequestOptions = {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  maxRetries?: number;
+};
 type PiUsageSummary = {
   input: number;
   output: number;
@@ -256,6 +261,15 @@ function extractAssistantText(message: AssistantMessage): string {
     .join('');
 }
 
+function assertAssistantResponseOk(message: AssistantMessage) {
+  if (message.stopReason !== 'error') {
+    return;
+  }
+
+  const errorMessage = message.errorMessage?.trim() || 'AI request failed';
+  throw new Error(errorMessage);
+}
+
 function usageToSummary(usage: Usage): PiUsageSummary {
   return {
     input: usage.input,
@@ -267,13 +281,19 @@ function usageToSummary(usage: Usage): PiUsageSummary {
 export async function completeAiRequest(
   settings: ShellDeskAppSettings,
   context: PiRequestContext,
+  options?: PiRequestOptions,
 ): Promise<string> {
   const models = getCachedModels(settings);
   const model = getAiModel(settings, models);
   const result = await models.complete(model, createRequestContext(context, model), {
     apiKey: getAiApiKey(settings),
     temperature: context.temperature,
+    signal: options?.signal,
+    timeoutMs: options?.timeoutMs,
+    maxRetries: options?.maxRetries,
   });
+
+  assertAssistantResponseOk(result);
 
   return extractAssistantText(result);
 }
@@ -283,12 +303,16 @@ export async function streamAiResponse(
   context: PiRequestContext,
   onChunk: (text: string) => void,
   onUsage?: (usage: PiUsageSummary) => void,
+  options?: PiRequestOptions,
 ): Promise<string> {
   const models = getCachedModels(settings);
   const model = getAiModel(settings, models);
   const stream = models.stream(model, createRequestContext(context, model), {
     apiKey: getAiApiKey(settings),
     temperature: context.temperature,
+    signal: options?.signal,
+    timeoutMs: options?.timeoutMs,
+    maxRetries: options?.maxRetries,
   });
   let fullContent = '';
 
@@ -299,6 +323,7 @@ export async function streamAiResponse(
     }
 
     if (event.type === 'done') {
+      assertAssistantResponseOk(event.message);
       fullContent = extractAssistantText(event.message) || fullContent;
       onUsage?.(usageToSummary(event.message.usage));
     }
