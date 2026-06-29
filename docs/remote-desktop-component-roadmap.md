@@ -57,7 +57,7 @@
 | 31 | `s3-browser` | MinIO / S3 浏览器 | [MinIO / S3 浏览器](./remote-desktop-components/31-minio-s3-browser.md) | 远程 `mc` / `aws` CLI 浏览 bucket、prefix、对象，删除和下载 |
 | 32 | `disk-manager` | 磁盘管理器 | [磁盘管理器](./remote-desktop-components/32-disk-manager.md) | 物理磁盘、分区、挂载/卸载、格式化、分区维护和 Linux LVM |
 | 33 | `clickhouse` | ClickHouse 管理器 | [ClickHouse 管理器](./remote-desktop-components/33-clickhouse-manager.md) | ClickHouse HTTP 接口、库表列浏览、SQL 查询和只读表预览 |
-| 34 | `code-editor` | 代码编辑器 | [代码编辑器](./remote-desktop-components/34-code-editor.md) | 远程项目树、多标签编辑、内嵌终端、远程变更提示和 AI 编程助手 |
+| 34 | `code-editor` | 代码编辑器 | [代码编辑器](./remote-desktop-components/34-code-editor.md) | 远程项目树、多标签编辑、内嵌终端、远程变更提示和 SD-Agent |
 | 35 | `cert-manager` | 证书管理器 | [证书管理器](./remote-desktop-components/35-certificate-manager.md) | TLS 证书扫描、Certbot 续期、续期任务、受信任根证书维护 |
 | 36 | `caddy-manager` | Caddy 管理器 | [Caddy 管理器](./remote-desktop-components/36-caddy-manager.md) | Caddyfile 站点块、模板、配置测试、保存和 reload |
 | 37 | `apache-manager` | Apache 管理器 | [Apache 管理器](./remote-desktop-components/37-apache-manager.md) | Apache/httpd 虚拟主机、模板、启用/禁用、配置测试和 reload |

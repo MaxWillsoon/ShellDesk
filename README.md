@@ -47,12 +47,8 @@
 - [Data and Security](#data-and-security)
 - [Compatibility Notes](#compatibility-notes)
 - [Quick Start](#quick-start)
-  - [Requirements](#requirements)
-  - [Install Dependencies](#install-dependencies)
-  - [Start Development Mode](#start-development-mode)
 - [Scripts](#scripts)
 - [Project Structure](#project-structure)
-- [Development Notes](#development-notes)
 - [License](#license)
 - [Acknowledgments](#acknowledgments)
 
@@ -98,7 +94,7 @@ ShellDesk is useful for:
 - SFTP file manager supports browsing, upload, download, transfer cancellation, create, delete, rename, compress, extract, permission edits, protected-write fallbacks, and copy path
 - Remote Notepad supports tabs, remote read/write, find, go to line, syntax highlighting, language modes, and unsaved-change prompts
 - Notepad uses a binary extension blacklist to avoid opening images, archives, databases, executables, and other binary files by mistake
-- Code Editor adds a remote project tree, multi-tab editing, remote-change detection, embedded project terminals, and an AI coding assistant
+- Code Editor adds a remote project tree, multi-tab editing, remote-change detection, embedded project terminals, and SD-Agent
 
 ### Databases and System Tools
 
@@ -147,76 +143,20 @@ ShellDesk stores local data in the Tauri app data directory. The Settings page s
 
 ## Compatibility Notes
 
-This table tracks the planned compatibility matrix for ShellDesk remote system tools. The status and notes columns are intentionally blank for now; after an environment is tested, put `✓` in the second column and add notes as needed.
-
-✅ Supported
-ℹ️ Untested
-⚠️ Limited support
-❌ Unsupported
-
-| Distribution / environment | Status | Notes |
-| :--- | :---: | :--- |
-| Ubuntu 26.04 LTS |  |  |
-| Ubuntu 24.04 LTS | ✅ | [Report](docs/system-compatibility-reports/ubuntu2404.md) |
-| Ubuntu 22.04 LTS |  |  |
-| Ubuntu 20.04 LTS |  |  |
-| Debian 13 Trixie |  |  |
-| Debian 12 Bookworm | ✅ | [Report](docs/system-compatibility-reports/debian12.md) |
-| Debian 11 Bullseye | ✅ | [Report](docs/system-compatibility-reports/debian11.md) |
-| RHEL 10 |  |  |
-| RHEL 9 | ✅ | [Report](docs/system-compatibility-reports/rhel9.md) |
-| RHEL 8 |  |  |
-| CentOS 7 | ⚠️ | [Report](docs/system-compatibility-reports/centos7.md) |
-| Fedora Server 41 |  |  |
-| Fedora Workstation 41 |  |  |
-| openSUSE Leap 15.6 |  |  |
-| Alibaba Cloud Linux 3 |  |  |
-| TencentOS Server 4 |  |  |
-| openEuler 24.03 LTS | ✅ | [Report](docs/system-compatibility-reports/openeuler2403.md) |
-| Kylin Server V10 |  |  |
-| UOS Server 20 |  |  |
-| Linux Mint 22 |  |  |
-| Arch Linux |  |  |
-| Manjaro |  |  |
-| Pop!_OS |  |  |
-| Kali Linux |  |  |
-| Raspberry Pi OS 12 Bookworm |  |  |
-| Alpine Linux 3.23 | ⚠️ | [Report](docs/system-compatibility-reports/alpine323.md) |
-| Windows Server 2022 |  |  |
-| Windows Server 2019 |  |  |
-| Windows Server 2016 |  |  |
-| Windows 11 | ✅ | [Report](docs/system-compatibility-reports/windows11.md) |
-| Windows 10 | ✅ | [Report](docs/system-compatibility-reports/windows10.md) |
+See [Compatibility Matrix](docs/compatibility.md) for tested systems and per-environment reports.
 
 ---
 
 ## Quick Start
 
-### Requirements
-
-- Node.js 20 or later
-- pnpm 11 or later; this repository currently pins `pnpm@11.8.0`
-- Rust stable and the Tauri 2 platform prerequisites for desktop development and packaging
-- Windows 10 or later, macOS, or Linux. Platform packaging requires the matching system toolchain.
-
-### Install Dependencies
+Requirements: Node.js 20+, pnpm 11+ (the repo pins `pnpm@11.8.0`), Rust stable, and the Tauri 2 platform prerequisites for your OS.
 
 ```bash
 pnpm install
-```
-
-`pnpm install` runs `prepare`, which configures the local Git hooks from `.githooks`. If hooks are ever missing, run `pnpm hooks:install` manually.
-
-### Start Development Mode
-
-```bash
 pnpm dev
 ```
 
-Development mode starts Vite through Tauri:
-
-- Vite listens on `127.0.0.1:5173` by default
-- Tauri waits for Vite before opening the app window
+`pnpm install` configures local Git hooks through `prepare`. `pnpm dev` starts Vite on `127.0.0.1:5173` and opens the Tauri development window.
 
 If Vite remains on port `5173` after exit, stop only the PID occupying that port:
 
@@ -235,28 +175,10 @@ Stop-Process -Id <PID>
 | `pnpm typecheck` | Runs TypeScript type checking |
 | `pnpm build` | Runs `tsc --noEmit` and then the Vite production build |
 | `pnpm test` | Runs IPC checks, release-script checks, frontend build, Rust fmt/test, and `cargo check` |
-| `pnpm check:ipc` | Checks parity between the Rust IPC dispatcher, bridge, and type surface |
-| `pnpm check:desktop-apps` | Checks remote desktop app catalog and layout contract coverage |
-| `pnpm check:i18n` | Checks translation key coverage |
-| `pnpm check:runtime-boundary` | Checks frontend/runtime boundary assumptions |
-| `pnpm check:tauri` | Checks Tauri config, package metadata, updater wiring, and contract consistency |
-| `pnpm check:release` | Checks release scripts and workflow expectations |
 | `pnpm check:rust` | Runs Rust format checks and tests |
-| `pnpm smoke:tauri-dev` | Runs a Tauri development smoke test |
-| `pnpm smoke:ssh-live` | Runs the live SSH smoke test when local test credentials are configured |
 | `pnpm start` | Starts the Tauri development window |
 | `pnpm preview` | Previews the Vite frontend build without Tauri backend capabilities |
-| `pnpm hooks:install` | Configures local Git hooks from `.githooks` |
-| `pnpm tag` | Creates and pushes a `v<package.json version>` Git tag |
-| `pnpm version:sync` | Synchronizes version metadata across release surfaces |
-| `pnpm release:updater-manifest` | Generates updater manifest assets |
-| `pnpm release:dir` | Builds and outputs a Tauri debug bundle directory |
 | `pnpm release` | Builds installer |
-| `pnpm pack` | Packages with Tauri using the default target |
-| `pnpm pack:dir` | Builds the unpacked Tauri debug bundle |
-| `pnpm pack:win` / `pnpm pack:win-x64` | Builds Windows x64 packages |
-| `pnpm pack:mac` | Builds macOS packages |
-| `pnpm pack:linux` / `pnpm pack:linux-x64` / `pnpm pack:linux-arm64` | Builds Linux packages |
 
 More platform packaging scripts are available in [package.json](package.json).
 
@@ -334,24 +256,6 @@ ShellDesk/
 ├── tsconfig.json
 └── vite.config.ts
 ```
-
----
-
-## Development Notes
-
-- Use pnpm as the package manager
-- Backend code lives in Rust modules under `src-tauri/src`
-- The frontend uses React function components, Hooks, and strict TypeScript
-- Do not introduce Redux / Zustand; keep global application state in the existing React state tree where possible
-- Styles use SCSS modules and CSS variables, with `src/styles/index.scss` as the entry
-- Dark theme is the default; light theme overrides live under `[data-theme="light"]`
-- New styles should account for both dark and light themes
-- New IPC requires synchronized changes in the Rust dispatcher, `src/tauriBridge.ts`, and `src/vite-env.d.ts`
-- Remote desktop windows use `transform` for positioning, so context menus and dialogs should render to `document.body` with `createPortal`
-- Remote desktop app changes should stay in sync with [the component roadmap](docs/remote-desktop-component-roadmap.md), `RemoteDesktopShell.tsx`, `ShellDeskDesktopAppKey`, vault white lists, icons, i18n, and style entry files
-- UI copy should remain available in both English and Simplified Chinese
-
-See [AGENTS.md](AGENTS.md) for the full collaboration and engineering notes.
 
 ---
 

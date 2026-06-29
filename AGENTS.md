@@ -152,3 +152,5 @@ src/
 - **依赖**：最小化；核心前端运行依赖包含 react/react-dom、@xterm/*、@novnc/novnc、zmodem.js，后端 SSH/数据库/同步能力优先在 Rust 侧实现
 - **错误处理**：`getErrorMessage(error)` 工具函数统一提取错误信息
 - **记事本文件打开**：采用黑名单机制（`BINARY_EXTENSIONS`），排除图片/音视频/压缩包/可执行文件/数据库/二进制文档等，其余文件均可用记事本打开
+- **文案**：界面文案需同时维护简体中文和英文翻译；不要只改其中一种语言
+- **远程桌面应用文档**：远程桌面应用变更需要同步 `docs/remote-desktop-component-roadmap.md` 和对应组件说明文档
