@@ -1,4 +1,4 @@
-use crate::ai::{ai_chat, ai_chat_stream, ai_list_models};
+use crate::ai::{ai_chat, ai_chat_stream, ai_list_models, ai_web_search};
 use crate::logs::{
     append_entry as append_log_entry, clear_entries as clear_log_entries,
     get_entries as get_log_entries, save_entries as save_log_entries,
@@ -37,6 +37,7 @@ pub(crate) async fn dispatch(
         "ai:list-models" => ai_list_models(args.to_vec()).await?,
         "ai:chat" => ai_chat(args.to_vec()).await?,
         "ai:chat-stream" => ai_chat_stream(window, args.to_vec()).await?,
+        "ai:web-search" => ai_web_search(args.to_vec()).await?,
 
         "sync:get-config" => sync_backend::sync_config(state)?,
         "sync:save-config" => {

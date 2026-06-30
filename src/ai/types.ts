@@ -21,6 +21,9 @@ export interface AiToolDetails {
   command?: string;
   exitCode?: number;
   stderr?: string;
+  provider?: string;
+  endpoint?: string;
+  resultCount?: number;
 }
 
 export interface AiTokenUsage {

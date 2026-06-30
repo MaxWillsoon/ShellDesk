@@ -66,6 +66,11 @@ pub(crate) fn default_settings() -> Value {
         "aiApiBaseUrl": "https://api.openai.com/v1",
         "aiApiKey": "",
         "aiModel": "",
+        "webSearchEnabled": false,
+        "webSearchProvider": "tavily",
+        "webSearchApiKey": "",
+        "webSearchApiBaseUrl": "https://api.tavily.com",
+        "webSearchMaxResults": 5,
         "terminalFontSize": 13,
         "terminalFontFamily": "Cascadia Mono",
         "terminalFontWeight": 400,
@@ -325,6 +330,7 @@ fn public_proxy_profiles(profiles: Option<&Value>) -> Value {
 fn public_settings(mut settings: Value) -> Value {
     if let Some(object) = settings.as_object_mut() {
         object.insert("aiApiKey".to_string(), json!(""));
+        object.insert("webSearchApiKey".to_string(), json!(""));
     }
     settings
 }
@@ -477,8 +483,13 @@ mod tests {
         }])));
         assert_eq!(profiles[0]["config"]["password"], "");
 
-        let settings = public_settings(json!({ "aiApiKey": "sk-test", "language": "zh-CN" }));
+        let settings = public_settings(json!({
+            "aiApiKey": "sk-test",
+            "webSearchApiKey": "tvly-test",
+            "language": "zh-CN"
+        }));
         assert_eq!(settings["aiApiKey"], "");
+        assert_eq!(settings["webSearchApiKey"], "");
         assert_eq!(settings["language"], "zh-CN");
     }
 

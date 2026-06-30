@@ -175,7 +175,8 @@ fn create_vault_secrets_payload(store: &Value) -> Value {
         "sshKeySecrets": ssh_key_secrets(store.get("sshKeys")),
         "proxyProfileSecrets": proxy_profile_secrets(store.get("proxyProfiles")),
         "aiSecret": {
-            "apiKey": store.pointer("/settings/aiApiKey").and_then(Value::as_str).unwrap_or("")
+            "apiKey": store.pointer("/settings/aiApiKey").and_then(Value::as_str).unwrap_or(""),
+            "webSearchApiKey": store.pointer("/settings/webSearchApiKey").and_then(Value::as_str).unwrap_or("")
         },
         "remoteConnectionProfileSecrets": export_remote_connection_profiles(store.get("remoteConnectionProfiles"), false)
     })
@@ -240,6 +241,7 @@ fn config_settings(settings: Option<&Value>) -> Value {
     let mut settings = settings.cloned().unwrap_or_else(|| json!({}));
     if let Some(object) = settings.as_object_mut() {
         object.insert("aiApiKey".to_string(), json!(""));
+        object.insert("webSearchApiKey".to_string(), json!(""));
     }
     settings
 }
@@ -350,6 +352,13 @@ fn merge_config_and_secrets(config_payload: &Value, secrets_payload: &Value) -> 
             "aiApiKey".to_string(),
             secrets_payload
                 .pointer("/aiSecret/apiKey")
+                .cloned()
+                .unwrap_or_else(|| json!("")),
+        );
+        object.insert(
+            "webSearchApiKey".to_string(),
+            secrets_payload
+                .pointer("/aiSecret/webSearchApiKey")
                 .cloned()
                 .unwrap_or_else(|| json!("")),
         );
@@ -754,7 +763,11 @@ mod tests {
                 "config": { "type": "http", "password": "proxy-pass" }
             }],
             "knownHosts": [],
-            "settings": { "language": "zh-CN", "aiApiKey": "sk-test" },
+            "settings": {
+                "language": "zh-CN",
+                "aiApiKey": "sk-test",
+                "webSearchApiKey": "tvly-test"
+            },
             "browserBookmarks": [],
             "preferences": { "sidebar": "wide" },
             "remoteConnectionProfiles": {
@@ -777,6 +790,7 @@ mod tests {
         assert!(config["sshKeys"][0].get("privateKey").is_none());
         assert_eq!(config["proxyProfiles"][0]["config"]["password"], "");
         assert_eq!(config["settings"]["aiApiKey"], "");
+        assert_eq!(config["settings"]["webSearchApiKey"], "");
         assert_eq!(
             config["remoteConnectionProfiles"][0]["values"],
             json!({ "database": "app" })
@@ -794,6 +808,7 @@ mod tests {
         );
         assert_eq!(secrets["proxyProfileSecrets"][0]["password"], "proxy-pass");
         assert_eq!(secrets["aiSecret"]["apiKey"], "sk-test");
+        assert_eq!(secrets["aiSecret"]["webSearchApiKey"], "tvly-test");
         assert_eq!(
             secrets["remoteConnectionProfileSecrets"][0]["values"],
             json!({ "apiKey": "api-secret", "password": "db-pass" })
@@ -818,6 +833,7 @@ mod tests {
             "proxy-pass"
         );
         assert_eq!(merged["settings"]["aiApiKey"], "sk-test");
+        assert_eq!(merged["settings"]["webSearchApiKey"], "tvly-test");
         assert_eq!(
             merged["remoteConnectionProfiles"]["host-1"]["mysql"]["password"],
             "db-pass"
@@ -835,6 +851,7 @@ mod tests {
         assert_eq!(config["format"], CONFIG_STORE_FORMAT);
         assert_eq!(config["payload"]["hosts"][0].get("password"), None);
         assert_eq!(config["payload"]["settings"]["aiApiKey"], "");
+        assert_eq!(config["payload"]["settings"]["webSearchApiKey"], "");
 
         let vault = read_json_file(&vault_store_path(&state), json!({})).unwrap();
         assert_eq!(vault["format"], VAULT_FORMAT);
@@ -856,6 +873,7 @@ mod tests {
             store["sshKeys"][0]["privateKey"]
         );
         assert_eq!(loaded["settings"]["aiApiKey"], "sk-test");
+        assert_eq!(loaded["settings"]["webSearchApiKey"], "tvly-test");
 
         let _ = fs::remove_dir_all(&state.data_dir);
     }

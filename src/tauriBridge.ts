@@ -64,6 +64,11 @@ function createPreviewSettings(): ShellDeskAppSettings {
     aiApiBaseUrl: 'https://api.openai.com/v1',
     aiApiKey: '',
     aiModel: '',
+    webSearchEnabled: false,
+    webSearchProvider: 'tavily',
+    webSearchApiKey: '',
+    webSearchApiBaseUrl: 'https://api.tavily.com',
+    webSearchMaxResults: 5,
     terminalFontSize: 13,
     terminalFontFamily: 'Cascadia Mono',
     terminalFontWeight: 400,
@@ -305,6 +310,14 @@ async function previewIpc<T = unknown>(channel: string, args: unknown[]): Promis
     case 'ai:chat-stream':
       return { endpoint: '', content: previewUnsupportedMessage } satisfies ShellDeskAiChatResult as T;
 
+    case 'ai:web-search':
+      return {
+        endpoint: '',
+        query: '',
+        provider: 'tavily',
+        results: [],
+      } satisfies ShellDeskWebSearchResult as T;
+
     case 'connection:get-ipc-capabilities':
       return { terminalSessions: false, terminalBinary: false } satisfies ShellDeskIpcCapabilities as T;
 
@@ -504,6 +517,7 @@ window.guiSSH = {
     listModels: (request) => ipc('ai:list-models', request),
     chat: (request) => ipc('ai:chat', request),
     chatStream,
+    webSearch: (request) => ipc('ai:web-search', request),
   },
   sync: {
     getConfig: () => ipc('sync:get-config'),

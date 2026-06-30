@@ -290,7 +290,8 @@ function RemoteAiChat({ settings, language, connectionId, systemType, onOpenSett
   const sharedTools = useMemo(() => createSharedTools(connectionId, {
     systemType,
     onOpenApp,
-  }), [connectionId, onOpenApp, systemType]);
+    settings,
+  }), [connectionId, onOpenApp, settings, systemType]);
   const {
     messages,
     isBusy,
