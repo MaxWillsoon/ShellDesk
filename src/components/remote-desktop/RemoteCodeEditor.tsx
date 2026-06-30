@@ -222,7 +222,7 @@ function CodeEditorAiPanel({
 }) {
   const [draft, setDraft] = useState('');
   const messagesRef = useRef<HTMLDivElement>(null);
-  const tools = useMemo(() => createSharedTools(connectionId, { systemType }), [connectionId, systemType]);
+  const tools = useMemo(() => createSharedTools(connectionId, { systemType, settings }), [connectionId, settings, systemType]);
   const {
     messages,
     isBusy,

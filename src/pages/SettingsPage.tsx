@@ -114,6 +114,31 @@ const aiProviderChoices: Array<{
     defaultApiBaseUrl: '',
   },
 ];
+const webSearchProviderChoices: Array<{
+  value: ShellDeskWebSearchProvider;
+  label: string;
+  summaryId: MessageId;
+  defaultApiBaseUrl: string;
+}> = [
+  {
+    value: 'tavily',
+    label: 'Tavily',
+    summaryId: 'settings.ai.webSearch.provider.tavily.summary',
+    defaultApiBaseUrl: 'https://api.tavily.com',
+  },
+  {
+    value: 'exa',
+    label: 'Exa',
+    summaryId: 'settings.ai.webSearch.provider.exa.summary',
+    defaultApiBaseUrl: 'https://api.exa.ai',
+  },
+  {
+    value: 'zhipu',
+    label: 'Zhipu',
+    summaryId: 'settings.ai.webSearch.provider.zhipu.summary',
+    defaultApiBaseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+  },
+];
 const shellDeskRepositoryUrl = 'https://github.com/liubaicai/ShellDesk';
 const shellDeskReleasesUrl = `${shellDeskRepositoryUrl}/releases`;
 const defaultSyncRemotePath = '/ShellDesk/shelldesk-sync.json';
@@ -426,6 +451,7 @@ function SettingsPage({
   const [aiModelsMessage, setAiModelsMessage] = useState('');
   const [aiModelsError, setAiModelsError] = useState('');
   const [isAiModelListOpen, setIsAiModelListOpen] = useState(false);
+  const [showWebSearchApiKey, setShowWebSearchApiKey] = useState(false);
   const [appInfo, setAppInfo] = useState<ShellDeskAppInfo | null>(null);
   const [updateCheckResult, setUpdateCheckResult] = useState<ShellDeskUpdateCheckResult | null>(null);
   const [updateStatus, setUpdateStatus] = useState<ShellDeskUpdateStatus>(() => createDefaultUpdateStatus());
@@ -453,6 +479,7 @@ function SettingsPage({
   const selectedTerminalTheme = getTerminalThemeChoice(settings.terminalTheme);
   const visibleAiProvider = isCustomAiProvider(settings.aiProvider) ? 'custom' : settings.aiProvider;
   const selectedAiProvider = aiProviderChoices.find((choice) => choice.value === visibleAiProvider) ?? aiProviderChoices[0];
+  const selectedWebSearchProvider = webSearchProviderChoices.find((choice) => choice.value === settings.webSearchProvider) ?? webSearchProviderChoices[0];
   const selectedAiModelInList = aiModelOptions.some((model) => model.id === settings.aiModel);
   const visibleAiModelOptions = selectedAiModelInList || !settings.aiModel
     ? aiModelOptions
@@ -584,6 +611,17 @@ function SettingsPage({
       aiApiFormat: providerChoice.apiFormat,
       aiApiBaseUrl: providerChoice.defaultApiBaseUrl,
       aiModel: '',
+    });
+  };
+
+  const updateWebSearchProvider = (provider: ShellDeskWebSearchProvider) => {
+    const providerChoice = webSearchProviderChoices.find((choice) => choice.value === provider) ?? webSearchProviderChoices[0];
+
+    onSettingsChange({
+      ...settings,
+      webSearchProvider: providerChoice.value,
+      webSearchApiBaseUrl: providerChoice.defaultApiBaseUrl,
+      webSearchApiKey: '',
     });
   };
 
@@ -1927,6 +1965,96 @@ function SettingsPage({
                   </div>
                 </div>
                 <p className="settings-caption">{t('settings.ai.intro', settings.language)}</p>
+              </section>
+
+              <section className="settings-section">
+                <h2>{t('settings.ai.webSearch.title', settings.language)}</h2>
+                <div className="settings-card">
+                  <label className="settings-row">
+                    <span>
+                      <strong>{t('settings.ai.webSearch.enabled.label', settings.language)}</strong>
+                      <small>{t('settings.ai.webSearch.enabled.summary', settings.language)}</small>
+                    </span>
+                    <input
+                      className="settings-toggle"
+                      type="checkbox"
+                      checked={settings.webSearchEnabled}
+                      onChange={(event) => updateSetting('webSearchEnabled', event.target.checked)}
+                      aria-label={t('settings.ai.webSearch.enabled.label', settings.language)}
+                    />
+                  </label>
+
+                  <label className="settings-row">
+                    <span>
+                      <strong>{t('settings.ai.webSearch.provider.label', settings.language)}</strong>
+                      <small>{t(selectedWebSearchProvider.summaryId, settings.language)}</small>
+                    </span>
+                    <select
+                      value={settings.webSearchProvider}
+                      onChange={(event) => updateWebSearchProvider(event.target.value as ShellDeskWebSearchProvider)}
+                    >
+                      {webSearchProviderChoices.map((providerChoice) => (
+                        <option key={providerChoice.value} value={providerChoice.value}>{providerChoice.label}</option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="settings-row">
+                    <span>
+                      <strong>{t('settings.ai.webSearch.apiKey.label', settings.language)}</strong>
+                      <small>{t('settings.ai.webSearch.apiKey.summary', settings.language)}</small>
+                    </span>
+                    <span className="settings-secret-control">
+                      <input
+                        className="settings-text-input settings-secret-input"
+                        type={showWebSearchApiKey ? 'text' : 'password'}
+                        value={settings.webSearchApiKey}
+                        onChange={(event) => updateSetting('webSearchApiKey', event.target.value)}
+                        placeholder={t('settings.ai.webSearch.apiKey.placeholder', settings.language)}
+                      />
+                      <button
+                        type="button"
+                        className="settings-secret-toggle"
+                        onClick={() => setShowWebSearchApiKey((value) => !value)}
+                        aria-label={t(showWebSearchApiKey ? 'settings.ai.webSearch.apiKey.hide' : 'settings.ai.webSearch.apiKey.show', settings.language)}
+                      >
+                        {t(showWebSearchApiKey ? 'settings.ai.webSearch.apiKey.hide' : 'settings.ai.webSearch.apiKey.show', settings.language)}
+                      </button>
+                    </span>
+                  </label>
+
+                  <label className="settings-row">
+                    <span>
+                      <strong>{t('settings.ai.webSearch.apiBaseUrl.label', settings.language)}</strong>
+                      <small>{t('settings.ai.webSearch.apiBaseUrl.summary', settings.language)}</small>
+                    </span>
+                    <input
+                      className="settings-text-input settings-url-input"
+                      type="text"
+                      inputMode="url"
+                      value={settings.webSearchApiBaseUrl}
+                      onChange={(event) => updateSetting('webSearchApiBaseUrl', event.target.value)}
+                      placeholder={selectedWebSearchProvider.defaultApiBaseUrl}
+                    />
+                  </label>
+
+                  <label className="settings-row">
+                    <span>
+                      <strong>{t('settings.ai.webSearch.maxResults.label', settings.language)}</strong>
+                      <small>{t('settings.ai.webSearch.maxResults.summary', settings.language)}</small>
+                    </span>
+                    <input
+                      className="settings-text-input settings-number-input"
+                      type="number"
+                      min={1}
+                      max={20}
+                      step={1}
+                      value={settings.webSearchMaxResults}
+                      onChange={(event) => updateSetting('webSearchMaxResults', Math.max(1, Math.min(20, Number.parseInt(event.target.value, 10) || 5)))}
+                    />
+                  </label>
+                </div>
+                <p className="settings-caption">{t('settings.ai.webSearch.caption', settings.language)}</p>
               </section>
             </>
           ) : null}

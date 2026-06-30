@@ -10,10 +10,13 @@ const ANTHROPIC_API_VERSION: &str = "2023-06-01";
 const MODEL_LIST_TIMEOUT_SECS: u64 = 20;
 const CHAT_TIMEOUT_SECS: u64 = 60;
 const CHAT_STREAM_TIMEOUT_SECS: u64 = 120;
+const WEB_SEARCH_TIMEOUT_SECS: u64 = 30;
 const MAX_AI_MODEL_NAME_LENGTH: usize = 200;
 const MAX_AI_MESSAGE_COUNT: usize = 40;
 const MAX_AI_MESSAGE_LENGTH: usize = 120000;
 const MAX_AI_STREAM_ID_LENGTH: usize = 80;
+const MAX_WEB_SEARCH_QUERY_LENGTH: usize = 1000;
+const MAX_WEB_SEARCH_SNIPPET_LENGTH: usize = 1200;
 
 struct AiModelListRequest {
     api_format: String,
@@ -54,6 +57,14 @@ struct AiChatStreamRequest {
     stream_id: String,
 }
 
+struct WebSearchRequest {
+    provider: String,
+    api_base_url: String,
+    api_key: String,
+    query: String,
+    max_results: usize,
+}
+
 #[derive(Default)]
 struct OpenAiStreamToolCallDelta {
     id: String,
@@ -74,6 +85,10 @@ pub(crate) async fn ai_chat_stream(
     args: Vec<Value>,
 ) -> Result<Value, String> {
     request_ai_chat_stream(window, args.first().cloned().unwrap_or_else(|| json!({}))).await
+}
+
+pub(crate) async fn ai_web_search(args: Vec<Value>) -> Result<Value, String> {
+    request_web_search(args.first().cloned().unwrap_or_else(|| json!({}))).await
 }
 
 fn read_limited_string(
@@ -300,6 +315,57 @@ fn read_ai_chat_stream_request(raw_request: Value) -> Result<AiChatStreamRequest
         true,
     )?;
     Ok(AiChatStreamRequest { chat, stream_id })
+}
+
+fn read_web_search_request(raw_request: Value) -> Result<WebSearchRequest, String> {
+    let object = raw_request
+        .as_object()
+        .ok_or_else(|| "网络搜索请求无效。".to_string())?;
+    let provider = match object.get("provider").and_then(Value::as_str) {
+        Some("exa") => "exa",
+        Some("zhipu") => "zhipu",
+        _ => "tavily",
+    }
+    .to_string();
+    let fallback_api_base_url = default_web_search_api_base_url(&provider);
+    let api_base_url = object
+        .get("apiBaseUrl")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&fallback_api_base_url)
+        .trim_end_matches('/')
+        .to_string();
+    let parsed =
+        reqwest::Url::parse(&api_base_url).map_err(|_| "网络搜索 API 地址无效。".to_string())?;
+    if parsed.scheme() != "https" && parsed.scheme() != "http" {
+        return Err("网络搜索 API 地址只支持 http 或 https。".to_string());
+    }
+    let api_key = read_limited_string(object.get("apiKey"), "网络搜索 API 密钥", 8192, true, true)?;
+    let query = read_limited_string(
+        object.get("query"),
+        "网络搜索关键词",
+        MAX_WEB_SEARCH_QUERY_LENGTH,
+        true,
+        true,
+    )?;
+    let max_results = object
+        .get("maxResults")
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_i64().and_then(|number| u64::try_from(number).ok()))
+        })
+        .filter(|value| (1..=20).contains(value))
+        .unwrap_or(5) as usize;
+
+    Ok(WebSearchRequest {
+        provider,
+        api_base_url,
+        api_key,
+        query,
+        max_results,
+    })
 }
 
 fn append_api_path(api_base_url: &str, path_suffix: &str) -> String {
@@ -750,6 +816,189 @@ fn ai_request_builder(
         builder = builder.header("authorization", format!("Bearer {}", request.api_key));
     }
     builder
+}
+
+fn default_web_search_api_base_url(provider: &str) -> String {
+    match provider {
+        "exa" => "https://api.exa.ai".to_string(),
+        "zhipu" => "https://open.bigmodel.cn/api/paas/v4".to_string(),
+        _ => "https://api.tavily.com".to_string(),
+    }
+}
+
+fn web_search_endpoint(request: &WebSearchRequest) -> String {
+    let suffix = match request.provider.as_str() {
+        "exa" => "/search",
+        "zhipu" => "/web_search",
+        _ => "/search",
+    };
+    if request.api_base_url.ends_with(suffix) {
+        request.api_base_url.clone()
+    } else {
+        format!("{}{}", request.api_base_url.trim_end_matches('/'), suffix)
+    }
+}
+
+fn create_web_search_payload(request: &WebSearchRequest) -> Value {
+    match request.provider.as_str() {
+        "exa" => json!({
+            "query": request.query,
+            "type": "auto",
+            "numResults": request.max_results,
+            "contents": {
+                "text": {
+                    "maxCharacters": MAX_WEB_SEARCH_SNIPPET_LENGTH
+                }
+            }
+        }),
+        "zhipu" => json!({
+            "search_engine": "search_std",
+            "search_query": request.query,
+            "count": request.max_results,
+            "search_intent": false,
+            "search_recency_filter": "noLimit"
+        }),
+        _ => json!({
+            "query": request.query,
+            "search_depth": "basic",
+            "max_results": request.max_results,
+            "include_answer": false,
+            "include_raw_content": false
+        }),
+    }
+}
+
+fn web_search_request_builder(
+    client: &reqwest::Client,
+    request: &WebSearchRequest,
+    endpoint: &str,
+) -> reqwest::RequestBuilder {
+    let builder = client
+        .post(endpoint)
+        .header("accept", "application/json")
+        .header("content-type", "application/json");
+    if request.provider == "exa" {
+        builder.header("x-api-key", &request.api_key)
+    } else {
+        builder.header("authorization", format!("Bearer {}", request.api_key))
+    }
+}
+
+fn web_search_result_text(item: &Value, keys: &[&str]) -> String {
+    keys.iter()
+        .find_map(|key| item.get(*key).and_then(Value::as_str))
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+fn truncate_web_search_text(value: String, max_len: usize) -> String {
+    if value.chars().count() <= max_len {
+        return value;
+    }
+    value.chars().take(max_len).collect::<String>()
+}
+
+fn read_web_search_results(provider: &str, payload: &Value, max_results: usize) -> Vec<Value> {
+    let raw_results = payload
+        .get("results")
+        .or_else(|| payload.get("search_result"))
+        .or_else(|| payload.get("searchResults"))
+        .or_else(|| payload.get("data").and_then(|data| data.get("results")))
+        .or_else(|| {
+            payload
+                .get("data")
+                .and_then(|data| data.get("search_result"))
+        })
+        .or_else(|| {
+            payload
+                .get("data")
+                .and_then(|data| data.get("searchResults"))
+        })
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    raw_results
+        .iter()
+        .take(max_results)
+        .enumerate()
+        .filter_map(|(index, item)| {
+            let title = web_search_result_text(item, &["title", "name"]);
+            let url = web_search_result_text(item, &["url", "link"]);
+            if title.is_empty() || url.is_empty() {
+                return None;
+            }
+            let snippet = truncate_web_search_text(
+                web_search_result_text(
+                    item,
+                    &[
+                        "snippet",
+                        "content",
+                        "text",
+                        "summary",
+                        "description",
+                        "raw_content",
+                    ],
+                ),
+                MAX_WEB_SEARCH_SNIPPET_LENGTH,
+            );
+            let published_at = web_search_result_text(
+                item,
+                &[
+                    "publishedAt",
+                    "published_at",
+                    "publishedDate",
+                    "publish_date",
+                    "date",
+                ],
+            );
+            let mut output = json!({
+                "title": truncate_web_search_text(title, 500),
+                "url": truncate_web_search_text(url, 2048),
+                "snippet": snippet,
+                "source": provider,
+                "rank": index + 1
+            });
+            if !published_at.is_empty() {
+                output["publishedAt"] = json!(truncate_web_search_text(published_at, 120));
+            }
+            Some(output)
+        })
+        .collect()
+}
+
+async fn request_web_search(raw_request: Value) -> Result<Value, String> {
+    let request = read_web_search_request(raw_request)?;
+    let endpoint = web_search_endpoint(&request);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(WEB_SEARCH_TIMEOUT_SECS))
+        .build()
+        .map_err(error_string)?;
+    let response = web_search_request_builder(&client, &request, &endpoint)
+        .json(&create_web_search_payload(&request))
+        .send()
+        .await
+        .map_err(|error| {
+            if error.is_timeout() {
+                "网络搜索请求超时。".to_string()
+            } else {
+                error_string(error)
+            }
+        })?;
+    let status = response.status();
+    let response_text = response.text().await.map_err(error_string)?;
+    let payload = parse_json_response(&response_text).unwrap_or(Value::Null);
+    if !status.is_success() {
+        return Err(read_error_message(Some(&payload), &response_text));
+    }
+    let results = read_web_search_results(&request.provider, &payload, request.max_results);
+    Ok(json!({
+        "endpoint": endpoint,
+        "query": request.query,
+        "provider": request.provider,
+        "results": results
+    }))
 }
 
 async fn list_ai_models(raw_request: Value) -> Result<Value, String> {

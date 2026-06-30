@@ -240,6 +240,7 @@ interface ShellDeskRemoteDesktopLayout {
 
 type ShellDeskAiProvider = 'openai' | 'anthropic' | 'openai-compatible' | 'custom';
 type ShellDeskAiApiFormat = 'openai' | 'anthropic';
+type ShellDeskWebSearchProvider = 'tavily' | 'exa' | 'zhipu';
 
 interface ShellDeskAiModelInfo {
   id: string;
@@ -302,6 +303,30 @@ interface ShellDeskAiChatStreamCallbacks {
   onChunk?: (chunk: string) => void;
 }
 
+interface ShellDeskWebSearchRequest {
+  provider: ShellDeskWebSearchProvider;
+  apiBaseUrl: string;
+  apiKey: string;
+  query: string;
+  maxResults?: number;
+}
+
+interface ShellDeskWebSearchResultItem {
+  title: string;
+  url: string;
+  snippet: string;
+  source: ShellDeskWebSearchProvider;
+  rank: number;
+  publishedAt?: string;
+}
+
+interface ShellDeskWebSearchResult {
+  endpoint: string;
+  query: string;
+  provider: ShellDeskWebSearchProvider;
+  results: ShellDeskWebSearchResultItem[];
+}
+
 interface ShellDeskAppSettings {
   language: 'zh-CN' | 'en-US';
   interfaceFont: string;
@@ -323,6 +348,11 @@ interface ShellDeskAppSettings {
   aiApiBaseUrl: string;
   aiApiKey: string;
   aiModel: string;
+  webSearchEnabled: boolean;
+  webSearchProvider: ShellDeskWebSearchProvider;
+  webSearchApiKey: string;
+  webSearchApiBaseUrl: string;
+  webSearchMaxResults: number;
   terminalFontSize: number;
   terminalFontFamily: string;
   terminalFontWeight: number;
@@ -1220,6 +1250,7 @@ interface ShellDeskAiControls {
   listModels: (request: ShellDeskAiModelListRequest) => Promise<ShellDeskAiModelListResult>;
   chat: (request: ShellDeskAiChatRequest) => Promise<ShellDeskAiChatResult>;
   chatStream?: (request: ShellDeskAiChatRequest, callbacks?: ShellDeskAiChatStreamCallbacks) => Promise<ShellDeskAiChatResult>;
+  webSearch: (request: ShellDeskWebSearchRequest) => Promise<ShellDeskWebSearchResult>;
 }
 
 type ShellDeskSyncStatus = 'idle' | 'success' | 'warning' | 'error';

@@ -164,11 +164,16 @@ export const SHARED_TOOL_DEFINITIONS = [
     name: 'open_desktop_app',
     description: 'Open a ShellDesk remote desktop component window.',
   },
+  {
+    name: 'web_search',
+    description: 'Search the public web and return current results with source URLs.',
+  },
 ] as const;
 
 interface SharedToolsOptions {
   systemType?: string;
   onOpenApp?: (appKey: ShellDeskDesktopAppKey) => void;
+  settings?: ShellDeskAppSettings;
 }
 
 interface RunCommandParams {
@@ -367,6 +372,32 @@ function textResult(text: string, details: AiToolDetails = {}) {
     content: [{ type: 'text' as const, text }],
     details,
   };
+}
+
+function clampWebSearchMaxResults(value: unknown, fallback: number) {
+  const parsed = typeof value === 'number'
+    ? value
+    : Number.parseInt(typeof value === 'string' ? value : '', 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(1, Math.min(20, Math.trunc(parsed)));
+}
+
+function formatWebSearchResults(result: ShellDeskWebSearchResult) {
+  if (!result.results.length) {
+    return `No web search results found for: ${result.query}`;
+  }
+
+  return [
+    `Web search results for "${result.query}" via ${result.provider}:`,
+    ...result.results.map((item) => [
+      `${item.rank}. ${item.title}`,
+      `URL: ${item.url}`,
+      item.publishedAt ? `Published: ${item.publishedAt}` : '',
+      item.snippet ? `Snippet: ${item.snippet}` : '',
+    ].filter(Boolean).join('\n')),
+  ].join('\n\n');
 }
 
 function createRemoteCommandTool(
@@ -1047,11 +1078,66 @@ function createOpenDesktopAppTool(options: SharedToolsOptions): AgentTool {
   };
 }
 
+function createWebSearchTool(settings: ShellDeskAppSettings): AgentTool {
+  return {
+    name: 'web_search',
+    label: 'Web search',
+    description: 'Search the public web for current information. Returns ranked results with titles, URLs, snippets, and source provider.',
+    parameters: Type.Object({
+      query: Type.String({ description: 'Search query.' }),
+      maxResults: Type.Optional(Type.String({ description: 'Maximum results to return, from 1 to 20.' })),
+    }),
+    execute: async (_toolCallId, params) => {
+      const query = (params as ToolParams).query?.trim();
+
+      if (!query) {
+        return textResult('Error: query is required.');
+      }
+
+      const api = window.guiSSH?.ai;
+      if (!api?.webSearch) {
+        return textResult('Error: ShellDesk web search IPC is not available.');
+      }
+
+      if (!settings.webSearchApiKey.trim()) {
+        return textResult('Error: web search is enabled but the provider API key is missing.');
+      }
+
+      try {
+        const result = await api.webSearch({
+          provider: settings.webSearchProvider,
+          apiBaseUrl: settings.webSearchApiBaseUrl,
+          apiKey: settings.webSearchApiKey,
+          query,
+          maxResults: clampWebSearchMaxResults(
+            (params as ToolParams).maxResults,
+            settings.webSearchMaxResults,
+          ),
+        });
+        return textResult(formatWebSearchResults(result), {
+          provider: result.provider,
+          endpoint: result.endpoint,
+          resultCount: result.results.length,
+        });
+      } catch (error) {
+        return textResult(`Error: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+    executionMode: 'sequential',
+  };
+}
+
 export function createSharedTools(connectionId?: string, options: SharedToolsOptions = {}): AgentTool[] {
-  return [
+  const tools = [
     ...createSharedRemoteTools(connectionId, options),
     createOpenDesktopAppTool(options),
   ];
+
+  if (options.settings?.webSearchEnabled) {
+    tools.push(createWebSearchTool(options.settings));
+  }
+
+  return tools;
 }
 
 export async function executeForAi(connectionId: string, command: string): Promise<string> {

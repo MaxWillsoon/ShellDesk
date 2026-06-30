@@ -44,6 +44,7 @@ const TERMINAL_THEME_CHOICES: &[&str] = &[
 const TERMINAL_CURSOR_INACTIVE_STYLE_CHOICES: &[&str] =
     &["outline", "block", "bar", "underline", "none"];
 const AI_API_FORMAT_CHOICES: &[&str] = &["openai", "anthropic"];
+const WEB_SEARCH_PROVIDER_CHOICES: &[&str] = &["tavily", "exa", "zhipu"];
 const MAX_DESKTOP_WALLPAPER_BYTES: usize = 5 * 1024 * 1024;
 const MAX_DESKTOP_WALLPAPER_DATA_URL_LENGTH: usize =
     ((MAX_DESKTOP_WALLPAPER_BYTES as f64) * 1.4) as usize + 128;
@@ -141,6 +142,24 @@ pub(crate) fn normalize_app_settings(raw_settings: &Value) -> Result<Value, Stri
         read_optional_bounded_string(settings.get("aiApiKey"), "AI API 密钥", 8192, true, true)?;
     let ai_model =
         read_optional_bounded_string(settings.get("aiModel"), "AI 模型", 200, true, true)?;
+    let web_search_provider = read_choice(
+        settings.get("webSearchProvider"),
+        WEB_SEARCH_PROVIDER_CHOICES,
+        defaults["webSearchProvider"].as_str().unwrap_or("tavily"),
+    );
+    let default_web_search_api_base_url = default_web_search_api_base_url(&web_search_provider);
+    let web_search_api_base_url = read_api_base_url(
+        settings.get("webSearchApiBaseUrl"),
+        &default_web_search_api_base_url,
+        "网络搜索 API 地址",
+    )?;
+    let web_search_api_key = read_optional_bounded_string(
+        settings.get("webSearchApiKey"),
+        "网络搜索 API 密钥",
+        8192,
+        true,
+        true,
+    )?;
     let terminal_cursor_style = match settings.get("terminalCursorStyle").and_then(Value::as_str) {
         Some("bar") => "bar".to_string(),
         Some("underline") => "underline".to_string(),
@@ -178,6 +197,11 @@ pub(crate) fn normalize_app_settings(raw_settings: &Value) -> Result<Value, Stri
         "aiApiBaseUrl": ai_api_base_url,
         "aiApiKey": ai_api_key,
         "aiModel": ai_model,
+        "webSearchEnabled": read_bool(settings.get("webSearchEnabled"), defaults["webSearchEnabled"].as_bool().unwrap_or(false)),
+        "webSearchProvider": web_search_provider,
+        "webSearchApiKey": web_search_api_key,
+        "webSearchApiBaseUrl": web_search_api_base_url,
+        "webSearchMaxResults": read_i64_range(settings.get("webSearchMaxResults"), 1, 20, defaults["webSearchMaxResults"].as_i64().unwrap_or(5)),
         "terminalFontSize": read_i64_range(settings.get("terminalFontSize"), 11, 20, defaults["terminalFontSize"].as_i64().unwrap_or(13)),
         "terminalFontFamily": read_font_family(settings.get("terminalFontFamily"), defaults["terminalFontFamily"].as_str().unwrap_or("Cascadia Mono")),
         "terminalFontWeight": read_i64_range(settings.get("terminalFontWeight"), 300, 600, defaults["terminalFontWeight"].as_i64().unwrap_or(400)),
@@ -302,6 +326,14 @@ fn default_ai_api_base_url(provider: &str) -> String {
     }
 }
 
+fn default_web_search_api_base_url(provider: &str) -> String {
+    match provider {
+        "exa" => "https://api.exa.ai".to_string(),
+        "zhipu" => "https://open.bigmodel.cn/api/paas/v4".to_string(),
+        _ => "https://api.tavily.com".to_string(),
+    }
+}
+
 fn default_ai_provider_name(provider: &str) -> String {
     match provider {
         "anthropic" => "Claude / Anthropic".to_string(),
@@ -311,6 +343,10 @@ fn default_ai_provider_name(provider: &str) -> String {
 }
 
 fn read_ai_api_base_url(value: Option<&Value>, fallback: &str) -> Result<String, String> {
+    read_api_base_url(value, fallback, "AI API 地址")
+}
+
+fn read_api_base_url(value: Option<&Value>, fallback: &str, label: &str) -> Result<String, String> {
     let Some(value) = value.and_then(Value::as_str) else {
         return Ok(fallback.to_string());
     };
@@ -319,11 +355,11 @@ fn read_ai_api_base_url(value: Option<&Value>, fallback: &str) -> Result<String,
         return Ok(String::new());
     }
     if api_base_url.len() > 2048 || api_base_url.contains(['\0', '\r', '\n']) {
-        return Err("AI API 地址无效。".to_string());
+        return Err(format!("{label}无效。"));
     }
-    let url = url::Url::parse(api_base_url).map_err(|_| "AI API 地址无效。".to_string())?;
+    let url = url::Url::parse(api_base_url).map_err(|_| format!("{label}无效。"))?;
     if url.scheme() != "https" && url.scheme() != "http" {
-        return Err("AI API 地址只支持 http 或 https。".to_string());
+        return Err(format!("{label}只支持 http 或 https。"));
     }
     Ok(api_base_url.to_string())
 }

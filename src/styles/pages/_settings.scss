@@ -249,6 +249,41 @@
   font-family: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
 }
 
+.settings-row .settings-number-input {
+  width: 96px;
+  min-width: 96px;
+  text-align: right;
+}
+
+.settings-secret-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: min(520px, 100%);
+}
+
+.settings-secret-control .settings-secret-input {
+  width: 100%;
+  min-width: 0;
+}
+
+.settings-secret-toggle {
+  height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0 12px;
+  background: var(--surface-control);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.settings-secret-toggle:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
 .settings-row .settings-text-input::placeholder {
   color: var(--muted);
 }
@@ -1066,7 +1101,8 @@ button:disabled {
   }
 
   .settings-row select,
-  .settings-row .settings-text-input {
+  .settings-row .settings-text-input,
+  .settings-secret-control {
     width: 100%;
     min-width: 0;
   }
@@ -1160,7 +1196,8 @@ button:disabled {
   }
 
   .settings-row select,
-  .settings-row .settings-text-input {
+  .settings-row .settings-text-input,
+  .settings-secret-control {
     width: 100%;
     min-width: 0;
   }
