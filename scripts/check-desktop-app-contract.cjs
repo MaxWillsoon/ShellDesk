@@ -66,12 +66,22 @@ function extractRustNumberConst(source, constName) {
 
 function extractDesktopApps(source) {
   const block = extractBlock(source, /const desktopApps = \[/, /\] as const satisfies/);
-  return [...block.matchAll(/\{\s*key:\s*'([^']+)',\s*labelId:\s*'([^']+)',\s*descriptionId:\s*'([^']+)'/g)]
-    .map((match) => ({
-      key: match[1],
-      labelId: match[2],
-      descriptionId: match[3],
-    }));
+  const entries = [...block.matchAll(/\{[^{}]*\}/g)]
+    .map((match) => match[0])
+    .map((entry) => {
+      const key = entry.match(/\bkey:\s*'([^']+)'/)?.[1];
+      const labelId = entry.match(/\blabelId:\s*'([^']+)'/)?.[1];
+      const descriptionId = entry.match(/\bdescriptionId:\s*'([^']+)'/)?.[1];
+      if (!key || !labelId || !descriptionId) {
+        return null;
+      }
+      return { key, labelId, descriptionId };
+    })
+    .filter(Boolean);
+  if (!entries.length) {
+    throw new Error('Could not parse desktopApps entries.');
+  }
+  return entries;
 }
 
 function extractRecordKeys(source, constName) {
