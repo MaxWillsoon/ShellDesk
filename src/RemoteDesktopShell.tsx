@@ -59,48 +59,69 @@ const RemoteSqlite = lazy(() => import('./components/remote-desktop/RemoteSqlite
 const RemoteTerminal = lazy(() => import('./components/remote-desktop/RemoteTerminal'));
 const RemoteVncViewer = lazy(() => import('./components/remote-desktop/RemoteVncViewer'));
 
+type DesktopAppGroupKey =
+  | 'basic'
+  | 'operations'
+  | 'data'
+  | 'network-security'
+  | 'web-services'
+  | 'development';
+
+const desktopAppGroups = [
+  { key: 'basic', labelId: 'desktop.launchpad.group.basic' },
+  { key: 'operations', labelId: 'desktop.launchpad.group.operations' },
+  { key: 'data', labelId: 'desktop.launchpad.group.data' },
+  { key: 'network-security', labelId: 'desktop.launchpad.group.networkSecurity' },
+  { key: 'web-services', labelId: 'desktop.launchpad.group.webServices' },
+  { key: 'development', labelId: 'desktop.launchpad.group.development' },
+] as const satisfies ReadonlyArray<{ key: DesktopAppGroupKey; labelId: MessageId }>;
+
+const desktopAppGroupByKey = new Map<DesktopAppGroupKey, (typeof desktopAppGroups)[number]>(
+  desktopAppGroups.map((group) => [group.key, group]),
+);
+
 const desktopApps = [
-  { key: 'files', labelId: 'desktop.app.files.label', descriptionId: 'desktop.app.files.description' },
-  { key: 'terminal', labelId: 'desktop.app.terminal.label', descriptionId: 'desktop.app.terminal.description' },
-  { key: 'notepad', labelId: 'desktop.app.notepad.label', descriptionId: 'desktop.app.notepad.description' },
-  { key: 'code-editor', labelId: 'desktop.app.codeEditor.label', descriptionId: 'desktop.app.codeEditor.description' },
-  { key: 'browser', labelId: 'desktop.app.browser.label', descriptionId: 'desktop.app.browser.description' },
-  { key: 'vnc', labelId: 'desktop.app.vnc.label', descriptionId: 'desktop.app.vnc.description' },
-  { key: 'log-viewer', labelId: 'desktop.app.logViewer.label', descriptionId: 'desktop.app.logViewer.description' },
-  { key: 'monitor', labelId: 'desktop.app.monitor.label', descriptionId: 'desktop.app.monitor.description' },
-  { key: 'mysql', labelId: 'desktop.app.mysql.label', descriptionId: 'desktop.app.mysql.description' },
-  { key: 'clickhouse', labelId: 'desktop.app.clickhouse.label', descriptionId: 'desktop.app.clickhouse.description' },
-  { key: 'redis', labelId: 'desktop.app.redis.label', descriptionId: 'desktop.app.redis.description' },
-  { key: 'service-manager', labelId: 'desktop.app.serviceManager.label', descriptionId: 'desktop.app.serviceManager.description' },
-  { key: 'container-manager', labelId: 'desktop.app.containerManager.label', descriptionId: 'desktop.app.containerManager.description' },
-  { key: 'port-manager', labelId: 'desktop.app.portManager.label', descriptionId: 'desktop.app.portManager.description' },
-  { key: 'firewall-manager', labelId: 'desktop.app.firewallManager.label', descriptionId: 'desktop.app.firewallManager.description' },
-  { key: 'iptables-manager', labelId: 'desktop.app.iptablesManager.label', descriptionId: 'desktop.app.iptablesManager.description' },
-  { key: 'network-diagnostics', labelId: 'desktop.app.networkDiagnostics.label', descriptionId: 'desktop.app.networkDiagnostics.description' },
-  { key: 'disk-analyzer', labelId: 'desktop.app.diskAnalyzer.label', descriptionId: 'desktop.app.diskAnalyzer.description' },
-  { key: 'disk-manager', labelId: 'desktop.app.diskManager.label', descriptionId: 'desktop.app.diskManager.description' },
-  { key: 'package-manager', labelId: 'desktop.app.packageManager.label', descriptionId: 'desktop.app.packageManager.description' },
-  { key: 'git-manager', labelId: 'desktop.app.gitManager.label', descriptionId: 'desktop.app.gitManager.description' },
-  { key: 'cert-manager', labelId: 'desktop.app.certManager.label', descriptionId: 'desktop.app.certManager.description' },
-  { key: 'nginx-manager', labelId: 'desktop.app.nginxManager.label', descriptionId: 'desktop.app.nginxManager.description' },
-  { key: 'caddy-manager', labelId: 'desktop.app.caddyManager.label', descriptionId: 'desktop.app.caddyManager.description' },
-  { key: 'apache-manager', labelId: 'desktop.app.apacheManager.label', descriptionId: 'desktop.app.apacheManager.description' },
-  { key: 'scheduled-tasks', labelId: 'desktop.app.scheduledTasks.label', descriptionId: 'desktop.app.scheduledTasks.description' },
-  { key: 'postgres', labelId: 'desktop.app.postgres.label', descriptionId: 'desktop.app.postgres.description' },
-  { key: 'mongo', labelId: 'desktop.app.mongo.label', descriptionId: 'desktop.app.mongo.description' },
-  { key: 'search-cluster', labelId: 'desktop.app.searchCluster.label', descriptionId: 'desktop.app.searchCluster.description' },
-  { key: 'message-queue', labelId: 'desktop.app.messageQueue.label', descriptionId: 'desktop.app.messageQueue.description' },
-  { key: 's3-browser', labelId: 'desktop.app.s3Browser.label', descriptionId: 'desktop.app.s3Browser.description' },
-  { key: 'frp-manager', labelId: 'desktop.app.frpManager.label', descriptionId: 'desktop.app.frpManager.description' },
-  { key: 'frps-manager', labelId: 'desktop.app.frpsManager.label', descriptionId: 'desktop.app.frpsManager.description' },
-  { key: 'security-audit', labelId: 'desktop.app.securityAudit.label', descriptionId: 'desktop.app.securityAudit.description' },
-  { key: 'login-sessions', labelId: 'desktop.app.loginSessions.label', descriptionId: 'desktop.app.loginSessions.description' },
-  { key: 'api-debugger', labelId: 'desktop.app.apiDebugger.label', descriptionId: 'desktop.app.apiDebugger.description' },
-  { key: 'procmanager', labelId: 'desktop.app.processManager.label', descriptionId: 'desktop.app.processManager.description' },
-  { key: 'ai-chat', labelId: 'desktop.app.aiChat.label', descriptionId: 'desktop.app.aiChat.description' },
-  { key: 'settings', labelId: 'desktop.app.settings.label', descriptionId: 'desktop.app.settings.description' },
-  { key: 'sqlite', labelId: 'desktop.app.sqlite.label', descriptionId: 'desktop.app.sqlite.description' },
-] as const satisfies ReadonlyArray<{ key: string; labelId: MessageId; descriptionId: MessageId }>;
+  { key: 'files', group: 'basic', labelId: 'desktop.app.files.label', descriptionId: 'desktop.app.files.description' },
+  { key: 'terminal', group: 'basic', labelId: 'desktop.app.terminal.label', descriptionId: 'desktop.app.terminal.description' },
+  { key: 'notepad', group: 'basic', labelId: 'desktop.app.notepad.label', descriptionId: 'desktop.app.notepad.description' },
+  { key: 'code-editor', group: 'development', labelId: 'desktop.app.codeEditor.label', descriptionId: 'desktop.app.codeEditor.description' },
+  { key: 'browser', group: 'basic', labelId: 'desktop.app.browser.label', descriptionId: 'desktop.app.browser.description' },
+  { key: 'vnc', group: 'operations', labelId: 'desktop.app.vnc.label', descriptionId: 'desktop.app.vnc.description' },
+  { key: 'log-viewer', group: 'operations', labelId: 'desktop.app.logViewer.label', descriptionId: 'desktop.app.logViewer.description' },
+  { key: 'monitor', group: 'operations', labelId: 'desktop.app.monitor.label', descriptionId: 'desktop.app.monitor.description' },
+  { key: 'mysql', group: 'data', labelId: 'desktop.app.mysql.label', descriptionId: 'desktop.app.mysql.description' },
+  { key: 'clickhouse', group: 'data', labelId: 'desktop.app.clickhouse.label', descriptionId: 'desktop.app.clickhouse.description' },
+  { key: 'redis', group: 'data', labelId: 'desktop.app.redis.label', descriptionId: 'desktop.app.redis.description' },
+  { key: 'service-manager', group: 'basic', labelId: 'desktop.app.serviceManager.label', descriptionId: 'desktop.app.serviceManager.description' },
+  { key: 'container-manager', group: 'operations', labelId: 'desktop.app.containerManager.label', descriptionId: 'desktop.app.containerManager.description' },
+  { key: 'port-manager', group: 'basic', labelId: 'desktop.app.portManager.label', descriptionId: 'desktop.app.portManager.description' },
+  { key: 'firewall-manager', group: 'network-security', labelId: 'desktop.app.firewallManager.label', descriptionId: 'desktop.app.firewallManager.description' },
+  { key: 'iptables-manager', group: 'network-security', labelId: 'desktop.app.iptablesManager.label', descriptionId: 'desktop.app.iptablesManager.description' },
+  { key: 'network-diagnostics', group: 'network-security', labelId: 'desktop.app.networkDiagnostics.label', descriptionId: 'desktop.app.networkDiagnostics.description' },
+  { key: 'disk-analyzer', group: 'operations', labelId: 'desktop.app.diskAnalyzer.label', descriptionId: 'desktop.app.diskAnalyzer.description' },
+  { key: 'disk-manager', group: 'operations', labelId: 'desktop.app.diskManager.label', descriptionId: 'desktop.app.diskManager.description' },
+  { key: 'package-manager', group: 'operations', labelId: 'desktop.app.packageManager.label', descriptionId: 'desktop.app.packageManager.description' },
+  { key: 'git-manager', group: 'development', labelId: 'desktop.app.gitManager.label', descriptionId: 'desktop.app.gitManager.description' },
+  { key: 'cert-manager', group: 'web-services', labelId: 'desktop.app.certManager.label', descriptionId: 'desktop.app.certManager.description' },
+  { key: 'nginx-manager', group: 'web-services', labelId: 'desktop.app.nginxManager.label', descriptionId: 'desktop.app.nginxManager.description' },
+  { key: 'caddy-manager', group: 'web-services', labelId: 'desktop.app.caddyManager.label', descriptionId: 'desktop.app.caddyManager.description' },
+  { key: 'apache-manager', group: 'web-services', labelId: 'desktop.app.apacheManager.label', descriptionId: 'desktop.app.apacheManager.description' },
+  { key: 'scheduled-tasks', group: 'operations', labelId: 'desktop.app.scheduledTasks.label', descriptionId: 'desktop.app.scheduledTasks.description' },
+  { key: 'postgres', group: 'data', labelId: 'desktop.app.postgres.label', descriptionId: 'desktop.app.postgres.description' },
+  { key: 'mongo', group: 'data', labelId: 'desktop.app.mongo.label', descriptionId: 'desktop.app.mongo.description' },
+  { key: 'search-cluster', group: 'data', labelId: 'desktop.app.searchCluster.label', descriptionId: 'desktop.app.searchCluster.description' },
+  { key: 'message-queue', group: 'data', labelId: 'desktop.app.messageQueue.label', descriptionId: 'desktop.app.messageQueue.description' },
+  { key: 's3-browser', group: 'data', labelId: 'desktop.app.s3Browser.label', descriptionId: 'desktop.app.s3Browser.description' },
+  { key: 'frp-manager', group: 'network-security', labelId: 'desktop.app.frpManager.label', descriptionId: 'desktop.app.frpManager.description' },
+  { key: 'frps-manager', group: 'network-security', labelId: 'desktop.app.frpsManager.label', descriptionId: 'desktop.app.frpsManager.description' },
+  { key: 'security-audit', group: 'network-security', labelId: 'desktop.app.securityAudit.label', descriptionId: 'desktop.app.securityAudit.description' },
+  { key: 'login-sessions', group: 'operations', labelId: 'desktop.app.loginSessions.label', descriptionId: 'desktop.app.loginSessions.description' },
+  { key: 'api-debugger', group: 'development', labelId: 'desktop.app.apiDebugger.label', descriptionId: 'desktop.app.apiDebugger.description' },
+  { key: 'procmanager', group: 'basic', labelId: 'desktop.app.processManager.label', descriptionId: 'desktop.app.processManager.description' },
+  { key: 'ai-chat', group: 'basic', labelId: 'desktop.app.aiChat.label', descriptionId: 'desktop.app.aiChat.description' },
+  { key: 'settings', group: 'basic', labelId: 'desktop.app.settings.label', descriptionId: 'desktop.app.settings.description' },
+  { key: 'sqlite', group: 'data', labelId: 'desktop.app.sqlite.label', descriptionId: 'desktop.app.sqlite.description' },
+] as const satisfies ReadonlyArray<{ key: string; group: DesktopAppGroupKey; labelId: MessageId; descriptionId: MessageId }>;
 
 /** Apps always pinned in the Dock. Other apps stay on the desktop and appear in the Dock only while open. */
 const dockPinnedApps: DesktopAppKey[] = ['files', 'terminal', 'browser'];
@@ -440,6 +461,10 @@ function getAppLabel(app: DesktopAppInfo, language: ShellDeskAppSettings['langua
 
 function getAppDescription(app: DesktopAppInfo, language: ShellDeskAppSettings['language']) {
   return t(app.descriptionId, language);
+}
+
+function getAppGroupLabel(group: (typeof desktopAppGroups)[number], language: ShellDeskAppSettings['language']) {
+  return t(group.labelId, language);
 }
 
 function isDesktopAppKey(value: unknown): value is DesktopAppKey {
@@ -1497,16 +1522,24 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
   const launchpadApps = [...desktopApps]
     .filter((app) => {
       if (!launchpadSearchTerm) return true;
+      const appGroup = desktopAppGroupByKey.get(app.group);
       const searchTarget = [
         app.key,
         getAppLabel(app, settings.language),
         getAppDescription(app, settings.language),
+        appGroup ? getAppGroupLabel(appGroup, settings.language) : '',
       ].join(' ').toLocaleLowerCase(appLocale);
       return searchTarget.includes(launchpadSearchTerm);
     })
     .sort((firstApp, secondApp) => (
       getAppLabel(firstApp, settings.language).localeCompare(getAppLabel(secondApp, settings.language), appLocale)
     ));
+  const launchpadAppGroups = desktopAppGroups
+    .map((group) => ({
+      ...group,
+      apps: launchpadApps.filter((app) => app.group === group.key),
+    }))
+    .filter((group) => group.apps.length > 0);
 
   useEffect(() => {
     desktopWindowsRef.current = desktopWindows;
@@ -2906,41 +2939,51 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
               </svg>
             </button>
           </header>
-          <div className="launchpad-grid">
-            {launchpadApps.map((app) => {
-              const appLabel = getAppLabel(app, settings.language);
-              const appDescription = getAppDescription(app, settings.language);
+          <div className="launchpad-groups">
+            {launchpadAppGroups.map((group) => (
+              <section key={group.key} className="launchpad-group" aria-labelledby={`launchpad-group-${group.key}`}>
+                <header className="launchpad-group-header">
+                  <h2 id={`launchpad-group-${group.key}`}>{getAppGroupLabel(group, settings.language)}</h2>
+                  <span>{t('desktop.launchpad.groupCount', settings.language, { count: group.apps.length })}</span>
+                </header>
+                <div className="launchpad-grid">
+                  {group.apps.map((app) => {
+                    const appLabel = getAppLabel(app, settings.language);
+                    const appDescription = getAppDescription(app, settings.language);
 
-              return (
-                <button
-                  key={app.key}
-                  type="button"
-                  className="launchpad-app-button"
-                  draggable
-                  onDragStart={(event) => handleDragStart(event, { source: 'launchpad', appKey: app.key })}
-                  onDragEnd={handleDragEnd}
-                  onMouseEnter={(event) => showLaunchpadTooltip(event.currentTarget, appDescription)}
-                  onMouseLeave={() => setLaunchpadTooltip(null)}
-                  onFocus={(event) => showLaunchpadTooltip(event.currentTarget, appDescription)}
-                  onBlur={() => setLaunchpadTooltip(null)}
-                  onClick={() => {
-                    closeLaunchpad();
-                    openDesktopWindow(app.key);
-                  }}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    closeDesktopMenus();
-                    setAppContextMenu({ x: event.clientX, y: event.clientY, appKey: app.key, source: 'launchpad' });
-                  }}
-                >
-                  <span className={`desktop-app-icon-shell desktop-app-icon-${app.key}`}>
-                    <DesktopAppIcon appKey={app.key} />
-                  </span>
-                  <strong>{appLabel}</strong>
-                </button>
-              );
-            })}
+                    return (
+                      <button
+                        key={app.key}
+                        type="button"
+                        className="launchpad-app-button"
+                        draggable
+                        onDragStart={(event) => handleDragStart(event, { source: 'launchpad', appKey: app.key })}
+                        onDragEnd={handleDragEnd}
+                        onMouseEnter={(event) => showLaunchpadTooltip(event.currentTarget, appDescription)}
+                        onMouseLeave={() => setLaunchpadTooltip(null)}
+                        onFocus={(event) => showLaunchpadTooltip(event.currentTarget, appDescription)}
+                        onBlur={() => setLaunchpadTooltip(null)}
+                        onClick={() => {
+                          closeLaunchpad();
+                          openDesktopWindow(app.key);
+                        }}
+                        onContextMenu={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          closeDesktopMenus();
+                          setAppContextMenu({ x: event.clientX, y: event.clientY, appKey: app.key, source: 'launchpad' });
+                        }}
+                      >
+                        <span className={`desktop-app-icon-shell desktop-app-icon-${app.key}`}>
+                          <DesktopAppIcon appKey={app.key} />
+                        </span>
+                        <strong>{appLabel}</strong>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            ))}
             {!launchpadApps.length ? (
               <div className="launchpad-empty">{t('desktop.launchpad.noSearchResults', settings.language)}</div>
             ) : null}

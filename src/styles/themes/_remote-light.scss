@@ -517,6 +517,7 @@
 }
 
 [data-theme="light"] .launchpad-header span,
+[data-theme="light"] .launchpad-group-header span,
 [data-theme="light"] .desktop-folder-empty {
   color: #526178;
 }
@@ -555,6 +556,10 @@
   color: #6a778c;
 }
 
+[data-theme="light"] .launchpad-group {
+  background: rgba(16, 32, 51, 0.035);
+}
+
 [data-theme="light"] .launchpad-overlay,
 [data-theme="light"] .desktop-folder-overlay {
   background: rgba(225, 233, 243, 0.64);
@@ -566,6 +571,7 @@
 }
 
 [data-theme="light"] .launchpad-header strong,
+[data-theme="light"] .launchpad-group-header h2,
 [data-theme="light"] .desktop-folder-title,
 [data-theme="light"] .launchpad-app-button,
 [data-theme="light"] .desktop-folder-app-button,
