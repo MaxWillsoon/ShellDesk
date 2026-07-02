@@ -6,7 +6,7 @@ export interface RemoteSettingsProps {
   systemType?: RemoteSystemType;
 }
 
-export type SettingsTab = 'systeminfo' | 'network' | 'update' | 'hosts' | 'route' | 'loginsessions';
+export type SettingsTab = 'systeminfo' | 'network' | 'update' | 'hosts' | 'route' | 'loginsessions' | 'users';
 
 export interface SettingsTabDef {
   key: SettingsTab;

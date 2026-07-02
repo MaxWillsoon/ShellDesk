@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { getErrorMessage, getShellDeskLocale } from './desktopUtils';
 import DismissibleAlert from './DismissibleAlert';
@@ -30,6 +31,75 @@ function isHistoryEntry(record: LoginRecord): record is LoginHistoryEntry {
   return 'success' in record;
 }
 
+function LoginRecordDetailDialog({
+  activeTab,
+  record,
+  onClose,
+  onCopyRecord,
+  onCopySource,
+}: {
+  activeTab: LoginSessionTab;
+  record: LoginRecord;
+  onClose: () => void;
+  onCopyRecord: (record: LoginRecord) => Promise<void>;
+  onCopySource: (source: string) => Promise<void>;
+}) {
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
+  if (typeof document === 'undefined') {
+    return null;
+  }
+
+  return createPortal(
+    <div className="login-detail-modal-backdrop" role="presentation" onClick={onClose}>
+      <section className="login-record-detail login-detail-modal" role="dialog" aria-modal="true" aria-label={tCurrent('auto.remoteLoginSessions.detailTitle')} onClick={(event) => event.stopPropagation()}>
+        <div className="login-detail-title">
+          <span>{isHistoryEntry(record) ? (record.success ? tCurrent('auto.remoteLoginSessions.1c45v7w2') : tCurrent('auto.remoteLoginSessions.72f95b3')) : tCurrent('auto.remoteLoginSessions.17fvhtt2')}</span>
+          <strong>{record.user}</strong>
+          <button type="button" className="login-detail-close" onClick={onClose} aria-label={tCurrent('common.close')}>&times;</button>
+        </div>
+        <dl>
+          <div><dt>{tCurrent('auto.remoteLoginSessions.2tds9c2')}</dt><dd>{record.source || '-'}</dd></div>
+          {isHistoryEntry(record) ? (
+            <>
+              <div><dt>{tCurrent('auto.remoteLoginSessions.9jqa4c')}</dt><dd>{record.startedAt || '-'}</dd></div>
+              <div><dt>{tCurrent('auto.remoteLoginSessions.8893k7')}</dt><dd>{record.endedAt || '-'}</dd></div>
+              <div><dt>{tCurrent('auto.remoteLoginSessions.1d8dbqr')}</dt><dd>{record.duration || '-'}</dd></div>
+            </>
+          ) : (
+            <>
+              <div><dt>TTY</dt><dd>{record.tty || '-'}</dd></div>
+              <div><dt>{tCurrent('auto.remoteLoginSessions.1yggxgd')}</dt><dd>{record.loginAt || '-'}</dd></div>
+              <div><dt>{tCurrent('auto.remoteLoginSessions.emgxwk')}</dt><dd>{record.command || '-'}</dd></div>
+            </>
+          )}
+        </dl>
+        <div className="login-detail-actions">
+          <button type="button" onClick={() => void onCopyRecord(record)}>{tCurrent('auto.remoteLoginSessions.3o3a75')}</button>
+          <button type="button" onClick={() => (record.source ? void onCopySource(record.source) : undefined)} disabled={!record.source}>{tCurrent('auto.remoteLoginSessions.p1fn07')}</button>
+          <button type="button" onClick={onClose}>{tCurrent('common.close')}</button>
+        </div>
+        <pre>{record.raw}</pre>
+        {activeTab === 'failed' ? (
+          <div className="login-advice">
+            {tCurrent('auto.remoteLoginSessions.1f24xiy')}
+          </div>
+        ) : null}
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
 export default function SettingsLoginSessionsPanel({ systemType }: SettingsLoginSessionsPanelProps) {
   const runCommand = useRemoteSettingsCommand();
   const isWindowsHost = isWindowsSystem(systemType);
@@ -37,7 +107,7 @@ export default function SettingsLoginSessionsPanel({ systemType }: SettingsLogin
   const [currentSessions, setCurrentSessions] = useState<LoginSessionEntry[]>([]);
   const [historyEntries, setHistoryEntries] = useState<LoginHistoryEntry[]>([]);
   const [failedEntries, setFailedEntries] = useState<LoginHistoryEntry[]>([]);
-  const [selectedId, setSelectedId] = useState('');
+  const [detailRecord, setDetailRecord] = useState<LoginRecord | null>(null);
   const [loadingTab, setLoadingTab] = useState<LoginSessionTab | null>(null);
   const [loadedTabs, setLoadedTabs] = useState<Set<LoginSessionTab>>(() => new Set());
   const [error, setError] = useState('');
@@ -49,8 +119,10 @@ export default function SettingsLoginSessionsPanel({ systemType }: SettingsLogin
     if (activeTab === 'history') return historyEntries;
     return failedEntries;
   }, [activeTab, currentSessions, failedEntries, historyEntries]);
-  const selectedRecord = activeEntries.find((entry) => entry.id === selectedId) ?? activeEntries[0] ?? null;
   const failedSourceStats = useMemo(() => aggregateLoginSources(failedEntries).slice(0, 8), [failedEntries]);
+  const emptyMessage = activeTab === 'current'
+    ? tCurrent('auto.remoteLoginSessions.currentEmpty')
+    : tCurrent('auto.remoteLoginSessions.1qd5m2o');
 
   const loadTab = useCallback(async (tab: LoginSessionTab) => {
     setLoadingTab(tab);
@@ -68,15 +140,12 @@ export default function SettingsLoginSessionsPanel({ systemType }: SettingsLogin
       if (tab === 'current') {
         const entries = parseCurrentSessions(result.stdout, isWindowsHost);
         setCurrentSessions(entries);
-        setSelectedId((currentId) => (entries.some((entry) => entry.id === currentId) ? currentId : entries[0]?.id ?? ''));
       } else if (tab === 'history') {
         const entries = parseLoginHistory(result.stdout, true, isWindowsHost);
         setHistoryEntries(entries);
-        setSelectedId((currentId) => (entries.some((entry) => entry.id === currentId) ? currentId : entries[0]?.id ?? ''));
       } else {
         const entries = parseLoginHistory(result.stdout, false, isWindowsHost);
         setFailedEntries(entries);
-        setSelectedId((currentId) => (entries.some((entry) => entry.id === currentId) ? currentId : entries[0]?.id ?? ''));
       }
 
       setLoadedAt(new Date().toLocaleTimeString(getShellDeskLocale()));
@@ -103,7 +172,7 @@ export default function SettingsLoginSessionsPanel({ systemType }: SettingsLogin
 
   const switchTab = (tab: LoginSessionTab) => {
     setActiveTab(tab);
-    setSelectedId('');
+    setDetailRecord(null);
     setError('');
     setNotice('');
   };
@@ -145,6 +214,18 @@ export default function SettingsLoginSessionsPanel({ systemType }: SettingsLogin
         {error ? <DismissibleAlert className="login-alert danger" source="RemoteSettings" onDismiss={() => setError('')} role="alert">{error}</DismissibleAlert> : null}
         {notice ? <DismissibleAlert className="login-alert info" source="RemoteSettings" onDismiss={() => setNotice('')}>{notice}</DismissibleAlert> : null}
 
+        {activeTab === 'failed' && failedSourceStats.length ? (
+          <section className="login-source-stats login-source-stats-inline">
+            <h3>{tCurrent('auto.remoteLoginSessions.1cgmhak')}</h3>
+            {failedSourceStats.map((item) => (
+              <button key={item.source} type="button" onClick={() => copySource(item.source)}>
+                <strong>{item.source}</strong>
+                <span>{item.count} {tCurrent('auto.remoteLoginSessions.a5jtgs')}</span>
+              </button>
+            ))}
+          </section>
+        ) : null}
+
         <div className="login-content">
           <main className="login-table-panel">
             <div className="login-table-head">
@@ -164,7 +245,7 @@ export default function SettingsLoginSessionsPanel({ systemType }: SettingsLogin
                 </thead>
                 <tbody>
                   {activeEntries.map((entry) => (
-                    <tr key={entry.id} className={selectedRecord?.id === entry.id ? 'selected' : ''} onClick={() => setSelectedId(entry.id)}>
+                    <tr key={entry.id} onClick={() => setDetailRecord(entry)}>
                       <td><strong>{entry.user}</strong></td>
                       <td title={entry.source}>{entry.source || '-'}</td>
                       <td>{isHistoryEntry(entry) ? entry.startedAt || '-' : entry.tty || '-'}</td>
@@ -173,65 +254,23 @@ export default function SettingsLoginSessionsPanel({ systemType }: SettingsLogin
                     </tr>
                   ))}
                   {!loadingTab && activeEntries.length === 0 ? (
-                    <tr><td colSpan={5} className="login-empty-cell">{tCurrent('auto.remoteLoginSessions.1qd5m2o')}</td></tr>
+                    <tr><td colSpan={5} className="login-empty-cell">{emptyMessage}</td></tr>
                   ) : null}
                 </tbody>
               </table>
             </div>
           </main>
-
-          <aside className="login-detail-panel">
-            {activeTab === 'failed' && failedSourceStats.length ? (
-              <section className="login-source-stats">
-                <h3>{tCurrent('auto.remoteLoginSessions.1cgmhak')}</h3>
-                {failedSourceStats.map((item) => (
-                  <button key={item.source} type="button" onClick={() => copySource(item.source)}>
-                    <strong>{item.source}</strong>
-                    <span>{item.count} {tCurrent('auto.remoteLoginSessions.a5jtgs')}</span>
-                  </button>
-                ))}
-              </section>
-            ) : null}
-
-            {selectedRecord ? (
-              <section className="login-record-detail">
-                <div className="login-detail-title">
-                  <span>{isHistoryEntry(selectedRecord) ? (selectedRecord.success ? tCurrent('auto.remoteLoginSessions.1c45v7w2') : tCurrent('auto.remoteLoginSessions.72f95b3')) : tCurrent('auto.remoteLoginSessions.17fvhtt2')}</span>
-                  <strong>{selectedRecord.user}</strong>
-                </div>
-                <dl>
-                  <div><dt>{tCurrent('auto.remoteLoginSessions.2tds9c2')}</dt><dd>{selectedRecord.source || '-'}</dd></div>
-                  {isHistoryEntry(selectedRecord) ? (
-                    <>
-                      <div><dt>{tCurrent('auto.remoteLoginSessions.9jqa4c')}</dt><dd>{selectedRecord.startedAt || '-'}</dd></div>
-                      <div><dt>{tCurrent('auto.remoteLoginSessions.8893k7')}</dt><dd>{selectedRecord.endedAt || '-'}</dd></div>
-                      <div><dt>{tCurrent('auto.remoteLoginSessions.1d8dbqr')}</dt><dd>{selectedRecord.duration || '-'}</dd></div>
-                    </>
-                  ) : (
-                    <>
-                      <div><dt>TTY</dt><dd>{selectedRecord.tty || '-'}</dd></div>
-                      <div><dt>{tCurrent('auto.remoteLoginSessions.1yggxgd')}</dt><dd>{selectedRecord.loginAt || '-'}</dd></div>
-                      <div><dt>{tCurrent('auto.remoteLoginSessions.emgxwk')}</dt><dd>{selectedRecord.command || '-'}</dd></div>
-                    </>
-                  )}
-                </dl>
-                <div className="login-detail-actions">
-                  <button type="button" onClick={() => copyRecord(selectedRecord)}>{tCurrent('auto.remoteLoginSessions.3o3a75')}</button>
-                  <button type="button" onClick={() => selectedRecord.source ? copySource(selectedRecord.source) : undefined} disabled={!selectedRecord.source}>{tCurrent('auto.remoteLoginSessions.p1fn07')}</button>
-                </div>
-                <pre>{selectedRecord.raw}</pre>
-                {activeTab === 'failed' ? (
-                  <div className="login-advice">
-                    {tCurrent('auto.remoteLoginSessions.1f24xiy')}
-                  </div>
-                ) : null}
-              </section>
-            ) : (
-              <div className="login-empty-detail">{tCurrent('auto.remoteLoginSessions.1rwz8oc')}</div>
-            )}
-          </aside>
         </div>
       </section>
+      {detailRecord ? (
+        <LoginRecordDetailDialog
+          activeTab={activeTab}
+          record={detailRecord}
+          onClose={() => setDetailRecord(null)}
+          onCopyRecord={copyRecord}
+          onCopySource={copySource}
+        />
+      ) : null}
     </div>
   );
 }
