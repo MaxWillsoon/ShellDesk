@@ -45,7 +45,7 @@ const TERMINAL_CURSOR_INACTIVE_STYLE_CHOICES: &[&str] =
     &["outline", "block", "bar", "underline", "none"];
 const AI_API_FORMAT_CHOICES: &[&str] = &["openai", "anthropic"];
 const WEB_SEARCH_PROVIDER_CHOICES: &[&str] = &["tavily", "exa", "zhipu"];
-const MAX_DESKTOP_WALLPAPER_BYTES: usize = 5 * 1024 * 1024;
+const MAX_DESKTOP_WALLPAPER_BYTES: usize = 2 * 1024 * 1024;
 const MAX_DESKTOP_WALLPAPER_DATA_URL_LENGTH: usize =
     ((MAX_DESKTOP_WALLPAPER_BYTES as f64) * 1.4) as usize + 128;
 
