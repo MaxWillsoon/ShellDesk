@@ -14,6 +14,7 @@ import SettingsNetworkPanel from './SettingsNetworkPanel';
 import SettingsRoutePanel from './SettingsRoutePanel';
 import SettingsSystemInfoPanel from './SettingsSystemInfoPanel';
 import SettingsUpdatePanel from './SettingsUpdatePanel';
+import SettingsUserManagerPanel from './SettingsUserManagerPanel';
 import { WindowsHostsPanel, WindowsNetworkPanel, WindowsRoutePanel, WindowsSystemInfoPanel } from './SettingsWindowsPanels';
 
 const SETTINGS_GROUPS: SettingsGroup[] = [
@@ -22,6 +23,12 @@ const SETTINGS_GROUPS: SettingsGroup[] = [
     tabs: [
       { key: 'systeminfo', labelId: 'remoteSettings.tab.systemInfo.label', icon: '\u{1F4BB}', descriptionId: 'remoteSettings.tab.systemInfo.description' },
       { key: 'update', labelId: 'remoteSettings.tab.update.label', icon: '\u{1F504}', descriptionId: 'remoteSettings.tab.update.description' },
+    ],
+  },
+  {
+    labelId: 'remoteSettings.group.accounts',
+    tabs: [
+      { key: 'users', labelId: 'remoteSettings.tab.users.label', icon: '\u{1F465}', descriptionId: 'remoteSettings.tab.users.description' },
       { key: 'loginsessions', labelId: 'remoteSettings.tab.loginsessions.label', icon: '\u{1F512}', descriptionId: 'remoteSettings.tab.loginsessions.description' },
     ],
   },
@@ -210,6 +217,7 @@ Write-Output ("PRIV=" + $privilege)
       case 'update': return <SettingsUpdatePanel />;
       case 'hosts': return <SettingsHostsPanel />;
       case 'route': return <SettingsRoutePanel />;
+      case 'users': return <SettingsUserManagerPanel />;
       case 'loginsessions': return <SettingsLoginSessionsPanel connectionId={connectionId} systemType={systemType} />;
       default: return null;
     }
