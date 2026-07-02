@@ -1,10 +1,10 @@
 (function () {
   var storageKey = 'shelldesk:theme-preload';
   var light = {
-    bg: '#f5f7fb',
-    chrome: '#fbfcfe',
+    bg: '#f6f7f8',
+    chrome: '#fafafa',
     surface: '#ffffff',
-    text: '#172033',
+    text: '#1f2328',
   };
   var dark = {
     bg: '#0e131c',

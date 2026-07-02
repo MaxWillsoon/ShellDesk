@@ -218,7 +218,7 @@
   background:
     linear-gradient(180deg, rgba(250, 248, 244, 0.98), rgba(239, 234, 226, 0.98)),
     var(--surface);
-  box-shadow: 0 22px 60px rgba(64, 52, 38, 0.22);
+  box-shadow: 0 22px 60px rgba(31, 35, 40, 0.22);
 }
 
 [data-theme="light"] .settings-modal.warning {
@@ -345,16 +345,12 @@
 /* Current light theme finishing rules */
 
 [data-theme="light"] .top-chrome {
-  background:
-    linear-gradient(180deg, rgba(239, 244, 250, 0.94), rgba(224, 232, 243, 0.94)),
-    var(--chrome);
+  background: var(--chrome);
 }
 
 [data-theme="light"] .side-nav,
 [data-theme="light"] .vault-page {
-  background:
-    radial-gradient(ellipse at 12% 0%, rgba(45, 113, 219, 0.08), transparent 34%),
-    var(--surface-soft);
+  background: var(--surface-soft);
 }
 
 [data-theme="light"] .feature-nav-item,
@@ -363,7 +359,7 @@
 }
 
 [data-theme="light"] .command-bar {
-  background: rgba(244, 240, 234, 0.86);
+  background: var(--surface-elevated);
 }
 
 [data-theme="light"] .remote-desktop-surface {
@@ -387,7 +383,7 @@
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.7), rgba(239, 234, 226, 0.3)),
     rgba(28, 115, 195, 0.16);
-  box-shadow: 0 12px 26px rgba(64, 52, 38, 0.16);
+  box-shadow: 0 12px 26px rgba(31, 35, 40, 0.16);
 }
 
 [data-theme="light"] .remote-desktop-boot-icons span::after,
@@ -400,20 +396,20 @@
   border-color: rgba(61, 82, 116, 0.16);
   background: rgba(250, 247, 242, 0.7);
   box-shadow:
-    0 30px 70px rgba(64, 52, 38, 0.18),
+    0 30px 70px rgba(31, 35, 40, 0.18),
     inset 0 1px 0 rgba(255, 255, 255, 0.64);
 }
 
 [data-theme="light"] .remote-desktop-boot-dock {
   border-color: rgba(61, 82, 116, 0.14);
   background: rgba(250, 247, 242, 0.68);
-  box-shadow: 0 20px 42px rgba(64, 52, 38, 0.16);
+  box-shadow: 0 20px 42px rgba(31, 35, 40, 0.16);
 }
 
 [data-theme="light"] .global-search,
 [data-theme="light"] .command-button {
   background: var(--surface);
-  box-shadow: 0 12px 28px rgba(64, 52, 38, 0.08);
+  box-shadow: 0 12px 28px rgba(31, 35, 40, 0.08);
 }
 
 [data-theme="light"] .global-search input {
@@ -489,7 +485,7 @@
 [data-theme="light"] .desktop-folder-panel {
   border-color: rgba(16, 32, 51, 0.12);
   background: rgba(250, 248, 244, 0.86);
-  box-shadow: 0 18px 46px rgba(64, 52, 38, 0.18);
+  box-shadow: 0 18px 46px rgba(31, 35, 40, 0.18);
 }
 
 [data-theme="light"] .launchpad-header span,
@@ -501,7 +497,7 @@
 [data-theme="light"] .launchpad-tooltip {
   border-color: rgba(16, 32, 51, 0.12);
   background: rgba(246, 243, 238, 0.96);
-  box-shadow: 0 12px 28px rgba(64, 52, 38, 0.16);
+  box-shadow: 0 12px 28px rgba(31, 35, 40, 0.16);
   color: #526178;
 }
 
@@ -571,7 +567,7 @@
     linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(226, 219, 209, 0.96));
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.85),
-    0 8px 18px rgba(64, 52, 38, 0.16);
+    0 8px 18px rgba(31, 35, 40, 0.16);
 }
 
 [data-theme="light"] .desktop-folder-icon-shell::before {
@@ -619,7 +615,7 @@
 [data-theme="light"] .addressbar-breadcrumb-input,
 [data-theme="light"] .explorer-search {
   background: var(--surface-input);
-  box-shadow: 0 12px 26px rgba(64, 52, 38, 0.08);
+  box-shadow: 0 12px 26px rgba(31, 35, 40, 0.08);
 }
 
 [data-theme="light"] .browser-address-shell:focus-within {
@@ -627,7 +623,7 @@
   background: #ffffff;
   box-shadow:
     0 0 0 1px rgba(37, 99, 235, 0.07),
-    0 10px 22px rgba(64, 52, 38, 0.08);
+    0 10px 22px rgba(31, 35, 40, 0.08);
 }
 
 [data-theme="light"] .remote-browser-pane {
@@ -635,8 +631,8 @@
   --browser-panel-strong: rgba(246, 243, 238, 0.96);
   --browser-panel-soft: rgba(31, 64, 104, 0.06);
   --browser-panel-hover: rgba(37, 99, 235, 0.12);
-  --browser-border: rgba(64, 52, 38, 0.14);
-  --browser-border-strong: rgba(64, 52, 38, 0.24);
+  --browser-border: rgba(31, 35, 40, 0.14);
+  --browser-border-strong: rgba(31, 35, 40, 0.24);
   --browser-text: #172033;
   --browser-muted: #526178;
   --browser-accent: #2563eb;
@@ -659,11 +655,11 @@
 }
 
 [data-theme="light"] .browser-start-card {
-  border-color: rgba(64, 52, 38, 0.12);
+  border-color: rgba(31, 35, 40, 0.12);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.74), rgba(247, 243, 238, 0.72)),
     rgba(255, 255, 255, 0.58);
-  box-shadow: 0 10px 22px rgba(64, 52, 38, 0.07);
+  box-shadow: 0 10px 22px rgba(31, 35, 40, 0.07);
 }
 
 [data-theme="light"] .browser-start-card:hover,
@@ -671,11 +667,11 @@
   background:
     linear-gradient(180deg, var(--browser-start-signal-soft), rgba(247, 243, 238, 0.84)),
     rgba(255, 255, 255, 0.72);
-  box-shadow: 0 14px 28px rgba(64, 52, 38, 0.11);
+  box-shadow: 0 14px 28px rgba(31, 35, 40, 0.11);
 }
 
 [data-theme="light"] .browser-start-card-arrow {
-  border-color: rgba(64, 52, 38, 0.11);
+  border-color: rgba(31, 35, 40, 0.11);
 }
 
 [data-theme="light"] .browser-error-page {
@@ -722,7 +718,7 @@
     linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(239, 246, 255, 0.96));
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.82),
-    0 20px 44px rgba(64, 52, 38, 0.16);
+    0 20px 44px rgba(31, 35, 40, 0.16);
   color: #172033;
 }
 
@@ -896,8 +892,8 @@
   border-color: var(--win11-border);
   background: var(--win11-mica-strong);
   box-shadow:
-    0 22px 54px rgba(64, 52, 38, 0.18),
-    0 4px 14px rgba(64, 52, 38, 0.12),
+    0 22px 54px rgba(31, 35, 40, 0.18),
+    0 4px 14px rgba(31, 35, 40, 0.12),
     inset 0 1px 0 rgba(255, 255, 255, 0.78);
 }
 
@@ -920,7 +916,7 @@
   border-color: var(--win11-border);
   background: var(--win11-mica);
   box-shadow:
-    0 24px 62px rgba(64, 52, 38, 0.2),
+    0 24px 62px rgba(31, 35, 40, 0.2),
     inset 0 1px 0 rgba(255, 255, 255, 0.76);
 }
 
@@ -1011,7 +1007,7 @@
   border-color: rgba(16, 32, 51, 0.12);
   background: rgba(249, 249, 249, 0.92);
   box-shadow:
-    0 18px 46px rgba(64, 52, 38, 0.18),
+    0 18px 46px rgba(31, 35, 40, 0.18),
     inset 0 1px 0 rgba(255, 255, 255, 0.82);
 }
 

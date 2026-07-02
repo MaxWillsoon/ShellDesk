@@ -658,13 +658,13 @@
 }
 
 [data-theme="light"] .package-manager {
-  --pkg-bg: #f7f4ef;
+  --pkg-bg: #f6f7f8;
   --pkg-panel: rgba(255, 255, 255, 0.92);
   --pkg-border: rgba(78, 96, 126, 0.18);
   --pkg-text: #172033;
   --pkg-muted: #66748a;
   --pkg-muted-strong: #344158;
-  background: linear-gradient(180deg, #fbfaf7, #f1f4f7);
+  background: linear-gradient(180deg, #fafafa, #f1f4f7);
 }
 
 [data-theme="light"] .package-toolbar button.primary,

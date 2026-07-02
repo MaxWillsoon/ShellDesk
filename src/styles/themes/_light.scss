@@ -1,19 +1,20 @@
 /* ===== Light Theme Overrides ===== */
 
 [data-theme="light"] .app-shell {
-  border-color: rgba(16, 32, 51, 0.08);
+  border-color: var(--window-border);
 }
 
 [data-theme="light"] .top-chrome {
-  border-bottom-color: rgba(16, 32, 51, 0.08);
+  border-bottom-color: var(--window-divider);
+  background: var(--chrome);
 }
 
 [data-theme="light"] .titlebar-controls button:hover {
-  background: rgba(16, 32, 51, 0.06);
+  background: var(--chrome-hover);
 }
 
 [data-theme="light"] .titlebar-controls button {
-  color: #344054;
+  color: var(--muted-strong);
 }
 
 [data-theme="light"] .titlebar-controls .danger:hover {
@@ -22,16 +23,16 @@
 }
 
 [data-theme="light"] .side-nav {
-  border-right-color: rgba(16, 32, 51, 0.08);
+  border-right-color: var(--window-divider);
 }
 
 [data-theme="light"] .command-bar {
-  border-bottom-color: rgba(16, 32, 51, 0.08);
+  border-bottom-color: var(--window-divider);
   background: var(--surface-elevated);
 }
 
 [data-theme="light"] .global-search {
-  border-color: rgba(16, 32, 51, 0.12);
+  border-color: var(--border);
   background: var(--surface-input);
 }
 
@@ -43,7 +44,7 @@
 [data-theme="light"] .command-button,
 [data-theme="light"] .primary-action,
 [data-theme="light"] .editor-header button {
-  border-color: rgba(16, 32, 51, 0.12);
+  border-color: var(--border);
   background: var(--surface-control);
   color: var(--text);
 }
@@ -51,7 +52,7 @@
 [data-theme="light"] .command-button:hover,
 [data-theme="light"] .primary-action:hover,
 [data-theme="light"] .editor-header button:hover {
-  border-color: rgba(16, 32, 51, 0.2);
+  border-color: var(--border-strong);
 }
 
 [data-theme="light"] .command-button.muted {
@@ -78,7 +79,7 @@
   border-color: var(--accent-border);
   background: var(--toast-bg);
   color: var(--toast-text);
-  box-shadow: 0 12px 32px rgba(64, 52, 38, 0.14);
+  box-shadow: 0 12px 32px rgba(31, 35, 40, 0.14);
 }
 
 [data-theme="light"] .connection-error-dialog {
@@ -87,7 +88,7 @@
     linear-gradient(180deg, rgba(200, 48, 78, 0.07), rgba(200, 48, 78, 0.04)),
     var(--surface-panel);
   color: #a02040;
-  box-shadow: 0 12px 28px rgba(64, 52, 38, 0.12);
+  box-shadow: 0 12px 28px rgba(31, 35, 40, 0.12);
 }
 
 [data-theme="light"] .connection-error-mark {
@@ -113,7 +114,7 @@
 [data-theme="light"] .host-card,
 [data-theme="light"] .key-card {
   border-color: rgba(16, 32, 51, 0.1);
-  box-shadow: 0 6px 18px rgba(64, 52, 38, 0.08);
+  box-shadow: 0 6px 18px rgba(31, 35, 40, 0.08);
 }
 
 [data-theme="light"] .group-card.active,
@@ -146,7 +147,7 @@
   color: #246ed8;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.72),
-    0 8px 18px rgba(64, 52, 38, 0.08);
+    0 8px 18px rgba(31, 35, 40, 0.08);
 }
 
 [data-theme="light"] .group-icon::after {
@@ -200,7 +201,7 @@
 [data-theme="light"] .host-card-menu-panel {
   border-color: rgba(16, 32, 51, 0.16);
   background: var(--surface-panel);
-  box-shadow: 0 12px 28px rgba(64, 52, 38, 0.16);
+  box-shadow: 0 12px 28px rgba(31, 35, 40, 0.16);
 }
 
 [data-theme="light"] .host-card-menu-panel button {
@@ -214,7 +215,7 @@
 }
 
 [data-theme="light"] .host-info-modal {
-  box-shadow: 0 26px 80px rgba(64, 52, 38, 0.22);
+  box-shadow: 0 26px 80px rgba(31, 35, 40, 0.22);
 }
 
 [data-theme="light"] .danger-text {
@@ -239,13 +240,13 @@
 [data-theme="light"] .editor-panel {
   border-color: rgba(16, 32, 51, 0.14);
   background: var(--surface-panel);
-  box-shadow: 0 16px 48px rgba(64, 52, 38, 0.16);
+  box-shadow: 0 16px 48px rgba(31, 35, 40, 0.16);
 }
 
 [data-theme="light"] .credential-panel {
   border-color: rgba(16, 32, 51, 0.14);
   background: var(--surface-panel);
-  box-shadow: 0 16px 48px rgba(64, 52, 38, 0.18);
+  box-shadow: 0 16px 48px rgba(31, 35, 40, 0.18);
 }
 
 [data-theme="light"] .editor-header {
@@ -375,7 +376,7 @@
 }
 
 [data-theme="light"] .settings-toggle {
-  background: #d8d1c6;
+  background: #dfe3e8;
 }
 
 [data-theme="light"] .settings-toggle:checked {
@@ -494,7 +495,7 @@
 [data-theme="light"] .monitor-chart-card {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.78),
-    0 12px 28px rgba(64, 52, 38, 0.08);
+    0 12px 28px rgba(31, 35, 40, 0.08);
 }
 
 [data-theme="light"] .monitor-interval-control {
