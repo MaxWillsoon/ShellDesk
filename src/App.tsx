@@ -106,7 +106,13 @@ const defaultRemoteDesktopLayout: ShellDeskRemoteDesktopLayout = {
   items: [
     { id: 'app:files', type: 'app', appKey: 'files' },
     { id: 'app:terminal', type: 'app', appKey: 'terminal' },
+    { id: 'app:notepad', type: 'app', appKey: 'notepad' },
+    { id: 'app:code-editor', type: 'app', appKey: 'code-editor' },
     { id: 'app:browser', type: 'app', appKey: 'browser' },
+    { id: 'app:service-manager', type: 'app', appKey: 'service-manager' },
+    { id: 'app:container-manager', type: 'app', appKey: 'container-manager' },
+    { id: 'app:procmanager', type: 'app', appKey: 'procmanager' },
+    { id: 'app:ai-chat', type: 'app', appKey: 'ai-chat' },
     { id: 'app:settings', type: 'app', appKey: 'settings' },
   ],
   removedAppKeys: [],
@@ -161,7 +167,8 @@ const defaultAppSettings: ShellDeskAppSettings = {
   theme: 'dark',
   accentColor: '#0f6bff',
   defaultHostView: 'grid',
-  minimizeToTrayOnClose: true,
+  minimizeToTrayOnClose: false,
+  minimizeToTrayPromptedOnClose: false,
   autoUpdateEnabled: true,
   desktopWallpaperMode: 'preset',
   desktopWallpaperPresetId: 'default',
@@ -2331,6 +2338,8 @@ function App() {
   const [isCredentialConnecting, setIsCredentialConnecting] = useState(false);
   const [isLocalOpening, setIsLocalOpening] = useState(false);
   const [connectionErrorNotice, setConnectionErrorNotice] = useState<ConnectionErrorNotice | null>(null);
+  const [isCloseToTrayPromptOpen, setIsCloseToTrayPromptOpen] = useState(false);
+  const [isCloseToTrayPromptPending, setIsCloseToTrayPromptPending] = useState(false);
   const [keyboardInteractiveRequest, setKeyboardInteractiveRequest] = useState<ShellDeskKeyboardInteractiveRequest | null>(null);
   const [keyboardInteractiveResponses, setKeyboardInteractiveResponses] = useState<string[]>([]);
   const [isKeyboardInteractivePending, setIsKeyboardInteractivePending] = useState(false);
@@ -3355,6 +3364,21 @@ function App() {
   }, [appLanguage, appLocale, connection, isConnectionWindow, windowControls]);
 
   useEffect(() => {
+    if (!window.guiSSH?.events) {
+      return undefined;
+    }
+
+    return window.guiSSH.events.onCloseToTrayPrompt(() => {
+      if (settingsRef.current.minimizeToTrayOnClose || settingsRef.current.minimizeToTrayPromptedOnClose) {
+        void windowControls?.close();
+        return;
+      }
+
+      setIsCloseToTrayPromptOpen(true);
+    });
+  }, [windowControls]);
+
+  useEffect(() => {
     if (!window.guiSSH?.events.onVaultChanged || !vaultControls) {
       return;
     }
@@ -3468,6 +3492,28 @@ function App() {
 
   const closeWindow = () => {
     void windowControls?.close();
+  };
+
+  const resolveCloseToTrayPrompt = async (enableMinimizeToTray: boolean) => {
+    if (isCloseToTrayPromptPending) {
+      return;
+    }
+
+    setIsCloseToTrayPromptPending(true);
+
+    try {
+      await updateSettingsAndPersist((currentSettings) => ({
+        ...currentSettings,
+        minimizeToTrayOnClose: enableMinimizeToTray,
+        minimizeToTrayPromptedOnClose: true,
+      }));
+      setIsCloseToTrayPromptOpen(false);
+      await windowControls?.close();
+    } catch (error) {
+      setStatusMessage(t('app.closeToTrayPrompt.saveFailed', appLanguage, { error: getErrorMessage(error, appLanguage) }));
+    } finally {
+      setIsCloseToTrayPromptPending(false);
+    }
   };
 
   const updateKeyboardInteractiveResponse = (index: number, value: string) => {
@@ -4671,6 +4717,35 @@ function App() {
               <p>{connectionErrorNotice.message}</p>
             </div>
             <button type="button" onClick={() => setConnectionErrorNotice(null)}>{t('common.close', appLanguage)}</button>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+      {isCloseToTrayPromptOpen ? createPortal(
+        <div className="ssh-security-overlay no-drag" role="presentation">
+          <div className="ssh-security-dialog" role="dialog" aria-modal="true" aria-labelledby="close-to-tray-title">
+            <div className="ssh-security-mark" aria-hidden="true">?</div>
+            <div className="ssh-security-copy">
+              <strong id="close-to-tray-title">{t('app.closeToTrayPrompt.title', appLanguage)}</strong>
+              <p>{t('app.closeToTrayPrompt.summary', appLanguage)}</p>
+            </div>
+            <div className="ssh-security-actions">
+              <button
+                type="button"
+                onClick={() => void resolveCloseToTrayPrompt(false)}
+                disabled={isCloseToTrayPromptPending}
+              >
+                {t('app.closeToTrayPrompt.exit', appLanguage)}
+              </button>
+              <button
+                type="button"
+                className="primary"
+                onClick={() => void resolveCloseToTrayPrompt(true)}
+                disabled={isCloseToTrayPromptPending}
+              >
+                {t('app.closeToTrayPrompt.enable', appLanguage)}
+              </button>
+            </div>
           </div>
         </div>,
         document.body,

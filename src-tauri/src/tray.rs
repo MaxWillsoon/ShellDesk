@@ -3,7 +3,7 @@ use serde_json::Value;
 use tauri::{
     menu::MenuBuilder,
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, WindowEvent,
+    Emitter, Manager, WindowEvent,
 };
 
 const MAIN_WINDOW_LABEL: &str = "main";
@@ -54,9 +54,13 @@ pub(crate) fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Erro
         let window_for_close = window.clone();
         window.on_window_event(move |event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                if minimize_to_tray_on_close(&state).unwrap_or(true) {
+                let settings = close_to_tray_settings(&state).unwrap_or_default();
+                if settings.minimize_to_tray_on_close {
                     api.prevent_close();
                     let _ = window_for_close.hide();
+                } else if !settings.prompted_on_close {
+                    api.prevent_close();
+                    let _ = window_for_close.emit("window:close-to-tray-prompt", Value::Null);
                 }
             }
         });
@@ -66,9 +70,18 @@ pub(crate) fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Erro
 }
 
 pub(crate) fn close_window(window: &tauri::Window, state: &AppState) -> Result<(), String> {
-    if window.label() == MAIN_WINDOW_LABEL && minimize_to_tray_on_close(state).unwrap_or(true) {
-        window.hide().map_err(error_string)?;
-        return Ok(());
+    if window.label() == MAIN_WINDOW_LABEL {
+        let settings = close_to_tray_settings(state).unwrap_or_default();
+        if settings.minimize_to_tray_on_close {
+            window.hide().map_err(error_string)?;
+            return Ok(());
+        }
+        if !settings.prompted_on_close {
+            window
+                .emit("window:close-to-tray-prompt", Value::Null)
+                .map_err(error_string)?;
+            return Ok(());
+        }
     }
     window.close().map_err(error_string)
 }
@@ -81,12 +94,24 @@ pub(crate) fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
-fn minimize_to_tray_on_close(state: &AppState) -> Result<bool, String> {
+#[derive(Default)]
+struct CloseToTraySettings {
+    minimize_to_tray_on_close: bool,
+    prompted_on_close: bool,
+}
+
+fn close_to_tray_settings(state: &AppState) -> Result<CloseToTraySettings, String> {
     let _guard = state.store_lock.lock().map_err(error_string)?;
     let store = vault::read_store(state)?;
-    Ok(store
-        .get("settings")
-        .and_then(|settings| settings.get("minimizeToTrayOnClose"))
-        .and_then(Value::as_bool)
-        .unwrap_or(true))
+    let settings = store.get("settings");
+    Ok(CloseToTraySettings {
+        minimize_to_tray_on_close: settings
+            .and_then(|settings| settings.get("minimizeToTrayOnClose"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        prompted_on_close: settings
+            .and_then(|settings| settings.get("minimizeToTrayPromptedOnClose"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
 }

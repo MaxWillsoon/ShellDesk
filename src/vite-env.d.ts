@@ -335,6 +335,7 @@ interface ShellDeskAppSettings {
   accentColor: string;
   defaultHostView: 'grid' | 'list';
   minimizeToTrayOnClose: boolean;
+  minimizeToTrayPromptedOnClose: boolean;
   autoUpdateEnabled: boolean;
   desktopWallpaperMode: 'preset' | 'custom';
   desktopWallpaperPresetId: string;
@@ -1426,6 +1427,7 @@ interface ShellDeskEventControls {
   onHostKeyTrusted: (callback: (payload: { hostname: string; port: number }) => void) => () => void;
   onDatabaseTunnelIdleTimeout: (callback: (payload: ShellDeskDatabaseTunnelIdleTimeoutPayload) => void) => () => void;
   onWindowMaximizedChange: (callback: (payload: { maximized: boolean }) => void) => () => void;
+  onCloseToTrayPrompt: (callback: () => void) => () => void;
   onVaultChanged: (callback: (payload: { kind: 'vault' | 'bookmarks' | 'preference' | 'hostKeyTrust'; scope?: string; key?: string }) => void) => () => void;
   onSyncChanged: (callback: (payload: ShellDeskSyncResult) => void) => () => void;
   onTransferProgress: (callback: (payload: ShellDeskTransferProgress) => void) => () => void;

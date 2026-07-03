@@ -28,12 +28,18 @@ function isTauriRuntime() {
 
 function createPreviewRemoteDesktopLayout(): ShellDeskRemoteDesktopLayout {
   return {
-    appCatalogVersion: 12,
+    appCatalogVersion: 13,
     sortMode: 'custom',
     items: [
       { id: 'app:files', type: 'app', appKey: 'files' },
       { id: 'app:terminal', type: 'app', appKey: 'terminal' },
+      { id: 'app:notepad', type: 'app', appKey: 'notepad' },
+      { id: 'app:code-editor', type: 'app', appKey: 'code-editor' },
       { id: 'app:browser', type: 'app', appKey: 'browser' },
+      { id: 'app:service-manager', type: 'app', appKey: 'service-manager' },
+      { id: 'app:container-manager', type: 'app', appKey: 'container-manager' },
+      { id: 'app:procmanager', type: 'app', appKey: 'procmanager' },
+      { id: 'app:ai-chat', type: 'app', appKey: 'ai-chat' },
       { id: 'app:settings', type: 'app', appKey: 'settings' },
     ],
     removedAppKeys: [],
@@ -50,7 +56,8 @@ function createPreviewSettings(): ShellDeskAppSettings {
     theme: 'dark',
     accentColor: '#0f6bff',
     defaultHostView: 'grid',
-    minimizeToTrayOnClose: true,
+    minimizeToTrayOnClose: false,
+    minimizeToTrayPromptedOnClose: false,
     autoUpdateEnabled: true,
     desktopWallpaperMode: 'preset',
     desktopWallpaperPresetId: 'default',
@@ -638,6 +645,7 @@ window.guiSSH = {
     onHostKeyTrusted: (callback) => onTauriEvent('connection:host-key-trusted', callback),
     onDatabaseTunnelIdleTimeout: (callback) => onTauriEvent('database:tunnel-idle-timeout', callback),
     onWindowMaximizedChange: (callback) => onTauriEvent('window:maximize-state-changed', callback),
+    onCloseToTrayPrompt: (callback) => onTauriEvent('window:close-to-tray-prompt', callback),
     onVaultChanged: (callback) => onTauriEvent('vault:changed', callback),
     onSyncChanged: (callback) => onTauriEvent('sync:changed', callback),
     onTransferProgress: (callback) => onTauriEvent('transfer:progress', callback),

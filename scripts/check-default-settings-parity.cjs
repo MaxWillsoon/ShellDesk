@@ -10,6 +10,7 @@ const checkedKeys = [
   'accentColor',
   'defaultHostView',
   'minimizeToTrayOnClose',
+  'minimizeToTrayPromptedOnClose',
   'autoUpdateEnabled',
   'desktopWallpaperMode',
   'desktopWallpaperPresetId',

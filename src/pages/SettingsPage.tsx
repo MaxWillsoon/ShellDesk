@@ -476,6 +476,14 @@ function SettingsPage({
       [field]: value,
     });
   };
+
+  const updateMinimizeToTrayOnClose = (enabled: boolean) => {
+    onSettingsChange({
+      ...settings,
+      minimizeToTrayOnClose: enabled,
+      minimizeToTrayPromptedOnClose: true,
+    });
+  };
   const selectedTerminalTheme = getTerminalThemeChoice(settings.terminalTheme);
   const visibleAiProvider = isCustomAiProvider(settings.aiProvider) ? 'custom' : settings.aiProvider;
   const selectedAiProvider = aiProviderChoices.find((choice) => choice.value === visibleAiProvider) ?? aiProviderChoices[0];
@@ -1298,7 +1306,7 @@ function SettingsPage({
                       className="settings-toggle"
                       type="checkbox"
                       checked={settings.minimizeToTrayOnClose}
-                      onChange={(event) => updateSetting('minimizeToTrayOnClose', event.target.checked)}
+                      onChange={(event) => updateMinimizeToTrayOnClose(event.target.checked)}
                     />
                   </label>
 

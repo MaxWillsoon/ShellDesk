@@ -42,19 +42,26 @@ pub(crate) fn default_settings() -> Value {
         "theme": "dark",
         "accentColor": "#0f6bff",
         "defaultHostView": "grid",
-        "minimizeToTrayOnClose": true,
+        "minimizeToTrayOnClose": false,
+        "minimizeToTrayPromptedOnClose": false,
         "autoUpdateEnabled": true,
         "desktopWallpaperMode": "preset",
         "desktopWallpaperPresetId": "default",
         "desktopWallpaperDataUrl": "",
         "desktopWallpaperName": "",
         "remoteDesktopLayout": {
-            "appCatalogVersion": 9,
+            "appCatalogVersion": 13,
             "sortMode": "custom",
             "items": [
                 { "id": "app:files", "type": "app", "appKey": "files" },
                 { "id": "app:terminal", "type": "app", "appKey": "terminal" },
+                { "id": "app:notepad", "type": "app", "appKey": "notepad" },
+                { "id": "app:code-editor", "type": "app", "appKey": "code-editor" },
                 { "id": "app:browser", "type": "app", "appKey": "browser" },
+                { "id": "app:service-manager", "type": "app", "appKey": "service-manager" },
+                { "id": "app:container-manager", "type": "app", "appKey": "container-manager" },
+                { "id": "app:procmanager", "type": "app", "appKey": "procmanager" },
+                { "id": "app:ai-chat", "type": "app", "appKey": "ai-chat" },
                 { "id": "app:settings", "type": "app", "appKey": "settings" }
             ],
             "removedAppKeys": []
@@ -580,7 +587,8 @@ mod tests {
         assert_eq!(settings["theme"], "dark");
         assert_eq!(settings["accentColor"], "#abcdef");
         assert_eq!(settings["defaultHostView"], "grid");
-        assert_eq!(settings["minimizeToTrayOnClose"], true);
+        assert_eq!(settings["minimizeToTrayOnClose"], false);
+        assert_eq!(settings["minimizeToTrayPromptedOnClose"], false);
         assert_eq!(settings["autoUpdateEnabled"], false);
         assert_eq!(settings["desktopWallpaperMode"], "preset");
         assert_eq!(settings["desktopWallpaperPresetId"], "default");

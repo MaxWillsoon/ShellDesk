@@ -95,7 +95,7 @@ const desktopApps = [
   { key: 'redis', group: 'data', labelId: 'desktop.app.redis.label', descriptionId: 'desktop.app.redis.description' },
   { key: 'service-manager', group: 'basic', labelId: 'desktop.app.serviceManager.label', descriptionId: 'desktop.app.serviceManager.description' },
   { key: 'container-manager', group: 'operations', labelId: 'desktop.app.containerManager.label', descriptionId: 'desktop.app.containerManager.description' },
-  { key: 'port-manager', group: 'basic', labelId: 'desktop.app.portManager.label', descriptionId: 'desktop.app.portManager.description' },
+  { key: 'port-manager', group: 'network-security', labelId: 'desktop.app.portManager.label', descriptionId: 'desktop.app.portManager.description' },
   { key: 'firewall-manager', group: 'network-security', labelId: 'desktop.app.firewallManager.label', descriptionId: 'desktop.app.firewallManager.description' },
   { key: 'iptables-manager', group: 'network-security', labelId: 'desktop.app.iptablesManager.label', descriptionId: 'desktop.app.iptablesManager.description' },
   { key: 'network-diagnostics', group: 'network-security', labelId: 'desktop.app.networkDiagnostics.label', descriptionId: 'desktop.app.networkDiagnostics.description' },
@@ -174,7 +174,18 @@ const desktopAppIconSources: Record<DesktopAppKey, string> = {
 const remoteDesktopLayoutShadowStorageKey = 'shelldesk:remote-desktop-layout-shadow';
 const launchpadAnimationMs = 180;
 const desktopAppCatalogVersion = 13;
-const defaultDesktopAppKeys: DesktopAppKey[] = ['files', 'terminal', 'browser', 'settings'];
+const defaultDesktopAppKeys: DesktopAppKey[] = [
+  'files',
+  'terminal',
+  'notepad',
+  'code-editor',
+  'browser',
+  'service-manager',
+  'container-manager',
+  'procmanager',
+  'ai-chat',
+  'settings',
+];
 const appCatalogMigrationKeys: DesktopAppKey[] = [
   'git-manager',
   'cert-manager',
