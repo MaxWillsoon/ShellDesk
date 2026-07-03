@@ -59,6 +59,9 @@ interface HostListPanelProps<THost extends HostListPanelHost> {
   hostPage: number;
   hostPageCount: number;
   hostPageNumbers: number[];
+  hostPageSize: number;
+  hostPageSizeOptions: readonly number[];
+  onPageSizeChange: (pageSize: number) => void;
   onPageChange: (page: number) => void;
   isHostConnecting: (hostId: string) => boolean;
   proxyProfileById: Map<string, ShellDeskProxyProfile>;
@@ -107,6 +110,9 @@ function HostListPanel<THost extends HostListPanelHost>({
   hostPage,
   hostPageCount,
   hostPageNumbers,
+  hostPageSize,
+  hostPageSizeOptions,
+  onPageSizeChange,
   onPageChange,
   isHostConnecting,
   proxyProfileById,
@@ -279,7 +285,20 @@ function HostListPanel<THost extends HostListPanelHost>({
           <div className="host-table-pagination">
             <span>{t('app.host.count', appLanguage, { count: String(filteredHosts.length) })}</span>
             <div className="host-pagination-controls">
-              <span className="page-size-pill">{appLanguage === 'zh-CN' ? '20 条/页' : '20 / page'}</span>
+              <label className="page-size-control">
+                <span>{appLanguage === 'zh-CN' ? '每页' : 'Per page'}</span>
+                <select
+                  value={hostPageSize}
+                  onChange={(event) => onPageSizeChange(Number(event.target.value))}
+                  aria-label={appLanguage === 'zh-CN' ? '每页主机数量' : 'Hosts per page'}
+                >
+                  {hostPageSizeOptions.map((pageSize) => (
+                    <option key={pageSize} value={pageSize}>
+                      {appLanguage === 'zh-CN' ? `${pageSize} 条/页` : `${pageSize} / page`}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button type="button" className="page-nav-button" onClick={() => onPageChange(1)} disabled={hostPage === 1} aria-label={appLanguage === 'zh-CN' ? '第一页' : 'First page'}>
                 <ChevronsLeft aria-hidden="true" />
               </button>

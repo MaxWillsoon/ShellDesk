@@ -823,7 +823,8 @@
   position: relative;
   display: grid;
   grid-area: preview;
-  width: 100%;
+  justify-self: start;
+  width: 50%;
   aspect-ratio: 16 / 9;
   align-items: end;
   overflow: hidden;

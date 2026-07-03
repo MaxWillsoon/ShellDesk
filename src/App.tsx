@@ -76,12 +76,14 @@ const terminalSnippetLanguageChoices = new Set([
 ]);
 const hostGroupPanelCollapsedStorageKey = 'shelldesk:host-groups-collapsed';
 const hostListSortModeStorageKey = 'shelldesk:host-list-sort-mode';
+const hostPageSizeStorageKey = 'shelldesk:host-page-size';
 const themePreloadStorageKey = 'shelldesk:theme-preload';
 const dismissedUpdateReadyVersionStorageKey = 'shelldesk:update-ready-dismissed-version';
 const remoteDesktopLayoutShadowStorageKey = 'shelldesk:remote-desktop-layout-shadow';
 const remoteDesktopLayoutShadowPreferenceKey = 'remoteDesktop.layoutShadow';
 const ungroupedKey = '__ungrouped__';
-const hostPageSize = 20;
+const hostPageSizeOptions = [10, 20, 50, 100] as const;
+type HostPageSize = (typeof hostPageSizeOptions)[number];
 const remoteDesktopAppCatalogVersion = 13;
 const remoteDesktopAppCatalogMigrationKeys: ShellDeskDesktopAppKey[] = [
   'git-manager',
@@ -1731,6 +1733,28 @@ function getHostListSortMode(value: unknown): HostListSortMode {
   return isHostListSortMode(value) ? value : 'createdDesc';
 }
 
+function isHostPageSize(value: unknown): value is HostPageSize {
+  return typeof value === 'number' && hostPageSizeOptions.includes(value as HostPageSize);
+}
+
+function readHostPageSize(): HostPageSize {
+  try {
+    const storedValue = Number(window.localStorage.getItem(hostPageSizeStorageKey));
+
+    return isHostPageSize(storedValue) ? storedValue : 20;
+  } catch {
+    return 20;
+  }
+}
+
+function storeHostPageSize(pageSize: HostPageSize) {
+  try {
+    window.localStorage.setItem(hostPageSizeStorageKey, String(pageSize));
+  } catch {
+    // Ignore localStorage write failures in restricted environments.
+  }
+}
+
 function getUpdateReadyVersionKey(status: Pick<ShellDeskUpdateStatus, 'version'>) {
   return (status.version || 'unknown').trim() || 'unknown';
 }
@@ -2291,6 +2315,7 @@ function App() {
   const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
   const [isHostGroupPanelCollapsed, setIsHostGroupPanelCollapsed] = useState(readHostGroupPanelCollapsed);
   const [hostListSortMode, setHostListSortMode] = useState<HostListSortMode>(readHostListSortMode);
+  const [hostPageSize, setHostPageSize] = useState<HostPageSize>(readHostPageSize);
   const [hostPage, setHostPage] = useState(1);
   const [formError, setFormError] = useState('');
   const [keyFormError, setKeyFormError] = useState('');
@@ -2461,7 +2486,7 @@ function App() {
     const pageStart = (currentHostPage - 1) * hostPageSize;
 
     return filteredHosts.slice(pageStart, pageStart + hostPageSize);
-  }, [currentHostPage, filteredHosts]);
+  }, [currentHostPage, filteredHosts, hostPageSize]);
   const hostPageNumbers = useMemo(() => {
     const visibleCount = Math.min(hostPageCount, 5);
     const startPage = Math.min(
@@ -3059,8 +3084,12 @@ function App() {
   }, [hostListSortMode]);
 
   useEffect(() => {
+    storeHostPageSize(hostPageSize);
+  }, [hostPageSize]);
+
+  useEffect(() => {
     setHostPage(1);
-  }, [activeGroupKey, hostListSortMode, hostViewMode, searchQuery]);
+  }, [activeGroupKey, hostListSortMode, hostPageSize, hostViewMode, searchQuery]);
 
   useEffect(() => {
     if (selectedHostId && !filteredHosts.some((host) => host.id === selectedHostId)) {
@@ -5195,6 +5224,9 @@ function App() {
                     hostPage={currentHostPage}
                     hostPageCount={hostPageCount}
                     hostPageNumbers={hostPageNumbers}
+                    hostPageSize={hostPageSize}
+                    hostPageSizeOptions={hostPageSizeOptions}
+                    onPageSizeChange={(pageSize) => setHostPageSize(isHostPageSize(pageSize) ? pageSize : 20)}
                     onPageChange={goToHostPage}
                     isHostConnecting={(hostId) => connectingHostId === hostId}
                     proxyProfileById={proxyProfileById}
