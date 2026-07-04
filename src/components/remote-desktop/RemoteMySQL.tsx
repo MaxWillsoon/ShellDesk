@@ -145,6 +145,7 @@ interface SchemaIndex {
 
 interface SchemaForeignKey {
   id: string;
+  name: string;
   columns: string[];
   refTable: string;
   refColumns: string[];
@@ -152,8 +153,10 @@ interface SchemaForeignKey {
   onUpdate: string;
 }
 
-interface CreateTableState {
-  open: boolean;
+type CreateTableMode = 'create' | 'edit';
+
+interface CreateTableSnapshot {
+  mode: CreateTableMode;
   database: string;
   tableName: string;
   engine: string;
@@ -164,8 +167,15 @@ interface CreateTableState {
   indexes: SchemaIndex[];
   foreignKeys: SchemaForeignKey[];
   showAdvanced: boolean;
-  executing: boolean;
 }
+
+interface CreateTableState extends CreateTableSnapshot {
+  open: boolean;
+  executing: boolean;
+  original?: CreateTableSnapshot;
+}
+
+type MysqlContextMenuAction = 'database-info' | 'query-table' | 'table-structure' | 'edit-table';
 
 const defaultPort = 3306;
 const pageSize = 100;
@@ -204,6 +214,7 @@ function createSchemaIndex(): SchemaIndex {
 function createSchemaForeignKey(): SchemaForeignKey {
   return {
     id: createId('fk'),
+    name: '',
     columns: [],
     refTable: '',
     refColumns: [],
@@ -247,8 +258,61 @@ function quoteMysqlQualifiedIdentifier(identifier: string): string {
 }
 
 function getForeignKeyConstraintName(foreignKey: SchemaForeignKey): string {
+  if (foreignKey.name.trim()) return foreignKey.name.trim();
   const suffix = foreignKey.id.replace(/^fk[-_]?/iu, '').replace(/[^a-z0-9_]/giu, '_').slice(0, 61);
   return `fk_${suffix || Math.random().toString(36).slice(2, 8)}`;
+}
+
+function buildMysqlColumnDefinition(column: SchemaColumn): string {
+  const length = sanitizeMysqlColumnLength(column.type, column.length);
+  const type = length ? `${column.type}(${length})` : column.type;
+  const parts = [
+    quoteIdentifier(column.name.trim(), 'mysql'),
+    type,
+    column.nullable ? 'NULL' : 'NOT NULL',
+  ];
+  const defaultValue = quoteMysqlDefaultValue(column.defaultValue);
+
+  if (defaultValue) {
+    parts.push(`DEFAULT ${defaultValue}`);
+  }
+  if (column.autoIncrement) {
+    parts.push('AUTO_INCREMENT');
+  }
+  if (column.comment.trim()) {
+    parts.push(`COMMENT ${quoteMysqlString(column.comment.trim())}`);
+  }
+
+  return parts.join(' ');
+}
+
+function buildMysqlIndexDefinition(index: SchemaIndex, columns: SchemaColumn[]): string | null {
+  const indexColumns = index.columns.filter((column) => columns.some((item) => item.name.trim() === column));
+  if (indexColumns.length === 0) return null;
+
+  const name = index.name.trim() ? ` ${quoteIdentifier(index.name.trim(), 'mysql')}` : '';
+  return `${index.type}${name} (${indexColumns.map((column) => quoteIdentifier(column, 'mysql')).join(', ')})`;
+}
+
+function buildMysqlForeignKeyDefinition(foreignKey: SchemaForeignKey, columns: SchemaColumn[]): string | null {
+  const keyColumns = foreignKey.columns.filter((column) => columns.some((item) => item.name.trim() === column));
+  const refColumns = foreignKey.refColumns.filter((column) => column.trim());
+  if (keyColumns.length === 0 || !foreignKey.refTable.trim() || refColumns.length === 0) return null;
+
+  const constraintName = quoteIdentifier(getForeignKeyConstraintName(foreignKey), 'mysql');
+  const parts = [
+    `CONSTRAINT ${constraintName} FOREIGN KEY (${keyColumns.map((column) => quoteIdentifier(column, 'mysql')).join(', ')})`,
+    `REFERENCES ${quoteMysqlQualifiedIdentifier(foreignKey.refTable)} (${refColumns.map((column) => quoteIdentifier(column.trim(), 'mysql')).join(', ')})`,
+  ];
+
+  if (foreignKey.onDelete) {
+    parts.push(`ON DELETE ${foreignKey.onDelete}`);
+  }
+  if (foreignKey.onUpdate) {
+    parts.push(`ON UPDATE ${foreignKey.onUpdate}`);
+  }
+
+  return parts.join(' ');
 }
 
 function validateCreateTableState(state: CreateTableState): string | null {
@@ -280,28 +344,7 @@ function generateCreateTableSql(state: CreateTableState): string {
   const tableName = state.tableName.trim();
   const definitions: string[] = state.columns
     .filter((column) => column.name.trim())
-    .map((column) => {
-      const length = sanitizeMysqlColumnLength(column.type, column.length);
-      const type = length ? `${column.type}(${length})` : column.type;
-      const parts = [
-        quoteIdentifier(column.name.trim(), 'mysql'),
-        type,
-        column.nullable ? 'NULL' : 'NOT NULL',
-      ];
-      const defaultValue = quoteMysqlDefaultValue(column.defaultValue);
-
-      if (defaultValue) {
-        parts.push(`DEFAULT ${defaultValue}`);
-      }
-      if (column.autoIncrement) {
-        parts.push('AUTO_INCREMENT');
-      }
-      if (column.comment.trim()) {
-        parts.push(`COMMENT ${quoteMysqlString(column.comment.trim())}`);
-      }
-
-      return `  ${parts.join(' ')}`;
-    });
+    .map((column) => `  ${buildMysqlColumnDefinition(column)}`);
   const primaryKeyColumns = state.primaryKeyColumns.filter((column) => state.columns.some((item) => item.name.trim() === column));
 
   if (primaryKeyColumns.length > 0) {
@@ -309,32 +352,13 @@ function generateCreateTableSql(state: CreateTableState): string {
   }
 
   state.indexes.forEach((index) => {
-    const columns = index.columns.filter((column) => state.columns.some((item) => item.name.trim() === column));
-    if (columns.length === 0) return;
-
-    const name = index.name.trim() ? ` ${quoteIdentifier(index.name.trim(), 'mysql')}` : '';
-    definitions.push(`  ${index.type}${name} (${columns.map((column) => quoteIdentifier(column, 'mysql')).join(', ')})`);
+    const definition = buildMysqlIndexDefinition(index, state.columns);
+    if (definition) definitions.push(`  ${definition}`);
   });
 
   state.foreignKeys.forEach((foreignKey) => {
-    const columns = foreignKey.columns.filter((column) => state.columns.some((item) => item.name.trim() === column));
-    const refColumns = foreignKey.refColumns.filter((column) => column.trim());
-    if (columns.length === 0 || !foreignKey.refTable.trim() || refColumns.length === 0) return;
-
-    const constraintName = quoteIdentifier(getForeignKeyConstraintName(foreignKey), 'mysql');
-    const parts = [
-      `  CONSTRAINT ${constraintName} FOREIGN KEY (${columns.map((column) => quoteIdentifier(column, 'mysql')).join(', ')})`,
-      `REFERENCES ${quoteMysqlQualifiedIdentifier(foreignKey.refTable)} (${refColumns.map((column) => quoteIdentifier(column.trim(), 'mysql')).join(', ')})`,
-    ];
-
-    if (foreignKey.onDelete) {
-      parts.push(`ON DELETE ${foreignKey.onDelete}`);
-    }
-    if (foreignKey.onUpdate) {
-      parts.push(`ON UPDATE ${foreignKey.onUpdate}`);
-    }
-
-    definitions.push(parts.join(' '));
+    const definition = buildMysqlForeignKeyDefinition(foreignKey, state.columns);
+    if (definition) definitions.push(`  ${definition}`);
   });
 
   const options = [`ENGINE=${state.engine || 'InnoDB'}`];
@@ -350,6 +374,356 @@ function generateCreateTableSql(state: CreateTableState): string {
     definitions.length > 0 ? definitions.join(',\n') : '  `id` INT NOT NULL',
     `) ${options.join(' ')};`,
   ].join('\n');
+}
+
+function splitMysqlTopLevelList(value: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let depth = 0;
+  let quote: "'" | '"' | '`' | null = null;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    const previous = value[index - 1];
+
+    if (quote) {
+      current += char;
+      if (char === quote && previous !== '\\') {
+        if (quote !== "'" || value[index + 1] !== "'") {
+          quote = null;
+        } else {
+          current += value[index + 1];
+          index += 1;
+        }
+      }
+      continue;
+    }
+
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (char === '(') {
+      depth += 1;
+      current += char;
+      continue;
+    }
+    if (char === ')') {
+      depth = Math.max(0, depth - 1);
+      current += char;
+      continue;
+    }
+    if (char === ',' && depth === 0) {
+      parts.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+
+  if (current.trim()) parts.push(current.trim());
+  return parts;
+}
+
+function unquoteMysqlIdentifier(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('`') && trimmed.endsWith('`')) {
+    return trimmed.slice(1, -1).replace(/``/gu, '`');
+  }
+  return trimmed;
+}
+
+function unquoteMysqlString(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    return trimmed.slice(1, -1).replace(/''/gu, "'").replace(/\\'/gu, "'");
+  }
+  return trimmed;
+}
+
+function parseMysqlIdentifierList(value: string): string[] {
+  return splitMysqlTopLevelList(value)
+    .map((item) => item.trim().match(/^`((?:``|[^`])+)`/u)?.[0] ?? item.trim().split(/\s+/u)[0])
+    .map(unquoteMysqlIdentifier)
+    .filter(Boolean);
+}
+
+function findMysqlMatchingParen(value: string, openIndex: number): number {
+  let depth = 0;
+  let quote: "'" | '"' | '`' | null = null;
+
+  for (let index = openIndex; index < value.length; index += 1) {
+    const char = value[index];
+    const previous = value[index - 1];
+
+    if (quote) {
+      if (char === quote && previous !== '\\') {
+        if (quote !== "'" || value[index + 1] !== "'") {
+          quote = null;
+        } else {
+          index += 1;
+        }
+      }
+      continue;
+    }
+
+    if (char === "'" || char === '"' || char === '`') {
+      quote = char;
+      continue;
+    }
+    if (char === '(') {
+      depth += 1;
+      continue;
+    }
+    if (char === ')') {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+
+  return -1;
+}
+
+function splitMysqlColumnType(body: string): { type: string; length: string; attributes: string } | null {
+  const typeMatch = body.match(/^([a-zA-Z0-9_]+)/u);
+  if (!typeMatch) return null;
+
+  const type = typeMatch[1].toUpperCase();
+  const afterType = body.slice(typeMatch[0].length).trimStart();
+  if (!afterType.startsWith('(')) {
+    return { type, length: '', attributes: afterType };
+  }
+
+  const offset = body.length - afterType.length;
+  const closeIndex = findMysqlMatchingParen(body, offset);
+  if (closeIndex < 0) {
+    return { type, length: '', attributes: afterType };
+  }
+
+  return {
+    type,
+    length: body.slice(offset + 1, closeIndex),
+    attributes: body.slice(closeIndex + 1).trim(),
+  };
+}
+
+function parseCreateTableColumn(definition: string): SchemaColumn | null {
+  const match = definition.match(/^`((?:``|[^`])+)`\s+(.+)$/u);
+  if (!match) return null;
+
+  const name = unquoteMysqlIdentifier(`\`${match[1]}\``);
+  const body = match[2].trim();
+  const parsedType = splitMysqlColumnType(body);
+  if (!parsedType) return null;
+
+  const { type, length, attributes } = parsedType;
+  const defaultMatch = attributes.match(/\bDEFAULT\s+((?:'(?:''|\\.|[^'\\])*')|(?:[^\s,]+))/iu);
+  const commentMatch = attributes.match(/\bCOMMENT\s+('(?:''|\\.|[^'\\])*')/iu);
+
+  return {
+    id: createId('column'),
+    name,
+    type,
+    length,
+    nullable: !/\bNOT\s+NULL\b/iu.test(attributes),
+    defaultValue: defaultMatch ? unquoteMysqlString(defaultMatch[1]) : '',
+    autoIncrement: /\bAUTO_INCREMENT\b/iu.test(attributes),
+    comment: commentMatch ? unquoteMysqlString(commentMatch[1]) : '',
+  };
+}
+
+function parseCreateTableSql(sql: string): CreateTableState {
+  const tableNameMatch = sql.match(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:`[^`]+`\.)?(`(?:``|[^`])+`|[^\s(]+)\s*\(/iu);
+  const tableName = tableNameMatch ? unquoteMysqlIdentifier(tableNameMatch[1]) : '';
+  const openIndex = sql.indexOf('(');
+  const closeIndex = openIndex >= 0 ? findMysqlMatchingParen(sql, openIndex) : -1;
+  if (openIndex < 0 || closeIndex <= openIndex) {
+    throw new Error('Invalid CREATE TABLE SQL');
+  }
+
+  const definitions = splitMysqlTopLevelList(sql.slice(openIndex + 1, closeIndex));
+  const options = sql.slice(closeIndex + 1);
+  const engine = options.match(/\bENGINE\s*=\s*([^\s;]+)/iu)?.[1] ?? 'InnoDB';
+  const charset = options.match(/\bDEFAULT\s+CHARSET\s*=\s*([^\s;]+)/iu)?.[1] ?? options.match(/\bCHARSET\s*=\s*([^\s;]+)/iu)?.[1] ?? '';
+  const comment = options.match(/\bCOMMENT\s*=\s*('(?:''|\\.|[^'\\])*')/iu)?.[1] ?? '';
+  const columns: SchemaColumn[] = [];
+  const primaryKeyColumns: string[] = [];
+  const indexes: SchemaIndex[] = [];
+  const foreignKeys: SchemaForeignKey[] = [];
+
+  definitions.forEach((definition) => {
+    const trimmed = definition.trim();
+    if (trimmed.startsWith('`')) {
+      const column = parseCreateTableColumn(trimmed);
+      if (column) columns.push(column);
+      return;
+    }
+
+    const primaryMatch = trimmed.match(/^PRIMARY\s+KEY\s*(?:`[^`]+`)?\s*\((.+)\)$/iu);
+    if (primaryMatch) {
+      primaryKeyColumns.push(...parseMysqlIdentifierList(primaryMatch[1]));
+      return;
+    }
+
+    const foreignMatch = trimmed.match(/^(?:CONSTRAINT\s+(`(?:``|[^`])+`|\S+)\s+)?FOREIGN\s+KEY\s*\((.+?)\)\s+REFERENCES\s+((?:`(?:``|[^`])+`|\w+)(?:\.(?:`(?:``|[^`])+`|\w+))?)\s*\((.+?)\)(.*)$/iu);
+    if (foreignMatch) {
+      const tail = foreignMatch[5] ?? '';
+      foreignKeys.push({
+        id: createId('fk'),
+        name: foreignMatch[1] ? unquoteMysqlIdentifier(foreignMatch[1]) : '',
+        columns: parseMysqlIdentifierList(foreignMatch[2]),
+        refTable: foreignMatch[3].split('.').map(unquoteMysqlIdentifier).join('.'),
+        refColumns: parseMysqlIdentifierList(foreignMatch[4]),
+        onDelete: tail.match(/\bON\s+DELETE\s+(RESTRICT|CASCADE|SET\s+NULL|NO\s+ACTION)\b/iu)?.[1].toUpperCase().replace(/\s+/gu, ' ') ?? 'RESTRICT',
+        onUpdate: tail.match(/\bON\s+UPDATE\s+(RESTRICT|CASCADE|SET\s+NULL|NO\s+ACTION)\b/iu)?.[1].toUpperCase().replace(/\s+/gu, ' ') ?? 'RESTRICT',
+      });
+      return;
+    }
+
+    const indexMatch = trimmed.match(/^(UNIQUE|FULLTEXT|SPATIAL)?\s*(?:KEY|INDEX)\s+(`(?:``|[^`])+`|\S+)?\s*\((.+)\)$/iu);
+    if (indexMatch) {
+      indexes.push({
+        id: createId('index'),
+        type: (indexMatch[1]?.toUpperCase() as SchemaIndex['type'] | undefined) ?? 'INDEX',
+        name: indexMatch[2] ? unquoteMysqlIdentifier(indexMatch[2]) : '',
+        columns: parseMysqlIdentifierList(indexMatch[3]),
+      });
+    }
+  });
+
+  return {
+    mode: 'edit',
+    open: false,
+    database: '',
+    tableName,
+    engine,
+    charset,
+    comment: comment ? unquoteMysqlString(comment) : '',
+    columns,
+    primaryKeyColumns,
+    indexes,
+    foreignKeys,
+    showAdvanced: true,
+    executing: false,
+  };
+}
+
+function normalizeSchemaColumn(column: SchemaColumn) {
+  return {
+    name: column.name.trim(),
+    type: column.type.toUpperCase(),
+    length: sanitizeMysqlColumnLength(column.type, column.length),
+    nullable: column.nullable,
+    defaultValue: column.defaultValue.trim(),
+    autoIncrement: column.autoIncrement,
+    comment: column.comment.trim(),
+  };
+}
+
+function normalizeSchemaIndex(index: SchemaIndex) {
+  return {
+    type: index.type,
+    name: index.name.trim(),
+    columns: index.columns,
+  };
+}
+
+function normalizeSchemaForeignKey(foreignKey: SchemaForeignKey) {
+  return {
+    name: getForeignKeyConstraintName(foreignKey),
+    columns: foreignKey.columns,
+    refTable: foreignKey.refTable.trim(),
+    refColumns: foreignKey.refColumns,
+    onDelete: foreignKey.onDelete,
+    onUpdate: foreignKey.onUpdate,
+  };
+}
+
+function isSchemaEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function generateAlterTableStatements(original: CreateTableSnapshot, modified: CreateTableState): string[] {
+  const tableName = quoteIdentifier(original.tableName.trim() || modified.tableName.trim() || 'table_name', 'mysql');
+  const statements: string[] = [];
+  const originalColumns = new Map(original.columns.map((column) => [column.name.trim().toLowerCase(), column]));
+  const modifiedColumns = new Map(modified.columns.map((column) => [column.name.trim().toLowerCase(), column]));
+
+  originalColumns.forEach((column, key) => {
+    if (!modifiedColumns.has(key)) {
+      statements.push(`ALTER TABLE ${tableName} DROP COLUMN ${quoteIdentifier(column.name.trim(), 'mysql')};`);
+    }
+  });
+  modified.columns.filter((column) => column.name.trim()).forEach((column) => {
+    const key = column.name.trim().toLowerCase();
+    const originalColumn = originalColumns.get(key);
+    if (!originalColumn) {
+      statements.push(`ALTER TABLE ${tableName} ADD COLUMN ${buildMysqlColumnDefinition(column)};`);
+      return;
+    }
+    if (!isSchemaEqual(normalizeSchemaColumn(originalColumn), normalizeSchemaColumn(column))) {
+      statements.push(`ALTER TABLE ${tableName} MODIFY COLUMN ${buildMysqlColumnDefinition(column)};`);
+    }
+  });
+
+  const originalIndexes = new Map(original.indexes.filter((index) => index.name.trim()).map((index) => [index.name.trim().toLowerCase(), index]));
+  const modifiedIndexes = new Map(modified.indexes.filter((index) => index.name.trim()).map((index) => [index.name.trim().toLowerCase(), index]));
+  originalIndexes.forEach((index, key) => {
+    if (!modifiedIndexes.has(key)) {
+      statements.push(`ALTER TABLE ${tableName} DROP INDEX ${quoteIdentifier(index.name.trim(), 'mysql')};`);
+    }
+  });
+  modifiedIndexes.forEach((index, key) => {
+    const originalIndex = originalIndexes.get(key);
+    if (!originalIndex) {
+      const definition = buildMysqlIndexDefinition(index, modified.columns);
+      if (definition) statements.push(`ALTER TABLE ${tableName} ADD ${definition};`);
+      return;
+    }
+    if (!isSchemaEqual(normalizeSchemaIndex(originalIndex), normalizeSchemaIndex(index))) {
+      statements.push(`ALTER TABLE ${tableName} DROP INDEX ${quoteIdentifier(originalIndex.name.trim(), 'mysql')};`);
+      const definition = buildMysqlIndexDefinition(index, modified.columns);
+      if (definition) statements.push(`ALTER TABLE ${tableName} ADD ${definition};`);
+    }
+  });
+
+  const originalForeignKeys = new Map(original.foreignKeys.map((foreignKey) => [getForeignKeyConstraintName(foreignKey).toLowerCase(), foreignKey]));
+  const modifiedForeignKeys = new Map(modified.foreignKeys.map((foreignKey) => [getForeignKeyConstraintName(foreignKey).toLowerCase(), foreignKey]));
+  originalForeignKeys.forEach((foreignKey, key) => {
+    if (!modifiedForeignKeys.has(key)) {
+      statements.push(`ALTER TABLE ${tableName} DROP FOREIGN KEY ${quoteIdentifier(getForeignKeyConstraintName(foreignKey), 'mysql')};`);
+    }
+  });
+  modifiedForeignKeys.forEach((foreignKey, key) => {
+    const originalForeignKey = originalForeignKeys.get(key);
+    if (!originalForeignKey) {
+      const definition = buildMysqlForeignKeyDefinition(foreignKey, modified.columns);
+      if (definition) statements.push(`ALTER TABLE ${tableName} ADD ${definition};`);
+      return;
+    }
+    if (!isSchemaEqual(normalizeSchemaForeignKey(originalForeignKey), normalizeSchemaForeignKey(foreignKey))) {
+      statements.push(`ALTER TABLE ${tableName} DROP FOREIGN KEY ${quoteIdentifier(getForeignKeyConstraintName(originalForeignKey), 'mysql')};`);
+      const definition = buildMysqlForeignKeyDefinition(foreignKey, modified.columns);
+      if (definition) statements.push(`ALTER TABLE ${tableName} ADD ${definition};`);
+    }
+  });
+
+  if ((original.engine || 'InnoDB') !== (modified.engine || 'InnoDB')) {
+    statements.push(`ALTER TABLE ${tableName} ENGINE=${modified.engine || 'InnoDB'};`);
+  }
+  if ((original.charset || '') !== (modified.charset || '') && modified.charset) {
+    statements.push(`ALTER TABLE ${tableName} DEFAULT CHARSET=${modified.charset};`);
+  }
+  if ((original.comment || '') !== (modified.comment || '')) {
+    statements.push(`ALTER TABLE ${tableName} COMMENT=${quoteMysqlString(modified.comment.trim())};`);
+  }
+
+  return statements;
+}
+
+function generateAlterTableSql(original: CreateTableSnapshot, modified: CreateTableState): string {
+  return generateAlterTableStatements(original, modified).join('\n');
 }
 
 function translateForeignKeyAction(action: string): string {
@@ -487,6 +861,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
   const [editorTheme, setEditorTheme] = useState<'light' | 'dark'>(getShellDeskEditorTheme);
   const [contextMenu, setContextMenu] = useState<MysqlContextMenuState | null>(null);
   const [createTableState, setCreateTableState] = useState<CreateTableState>({
+    mode: 'create',
     open: false,
     database: '',
     tableName: '',
@@ -520,7 +895,11 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
   const isActiveResultEditable = Boolean(activeResultTab?.table && activeResultPrimaryKeys.length > 0);
   const canRunActiveQuery = Boolean(activeQueryTab?.sql.trim()) && !activeQueryTab?.running;
   const canExplainActiveQuery = canRunActiveQuery && !isWriteStatement(activeQueryTab?.sql.trim() ?? '', 'mysql');
-  const createTableSqlPreview = useMemo(() => generateCreateTableSql(createTableState), [createTableState]);
+  const createTableSqlPreview = useMemo(() => (
+    createTableState.mode === 'edit' && createTableState.original
+      ? generateAlterTableSql(createTableState.original, createTableState)
+      : generateCreateTableSql(createTableState)
+  ), [createTableState]);
 
   useEffect(() => {
     let disposed = false;
@@ -613,6 +992,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
     setMessage(null);
     setContextMenu(null);
     setCreateTableState({
+      mode: 'create',
       open: false,
       database: '',
       tableName: '',
@@ -625,6 +1005,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
       foreignKeys: [],
       showAdvanced: false,
       executing: false,
+      original: undefined,
     });
   }, []);
 
@@ -1102,7 +1483,52 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
     }
   }, [addHistoryItem, addResultTab, api, connectionId, mysqlId, updateActiveQuerySql]);
 
-  const handleContextMenuAction = useCallback((action: 'database-info' | 'query-table' | 'table-structure') => {
+  const handleEditTableStructure = useCallback(async (database: string, table: string) => {
+    if (!api?.connections || !mysqlId) return;
+
+    const sqlText = `SHOW CREATE TABLE ${quoteIdentifier(table, 'mysql')};`;
+    setActiveDb(database);
+    setMessage(null);
+
+    try {
+      const result = await api.connections.mysqlQuery(connectionId, mysqlId, sqlText, database);
+      const firstRow = result.rows[0];
+      const createSqlColumn = result.columns[1];
+      const createSql = firstRow && createSqlColumn ? firstRow[createSqlColumn] : undefined;
+
+      if (typeof createSql !== 'string' || !createSql.trim()) {
+        throw new Error(tCurrent('auto.remoteMySQL.parseFailed'));
+      }
+
+      const parsed = parseCreateTableSql(createSql);
+      const snapshot: CreateTableSnapshot = {
+        mode: 'edit',
+        database,
+        tableName: parsed.tableName || table,
+        engine: parsed.engine,
+        charset: parsed.charset,
+        comment: parsed.comment,
+        columns: parsed.columns,
+        primaryKeyColumns: parsed.primaryKeyColumns,
+        indexes: parsed.indexes,
+        foreignKeys: parsed.foreignKeys,
+        showAdvanced: true,
+      };
+
+      createTablePreviousFocusRef.current = typeof document === 'undefined' ? null : document.activeElement;
+      setCreateTableState({
+        ...snapshot,
+        open: true,
+        executing: false,
+        original: structuredClone(snapshot),
+      });
+    } catch (error) {
+      void error;
+      setMessage({ type: 'error', text: tCurrent('auto.remoteMySQL.parseFailed') });
+    }
+  }, [api, connectionId, mysqlId]);
+
+  const handleContextMenuAction = useCallback((action: MysqlContextMenuAction) => {
     const target = contextMenu?.target;
     setContextMenu(null);
     if (!target) return;
@@ -1117,8 +1543,10 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
       void handleSelectTable(target.database, target.table);
     } else if (action === 'table-structure') {
       void handleShowTableStructure(target.database, target.table);
+    } else if (action === 'edit-table') {
+      void handleEditTableStructure(target.database, target.table);
     }
-  }, [contextMenu, handleSelectTable, handleShowDatabaseInfo, handleShowTableStructure]);
+  }, [contextMenu, handleEditTableStructure, handleSelectTable, handleShowDatabaseInfo, handleShowTableStructure]);
 
   const openCreateTableDialog = useCallback(() => {
     const database = activeDb || databases[0] || '';
@@ -1126,6 +1554,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
     createTablePreviousFocusRef.current = typeof document === 'undefined' ? null : document.activeElement;
     setActiveDb(database);
     setCreateTableState({
+      mode: 'create',
       open: true,
       database,
       tableName: '',
@@ -1138,6 +1567,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
       foreignKeys: [],
       showAdvanced: false,
       executing: false,
+      original: undefined,
     });
   }, [activeDb, databases]);
 
@@ -1333,6 +1763,97 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
         error: text,
       });
       setMessage({ type: 'error', text: tCurrent('auto.remoteMySQL.createTableFailed', { error: text }) });
+      setCreateTableState((current) => ({ ...current, executing: false }));
+    }
+  }, [addHistoryItem, addResultTab, api, connectionId, createTableState, loadTables, mysqlId]);
+
+  const handleExecuteAlterTable = useCallback(async () => {
+    if (!api?.connections || !mysqlId || !createTableState.original) return;
+
+    if (createTableState.columns.length === 0) {
+      setMessage({ type: 'error', text: tCurrent('auto.remoteMySQL.pleaseAddColumns') });
+      return;
+    }
+    if (createTableState.columns.some((column) => !column.name.trim())) {
+      setMessage({ type: 'error', text: tCurrent('auto.remoteMySQL.invalidColumnName') });
+      return;
+    }
+    const validationError = validateCreateTableState(createTableState);
+    if (validationError) {
+      setMessage({ type: 'error', text: validationError });
+      return;
+    }
+
+    const statements = generateAlterTableStatements(createTableState.original, createTableState);
+    const sqlText = statements.join('\n');
+    if (statements.length === 0) {
+      setMessage({ type: 'info', text: tCurrent('auto.remoteMySQL.noChanges') });
+      return;
+    }
+
+    const database = createTableState.database || undefined;
+    const startTime = performance.now();
+
+    setCreateTableState((current) => ({ ...current, executing: true }));
+    setMessage(null);
+
+    try {
+      let lastResult: ShellDeskMysqlQueryResult = { columns: [], rows: [], affectedRows: 0 };
+      let affectedRows = 0;
+      for (const statement of statements) {
+        lastResult = await api.connections.mysqlQuery(connectionId, mysqlId, statement, database);
+        affectedRows += lastResult.affectedRows ?? 0;
+      }
+      const result: ShellDeskMysqlQueryResult = { ...lastResult, affectedRows };
+      const queryTime = Math.round(performance.now() - startTime);
+
+      addResultTab({
+        id: createId('result'),
+        title: createTableState.tableName.trim(),
+        subtitle: database ? tCurrent('auto.remoteMySQL.4uvcwr', { value0: database }) : tCurrent('auto.remoteMySQL.1qglxbx'),
+        sql: sqlText,
+        database,
+        status: 'success',
+        result,
+        queryTime,
+        createdAt: Date.now(),
+        columns: createGenericColumns(result.columns, 'mysql'),
+      });
+      addHistoryItem({
+        sql: sqlText,
+        database,
+        status: 'success',
+        queryTime,
+        rowCount: result.rows.length,
+        affectedRows: result.affectedRows,
+      });
+      if (database) {
+        await loadTables(database, true);
+      }
+      setCreateTableState((current) => ({ ...current, open: false, executing: false }));
+      setMessage({ type: 'success', text: tCurrent('auto.remoteMySQL.alterTableApplied', { table: createTableState.tableName.trim() }) });
+    } catch (error) {
+      const text = getErrorMessage(error);
+      addResultTab({
+        id: createId('result'),
+        title: tCurrent('auto.remoteMySQL.wq5uqu'),
+        subtitle: database ? tCurrent('auto.remoteMySQL.4uvcwr2', { value0: database }) : tCurrent('auto.remoteMySQL.1qglxbx2'),
+        sql: sqlText,
+        database,
+        status: 'error',
+        error: text,
+        queryTime: Math.round(performance.now() - startTime),
+        createdAt: Date.now(),
+        columns: [],
+      });
+      addHistoryItem({
+        sql: sqlText,
+        database,
+        status: 'error',
+        queryTime: Math.round(performance.now() - startTime),
+        error: text,
+      });
+      setMessage({ type: 'error', text: tCurrent('auto.remoteMySQL.alterTableFailed', { error: text }) });
       setCreateTableState((current) => ({ ...current, executing: false }));
     }
   }, [addHistoryItem, addResultTab, api, connectionId, createTableState, loadTables, mysqlId]);
@@ -2216,7 +2737,9 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
           <div className="schema-dialog" role="dialog" aria-modal="true" aria-labelledby="mysql-create-table-title">
             <div className="schema-dialog-header">
               <h3 id="mysql-create-table-title">
-                {tCurrent('auto.remoteMySQL.createTableTitle', { database: createTableState.database || activeDb || '-' })}
+                {createTableState.mode === 'edit'
+                  ? tCurrent('auto.remoteMySQL.editTableTitle', { table: createTableState.tableName || '-' })
+                  : tCurrent('auto.remoteMySQL.createTableTitle', { database: createTableState.database || activeDb || '-' })}
               </h3>
               <button
                 type="button"
@@ -2236,6 +2759,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
                   value={createTableState.tableName}
                   onChange={(event) => setCreateTableState((current) => ({ ...current, tableName: event.target.value }))}
                   placeholder={tCurrent('auto.remoteMySQL.tableNamePlaceholder')}
+                  disabled={createTableState.mode === 'edit'}
                   autoFocus
                 />
               </label>
@@ -2447,6 +2971,10 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
                 {createTableState.foreignKeys.map((foreignKey) => (
                   <div key={foreignKey.id} className="schema-inline-editor">
                     <label className="schema-field">
+                      <span>{tCurrent('auto.remoteMySQL.foreignKey')}</span>
+                      <input type="text" value={foreignKey.name} onChange={(event) => updateSchemaForeignKey(foreignKey.id, { name: event.target.value })} />
+                    </label>
+                    <label className="schema-field">
                       <span>{tCurrent('auto.remoteMySQL.columnName')}</span>
                       <select
                         multiple
@@ -2510,8 +3038,17 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
               <button type="button" onClick={closeCreateTableDialog} disabled={createTableState.executing}>
                 {tCurrent('auto.remoteMySQL.cancel')}
               </button>
-              <button type="button" className="primary" onClick={() => void handleExecuteCreateTable()} disabled={createTableState.executing}>
-                {createTableState.executing ? tCurrent('auto.remoteMySQL.e2byz1') : tCurrent('auto.remoteMySQL.executeCreate')}
+              <button
+                type="button"
+                className="primary"
+                onClick={() => void (createTableState.mode === 'edit' ? handleExecuteAlterTable() : handleExecuteCreateTable())}
+                disabled={createTableState.executing}
+              >
+                {createTableState.executing
+                  ? tCurrent('auto.remoteMySQL.e2byz1')
+                  : createTableState.mode === 'edit'
+                    ? tCurrent('auto.remoteMySQL.executeAlter')
+                    : tCurrent('auto.remoteMySQL.executeCreate')}
               </button>
             </div>
           </div>
@@ -2586,6 +3123,9 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
               </button>
               <button type="button" role="menuitem" onClick={() => handleContextMenuAction('table-structure')}>
                 查看表结构
+              </button>
+              <button type="button" role="menuitem" onClick={() => handleContextMenuAction('edit-table')}>
+                {tCurrent('auto.remoteMySQL.editTable')}
               </button>
             </>
           )}
