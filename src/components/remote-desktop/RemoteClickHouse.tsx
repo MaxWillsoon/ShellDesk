@@ -226,6 +226,20 @@ function createChCreateTableState(): ChCreateTableState {
   };
 }
 
+function validateChCreateTableState(state: ChCreateTableState): string | null {
+  const seenColumnNames = new Set<string>();
+  for (const column of state.columns) {
+    const columnName = column.name.trim();
+    if (!columnName) continue;
+    const normalizedColumnName = columnName.toLowerCase();
+    if (seenColumnNames.has(normalizedColumnName)) {
+      return tCurrent('auto.remoteClickHouse.duplicateColumn', { name: columnName });
+    }
+    seenColumnNames.add(normalizedColumnName);
+  }
+  return null;
+}
+
 function getShellDeskEditorTheme(): 'light' | 'dark' {
   if (typeof document === 'undefined') {
     return 'dark';
@@ -567,14 +581,14 @@ function areClickHouseColumnsEqual(left: ChSchemaColumn, right: ChSchemaColumn):
 
 function generateClickHouseAlterStatements(original: ChCreateTableState, modified: ChCreateTableState): string[] {
   const tableName = quoteClickHouseQualifiedTable('', modified.tableName || original.tableName);
-  const originalColumns = new Map(original.columns.map((column) => [column.name.trim(), column]));
-  const modifiedColumns = new Map(modified.columns.map((column) => [column.name.trim(), column]));
+  const originalColumns = new Map(original.columns.map((column) => [column.name.trim().toLowerCase(), column]));
+  const modifiedColumns = new Map(modified.columns.map((column) => [column.name.trim().toLowerCase(), column]));
   const statements: string[] = [];
 
   modified.columns.forEach((column) => {
     const columnName = column.name.trim();
     if (!columnName) return;
-    const originalColumn = originalColumns.get(columnName);
+    const originalColumn = originalColumns.get(columnName.toLowerCase());
     if (!originalColumn) {
       statements.push(`ALTER TABLE ${tableName} ADD COLUMN ${buildClickHouseAlterColumnDefinition(column)};`);
     } else if (!areClickHouseColumnsEqual(originalColumn, column)) {
@@ -584,7 +598,7 @@ function generateClickHouseAlterStatements(original: ChCreateTableState, modifie
 
   original.columns.forEach((column) => {
     const columnName = column.name.trim();
-    if (columnName && !modifiedColumns.has(columnName)) {
+    if (columnName && !modifiedColumns.has(columnName.toLowerCase())) {
       statements.push(`ALTER TABLE ${tableName} DROP COLUMN ${quoteIdentifier(columnName, 'clickhouse')};`);
     }
   });
@@ -1562,6 +1576,11 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
       setMessage({ type: 'error', text: tCurrent('auto.remoteClickHouse.invalidColumnName') });
       return;
     }
+    const validationError = validateChCreateTableState(createTableState);
+    if (validationError) {
+      setMessage({ type: 'error', text: validationError });
+      return;
+    }
 
     const validColumnNames = new Set(createTableState.columns.map((column) => column.name.trim()).filter(Boolean));
     const validOrderByColumns = createTableState.orderByColumns.filter((column) => validColumnNames.has(column));
@@ -1689,6 +1708,11 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
 
     if (createTableState.columns.some((column) => !column.name.trim())) {
       setMessage({ type: 'error', text: tCurrent('auto.remoteClickHouse.invalidColumnName') });
+      return;
+    }
+    const validationError = validateChCreateTableState(createTableState);
+    if (validationError) {
+      setMessage({ type: 'error', text: validationError });
       return;
     }
 

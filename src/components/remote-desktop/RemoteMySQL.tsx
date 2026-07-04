@@ -680,8 +680,12 @@ function generateAlterTableStatements(original: CreateTableSnapshot, modified: C
     }
   });
 
-  const originalIndexes = new Map(original.indexes.filter((index) => index.name.trim()).map((index) => [index.name.trim().toLowerCase(), index]));
-  const modifiedIndexes = new Map(modified.indexes.filter((index) => index.name.trim()).map((index) => [index.name.trim().toLowerCase(), index]));
+  const getIndexKey = (index: SchemaIndex): string => {
+    const name = index.name.trim();
+    return name ? name.toLowerCase() : `${index.type}:${index.columns.join(',')}`.toLowerCase();
+  };
+  const originalIndexes = new Map(original.indexes.map((index) => [getIndexKey(index), index]));
+  const modifiedIndexes = new Map(modified.indexes.map((index) => [getIndexKey(index), index]));
   originalIndexes.forEach((index, key) => {
     if (!modifiedIndexes.has(key)) {
       statements.push(`ALTER TABLE ${tableName} DROP INDEX ${quoteIdentifier(index.name.trim(), 'mysql')};`);
@@ -721,6 +725,25 @@ function generateAlterTableStatements(original: CreateTableSnapshot, modified: C
       if (definition) statements.push(`ALTER TABLE ${tableName} ADD ${definition};`);
     }
   });
+
+  // Primary key change detection
+  const originalPK = new Set(original.primaryKeyColumns.map((col) => col.trim().toLowerCase()).filter(Boolean));
+  const modifiedPK = new Set(modified.primaryKeyColumns.map((col) => col.trim().toLowerCase()).filter(Boolean));
+  const pkChanged = originalPK.size !== modifiedPK.size
+    || [...originalPK].some((col) => !modifiedPK.has(col));
+  if (pkChanged) {
+    if (originalPK.size > 0) {
+      statements.push(`ALTER TABLE ${tableName} DROP PRIMARY KEY;`);
+    }
+    if (modifiedPK.size > 0) {
+      const pkColumns = modified.primaryKeyColumns
+        .filter((col) => col.trim())
+        .map((col) => quoteIdentifier(col.trim(), 'mysql'));
+      if (pkColumns.length > 0) {
+        statements.push(`ALTER TABLE ${tableName} ADD PRIMARY KEY (${pkColumns.join(', ')});`);
+      }
+    }
+  }
 
   if ((original.engine || 'InnoDB') !== (modified.engine || 'InnoDB')) {
     statements.push(`ALTER TABLE ${tableName} ENGINE=${modified.engine || 'InnoDB'};`);
