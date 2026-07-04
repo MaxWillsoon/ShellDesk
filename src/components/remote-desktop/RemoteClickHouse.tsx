@@ -122,12 +122,92 @@ interface ClickHouseContextMenuState {
   target: ClickHouseContextMenuTarget;
 }
 
+interface ChSchemaColumn {
+  id: string;
+  name: string;
+  type: string;
+  nullable: boolean;
+  defaultValue: string;
+  comment: string;
+  codec: string;
+}
+
+interface ChCreateTableState {
+  open: boolean;
+  tableName: string;
+  engine: string;
+  orderByColumns: string[];
+  partitionBy: string;
+  comment: string;
+  columns: ChSchemaColumn[];
+  executing: boolean;
+}
+
 const defaultHttpPort = 8123;
 const defaultHttpsPort = 8443;
 const pageSize = 100;
 const tablePreviewLimit = 50;
 const maxResultTabs = 10;
 const maxHistoryItems = 12;
+const clickHouseEngines = ['MergeTree()', 'ReplacingMergeTree()', 'SummingMergeTree()', 'AggregatingMergeTree()', 'Log', 'Memory'];
+const clickHouseColumnTypes = [
+  'Int8',
+  'Int16',
+  'Int32',
+  'Int64',
+  'UInt8',
+  'UInt16',
+  'UInt32',
+  'UInt64',
+  'Float32',
+  'Float64',
+  'String',
+  'FixedString(N)',
+  'DateTime',
+  'Date',
+  'DateTime64',
+  'UUID',
+  'Decimal(P,S)',
+  'Array(T)',
+  'Map(K,V)',
+  'Tuple',
+  'JSON',
+  'IPv4',
+  'IPv6',
+  'Enum8',
+  'Enum16',
+];
+const clickHouseCodecs = ['', 'LZ4', 'ZSTD', 'ZSTD(3)', 'Delta', 'DoubleDelta', 'Gorilla', 'T64'];
+
+function createChSchemaColumn(overrides: Partial<ChSchemaColumn> = {}): ChSchemaColumn {
+  return {
+    id: createId('ch-column'),
+    name: '',
+    type: 'String',
+    nullable: false,
+    defaultValue: '',
+    comment: '',
+    codec: '',
+    ...overrides,
+  };
+}
+
+function createChCreateTableState(): ChCreateTableState {
+  return {
+    open: false,
+    tableName: '',
+    engine: 'MergeTree()',
+    orderByColumns: ['id'],
+    partitionBy: '',
+    comment: '',
+    columns: [
+      createChSchemaColumn({ name: 'id', type: 'Int32' }),
+      createChSchemaColumn({ name: 'name', type: 'String' }),
+      createChSchemaColumn({ name: 'created_at', type: 'DateTime', defaultValue: 'now()' }),
+    ],
+    executing: false,
+  };
+}
 
 function getShellDeskEditorTheme(): 'light' | 'dark' {
   if (typeof document === 'undefined') {
@@ -153,6 +233,65 @@ function createInitialQueryState(): { tabs: ClickHouseQueryTab[]; activeId: stri
 
 function quoteClickHouseString(value: string): string {
   return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+}
+
+function quoteClickHouseQualifiedTable(database: string, tableName: string): string {
+  const trimmedDatabase = database.trim();
+  const trimmedTable = tableName.trim() || 'table_name';
+
+  return trimmedDatabase
+    ? `${quoteIdentifier(trimmedDatabase, 'clickhouse')}.${quoteIdentifier(trimmedTable, 'clickhouse')}`
+    : quoteIdentifier(trimmedTable, 'clickhouse');
+}
+
+function buildClickHouseColumnDefinition(column: ChSchemaColumn): string {
+  const columnType = column.nullable && !/^Nullable\s*\(/i.test(column.type.trim())
+    ? `Nullable(${column.type.trim() || 'String'})`
+    : column.type.trim() || 'String';
+  const parts = [
+    quoteIdentifier(column.name.trim() || 'column_name', 'clickhouse'),
+    columnType,
+  ];
+
+  if (column.defaultValue.trim()) {
+    parts.push('DEFAULT', column.defaultValue.trim());
+  }
+
+  if (column.codec.trim()) {
+    parts.push(`CODEC(${column.codec.trim()})`);
+  }
+
+  if (column.comment.trim()) {
+    parts.push('COMMENT', quoteClickHouseString(column.comment.trim()));
+  }
+
+  return `  ${parts.join(' ')}`;
+}
+
+function generateClickHouseCreateTableSql(state: ChCreateTableState, database: string): string {
+  const columnDefinitions = state.columns.map(buildClickHouseColumnDefinition);
+  const availableColumns = new Set(state.columns.map((column) => column.name.trim()).filter(Boolean));
+  const orderByColumns = state.orderByColumns.filter((column) => availableColumns.has(column));
+  const tableOptions = [
+    `ENGINE = ${state.engine || 'MergeTree()'}`,
+    `ORDER BY (${orderByColumns.map((column) => quoteIdentifier(column, 'clickhouse')).join(', ') || 'tuple()'})`,
+  ];
+
+  if (state.partitionBy.trim()) {
+    tableOptions.push(`PARTITION BY ${state.partitionBy.trim()}`);
+  }
+
+  if (state.comment.trim()) {
+    tableOptions.push(`COMMENT ${quoteClickHouseString(state.comment.trim())}`);
+  }
+
+  return [
+    `CREATE TABLE ${quoteClickHouseQualifiedTable(database, state.tableName)} (`,
+    columnDefinitions.join(',\n'),
+    ')',
+    ...tableOptions,
+    ';',
+  ].join('\n');
 }
 
 function toClickHouseLiteral(value: unknown): string {
@@ -297,6 +436,7 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
   const [sortState, setSortState] = useState<ClickHouseSortState | null>(null);
   const [editorTheme, setEditorTheme] = useState<'light' | 'dark'>(getShellDeskEditorTheme);
   const [contextMenu, setContextMenu] = useState<ClickHouseContextMenuState | null>(null);
+  const [createTableState, setCreateTableState] = useState<ChCreateTableState>(createChCreateTableState);
 
   const isReady = status === 'connected';
   const activeQueryTab = useMemo(() => {
@@ -317,6 +457,9 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
   const canExplainActiveQuery = canRunActiveQuery && !isWriteStatement(activeQueryTab?.sql.trim() ?? '', 'clickhouse');
   const displayPort = parseInt(port, 10) || (secure ? defaultHttpsPort : defaultHttpPort);
   const isNativeTcpPort = displayPort === 9000;
+  const createTableSqlPreview = useMemo(() => (
+    generateClickHouseCreateTableSql(createTableState, activeDb)
+  ), [activeDb, createTableState]);
 
   useEffect(() => {
     let disposed = false;
@@ -409,6 +552,7 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
     setSortState(null);
     setMessage(null);
     setContextMenu(null);
+    setCreateTableState(createChCreateTableState());
   }, []);
 
   const addHistoryItem = useCallback((item: Omit<ClickHouseHistoryItem, 'id' | 'createdAt'>) => {
@@ -654,6 +798,156 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
       return [...prev, tab];
     });
   }, []);
+
+  const openCreateTableDialog = useCallback(() => {
+    setCreateTableState({
+      ...createChCreateTableState(),
+      open: true,
+    });
+  }, []);
+
+  const closeCreateTableDialog = useCallback(() => {
+    setCreateTableState((current) => current.executing ? current : { ...current, open: false });
+  }, []);
+
+  const updateCreateTableColumn = useCallback(<Key extends keyof ChSchemaColumn,>(
+    columnId: string,
+    key: Key,
+    value: ChSchemaColumn[Key],
+  ) => {
+    setCreateTableState((current) => {
+      const nextColumns = current.columns.map((column) => (
+        column.id === columnId ? { ...column, [key]: value } : column
+      ));
+      const nextColumnNames = new Set(nextColumns.map((column) => column.name.trim()).filter(Boolean));
+      const nextOrderByColumns = current.orderByColumns.filter((column) => nextColumnNames.has(column));
+
+      return {
+        ...current,
+        columns: nextColumns,
+        orderByColumns: nextOrderByColumns.length > 0 ? nextOrderByColumns : current.orderByColumns,
+      };
+    });
+  }, []);
+
+  const addCreateTableColumn = useCallback(() => {
+    setCreateTableState((current) => ({
+      ...current,
+      columns: [...current.columns, createChSchemaColumn()],
+    }));
+  }, []);
+
+  const removeCreateTableColumn = useCallback((columnId: string) => {
+    setCreateTableState((current) => {
+      const removedColumn = current.columns.find((column) => column.id === columnId);
+      const removedName = removedColumn?.name.trim();
+      const columns = current.columns.filter((column) => column.id !== columnId);
+
+      return {
+        ...current,
+        columns,
+        orderByColumns: removedName
+          ? current.orderByColumns.filter((column) => column !== removedName)
+          : current.orderByColumns,
+      };
+    });
+  }, []);
+
+  const handleExecuteCreateTable = useCallback(async () => {
+    if (!api?.connections || !clickhouseId) return;
+
+    if (!createTableState.tableName.trim()) {
+      setMessage({ type: 'error', text: tCurrent('auto.remoteClickHouse.pleaseFillTableName') });
+      return;
+    }
+
+    const columns = createTableState.columns.filter((column) => column.name.trim());
+    if (columns.length === 0) {
+      setMessage({ type: 'error', text: tCurrent('auto.remoteClickHouse.pleaseAddColumns') });
+      return;
+    }
+
+    if (createTableState.columns.some((column) => !column.name.trim())) {
+      setMessage({ type: 'error', text: tCurrent('auto.remoteClickHouse.invalidColumnName') });
+      return;
+    }
+
+    const validColumnNames = new Set(createTableState.columns.map((column) => column.name.trim()).filter(Boolean));
+    const validOrderByColumns = createTableState.orderByColumns.filter((column) => validColumnNames.has(column));
+    if (validOrderByColumns.length === 0) {
+      setMessage({ type: 'error', text: tCurrent('auto.remoteClickHouse.pleaseSelectOrderBy') });
+      return;
+    }
+
+    const database = activeDb || undefined;
+    const sqlText = generateClickHouseCreateTableSql(createTableState, activeDb);
+    const startTime = performance.now();
+
+    setCreateTableState((current) => ({ ...current, executing: true }));
+    setMessage(null);
+
+    try {
+      const result = await api.connections.clickhouseQuery(connectionId, clickhouseId, sqlText);
+      const queryTime = Math.round(performance.now() - startTime);
+      addResultTab({
+        id: createId('result'),
+        title: createTableState.tableName.trim(),
+        subtitle: database
+          ? tCurrent('clickhouse.query.databaseSubtitle', { database })
+          : tCurrent('clickhouse.query.noDatabase'),
+        sql: sqlText,
+        database,
+        status: 'success',
+        result,
+        queryTime,
+        createdAt: Date.now(),
+        columns: createGenericColumns(result.columns, 'clickhouse'),
+      });
+      addHistoryItem({
+        sql: sqlText,
+        database,
+        status: 'success',
+        queryTime,
+        rowCount: result.rowCount ?? result.rows.length,
+      });
+      if (activeDb) {
+        setExpandedDbs((current) => new Set(current).add(activeDb));
+        await loadTables(activeDb, true);
+      }
+      setMessage({ type: 'success', text: tCurrent('auto.remoteClickHouse.tableCreated') });
+      setCreateTableState(createChCreateTableState());
+      updateActiveQuerySql(sqlText);
+    } catch (error) {
+      const text = tCurrent('auto.remoteClickHouse.createTableFailed', { error: getErrorMessage(error) });
+      setMessage({ type: 'error', text });
+      addResultTab({
+        id: createId('result'),
+        title: tCurrent('clickhouse.query.failed'),
+        subtitle: database
+          ? tCurrent('clickhouse.query.databaseSubtitle', { database })
+          : tCurrent('clickhouse.query.noDatabase'),
+        sql: sqlText,
+        database,
+        status: 'error',
+        error: text,
+        queryTime: Math.round(performance.now() - startTime),
+        createdAt: Date.now(),
+        columns: [],
+      });
+    } finally {
+      setCreateTableState((current) => ({ ...current, executing: false }));
+    }
+  }, [
+    activeDb,
+    addHistoryItem,
+    addResultTab,
+    api,
+    clickhouseId,
+    connectionId,
+    createTableState,
+    loadTables,
+    updateActiveQuerySql,
+  ]);
 
   const closeQueryTab = useCallback((queryId: string) => {
     setQueryTabs((prev) => {
@@ -1348,6 +1642,9 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
               <strong>{tCurrent('clickhouse.ui.objectBrowser')}</strong>
               <span>{tCurrent('clickhouse.ui.databaseCount', { count: databases.length })}</span>
             </div>
+            <button type="button" onClick={openCreateTableDialog} title={tCurrent('auto.remoteClickHouse.createTable')}>
+              +
+            </button>
             <button type="button" onClick={() => void refreshDatabases()} disabled={schemaLoading} title={tCurrent('clickhouse.ui.refreshDatabasesTitle')}>
               {schemaLoading ? '...' : '↻'}
             </button>
@@ -1769,6 +2066,175 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
               <button type="button" onClick={() => setPendingEdit(null)} disabled={editSaving}>取消</button>
               <button type="button" className="primary" onClick={() => void handleConfirmCellSave()} disabled={editSaving}>
                 {editSaving ? '保存中...' : '确认保存'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+
+      {createTableState.open ? createPortal(
+        <div className="schema-dialog-overlay" role="presentation">
+          <div className="schema-dialog" role="dialog" aria-modal="true" aria-labelledby="clickhouse-create-table-title">
+            <div className="schema-dialog-header">
+              <h3 id="clickhouse-create-table-title">{tCurrent('auto.remoteClickHouse.createTableTitle')}</h3>
+              <button
+                type="button"
+                onClick={closeCreateTableDialog}
+                disabled={createTableState.executing}
+                aria-label={tCurrent('auto.remoteClickHouse.cancel')}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="schema-form-grid">
+              <label className="schema-field">
+                <span>{tCurrent('auto.remoteClickHouse.tableName')}</span>
+                <input
+                  type="text"
+                  value={createTableState.tableName}
+                  onChange={(event) => setCreateTableState((current) => ({ ...current, tableName: event.target.value }))}
+                  autoFocus
+                />
+              </label>
+              <label className="schema-field">
+                <span>{tCurrent('auto.remoteClickHouse.engine')}</span>
+                <select
+                  value={createTableState.engine}
+                  onChange={(event) => setCreateTableState((current) => ({ ...current, engine: event.target.value }))}
+                >
+                  {clickHouseEngines.map((engine) => (
+                    <option key={engine} value={engine}>{engine}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="schema-field">
+                <span>{tCurrent('auto.remoteClickHouse.orderBy')}</span>
+                <select
+                  multiple
+                  value={createTableState.orderByColumns}
+                  onChange={(event) => setCreateTableState((current) => ({
+                    ...current,
+                    orderByColumns: Array.from(event.target.selectedOptions, (option) => option.value),
+                  }))}
+                >
+                  {createTableState.columns.filter((column) => column.name.trim()).map((column) => (
+                    <option key={column.id} value={column.name.trim()}>{column.name.trim()}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="schema-field">
+                <span>{tCurrent('auto.remoteClickHouse.partitionBy')}</span>
+                <input
+                  type="text"
+                  value={createTableState.partitionBy}
+                  onChange={(event) => setCreateTableState((current) => ({ ...current, partitionBy: event.target.value }))}
+                  placeholder="toYYYYMM(created_at)"
+                />
+              </label>
+              <label className="schema-field schema-field-wide">
+                <span>{tCurrent('auto.remoteClickHouse.comment')}</span>
+                <input
+                  type="text"
+                  value={createTableState.comment}
+                  onChange={(event) => setCreateTableState((current) => ({ ...current, comment: event.target.value }))}
+                />
+              </label>
+            </div>
+
+            <div className="schema-section">
+              <div className="schema-section-header">
+                <strong>{tCurrent('auto.remoteClickHouse.columnName')}</strong>
+                <button type="button" onClick={addCreateTableColumn}>{tCurrent('auto.remoteClickHouse.addColumn')}</button>
+              </div>
+              <div className="schema-columns-scroll">
+                <table className="schema-columns-table">
+                  <thead>
+                    <tr>
+                      <th>{tCurrent('auto.remoteClickHouse.columnName')}</th>
+                      <th>{tCurrent('auto.remoteClickHouse.columnType')}</th>
+                      <th>{tCurrent('auto.remoteClickHouse.nullable')}</th>
+                      <th>{tCurrent('auto.remoteClickHouse.defaultValue')}</th>
+                      <th>{tCurrent('auto.remoteClickHouse.codec')}</th>
+                      <th>{tCurrent('auto.remoteClickHouse.comment')}</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {createTableState.columns.map((column) => (
+                      <tr key={column.id}>
+                        <td>
+                          <input
+                            type="text"
+                            value={column.name}
+                            onChange={(event) => updateCreateTableColumn(column.id, 'name', event.target.value)}
+                          />
+                        </td>
+                        <td>
+                          <select value={column.type} onChange={(event) => updateCreateTableColumn(column.id, 'type', event.target.value)}>
+                            {clickHouseColumnTypes.map((type) => (
+                              <option key={type} value={type}>{type}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={column.nullable}
+                            onChange={(event) => updateCreateTableColumn(column.id, 'nullable', event.target.checked)}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            type="text"
+                            value={column.defaultValue}
+                            onChange={(event) => updateCreateTableColumn(column.id, 'defaultValue', event.target.value)}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            type="text"
+                            list="clickhouse-codec-options"
+                            value={column.codec}
+                            onChange={(event) => updateCreateTableColumn(column.id, 'codec', event.target.value)}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            type="text"
+                            value={column.comment}
+                            onChange={(event) => updateCreateTableColumn(column.id, 'comment', event.target.value)}
+                          />
+                        </td>
+                        <td>
+                          <button type="button" onClick={() => removeCreateTableColumn(column.id)}>
+                            {tCurrent('auto.remoteClickHouse.removeColumn')}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <datalist id="clickhouse-codec-options">
+                  {clickHouseCodecs.filter(Boolean).map((codec) => (
+                    <option key={codec} value={codec} />
+                  ))}
+                </datalist>
+              </div>
+            </div>
+
+            <label className="schema-field schema-preview-field">
+              <span>{tCurrent('auto.remoteClickHouse.sqlPreview')}</span>
+              <textarea className="schema-preview" value={createTableSqlPreview} readOnly spellCheck={false} />
+            </label>
+
+            <div className="schema-actions">
+              <button type="button" onClick={closeCreateTableDialog} disabled={createTableState.executing}>
+                {tCurrent('auto.remoteClickHouse.cancel')}
+              </button>
+              <button type="button" className="primary" onClick={() => void handleExecuteCreateTable()} disabled={createTableState.executing}>
+                {createTableState.executing ? tCurrent('clickhouse.query.runningButton') : tCurrent('auto.remoteClickHouse.executeCreate')}
               </button>
             </div>
           </div>
