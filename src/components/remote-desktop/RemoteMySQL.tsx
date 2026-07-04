@@ -552,7 +552,7 @@ function parseCreateTableSql(sql: string): CreateTableState {
   const openIndex = sql.indexOf('(');
   const closeIndex = openIndex >= 0 ? findMysqlMatchingParen(sql, openIndex) : -1;
   if (openIndex < 0 || closeIndex <= openIndex) {
-    throw new Error('Invalid CREATE TABLE SQL');
+    throw new Error('parse table structure error');
   }
 
   const definitions = splitMysqlTopLevelList(sql.slice(openIndex + 1, closeIndex));
@@ -3227,6 +3227,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
                               type="text"
                               value={column.name}
                               onChange={(event) => updateCreateTableColumn(column.id, 'name', event.target.value)}
+                              disabled={createTableState.mode === 'edit'}
                             />
                           </td>
                           <td>

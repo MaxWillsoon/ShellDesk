@@ -522,7 +522,7 @@ function parseClickHouseCreateTableSql(sql: string): ChCreateTableState {
   const openIndex = createMatch ? sql.indexOf('(', createMatch.index) : -1;
   const closeIndex = openIndex >= 0 ? findClickHouseMatchingParen(sql, openIndex) : -1;
   if (!createMatch || openIndex < 0 || closeIndex <= openIndex) {
-    throw new Error('Invalid CREATE TABLE SQL');
+    throw new Error('parse table structure error');
   }
 
   const rawTableName = createMatch[1].replace(/\s+ON\s+CLUSTER\s+.+$/iu, '').trim();
@@ -3175,6 +3175,7 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
                             type="text"
                             value={column.name}
                             onChange={(event) => updateCreateTableColumn(column.id, 'name', event.target.value)}
+                            disabled={createTableState.mode === 'edit'}
                           />
                         </td>
                         <td>

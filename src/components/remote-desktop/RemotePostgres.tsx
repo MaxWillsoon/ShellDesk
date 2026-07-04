@@ -1539,7 +1539,7 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
       const queryTime = Math.round(performance.now() - startTime);
       addResultTab({
         id: createId('pg-result'),
-        title: '执行失败',
+        title: tCurrent('auto.remotePostgres.wq5uqu'),
         subtitle: database,
         sql: sqlStatements.join('\n'),
         status: 'error',
