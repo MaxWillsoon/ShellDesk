@@ -270,10 +270,7 @@ pub(crate) async fn export_config(state: &AppState) -> Result<Value, String> {
     let text = dialog_text(dialog_language_from_store(&store));
     let mut dialog = rfd::FileDialog::new()
         .set_title(text.export_config)
-        .set_file_name(format!(
-            "shelldesk-config-{}.json",
-            crate::now()[..10].to_string()
-        ))
+        .set_file_name(format!("shelldesk-config-{}.json", &crate::now()[..10]))
         .add_filter(text.shell_desk_config, &["json"]);
     if let Some(documents_dir) = dirs::document_dir() {
         dialog = dialog.set_directory(documents_dir);

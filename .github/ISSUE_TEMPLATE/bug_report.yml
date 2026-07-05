@@ -36,7 +36,6 @@ body:
       options:
         - Packaged release
         - pnpm dev
-        - pnpm start
         - Built from source
         - Other
     validations:

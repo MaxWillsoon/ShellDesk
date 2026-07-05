@@ -107,7 +107,7 @@ fn local_os_release() -> String {
     {
         let mut command = std::process::Command::new("cmd");
         prevent_process_window(&mut command);
-        return command
+        command
             .args(["/C", "ver"])
             .output()
             .ok()
@@ -119,7 +119,7 @@ fn local_os_release() -> String {
                     .map(|value| value.trim().trim_end_matches(']').to_string())
                     .filter(|value| !value.is_empty())
             })
-            .unwrap_or_else(|| std::env::consts::OS.to_string());
+            .unwrap_or_else(|| std::env::consts::OS.to_string())
     }
 
     #[cfg(not(windows))]
@@ -778,7 +778,7 @@ fn cleanup_temporary_key_paths_immediate(paths: Vec<PathBuf>) {
 }
 
 fn cleanup_temporary_key_path(path: &PathBuf) {
-    match fs::remove_file(&path) {
+    match fs::remove_file(path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => eprintln!(

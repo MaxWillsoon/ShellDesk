@@ -16,7 +16,10 @@ pub(crate) use clickhouse::{
     clickhouse_tables,
 };
 #[cfg(test)]
-use config::{MysqlConnectConfig, PostgresConnectConfig, RedisConnectConfig};
+use config::{
+    ClickHouseConnectConfig, MongoConnectConfig, MysqlConnectConfig, PostgresConnectConfig,
+    RedisConnectConfig,
+};
 use core::DbTunnelError;
 pub(crate) use core::{
     disconnect, has_session, is_tunnel_mode, start_idle_cleanup, DatabaseTunnelSession,
@@ -153,6 +156,47 @@ mod tests {
         assert_eq!(config.host, "127.0.0.1");
         assert_eq!(config.port, 6379);
         assert_eq!(config.database, 0);
+    }
+
+    #[tokio::test]
+    async fn async_database_tunnel_config_contracts_cover_core_drivers() {
+        tokio::task::yield_now().await;
+
+        let mysql: MysqlConnectConfig = serde_json::from_value(json!({
+            "mode": "tunnel",
+            "host": "db.internal",
+            "port": 3307,
+            "database": "app"
+        }))
+        .unwrap();
+        assert_eq!(mysql.mode, "tunnel");
+        assert_eq!(mysql.host, "db.internal");
+        assert_eq!(mysql.port, 3307);
+        assert_eq!(mysql.database.as_deref(), Some("app"));
+
+        let postgres: PostgresConnectConfig = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(postgres.host, "127.0.0.1");
+        assert_eq!(postgres.port, 5432);
+        assert_eq!(postgres.database, "postgres");
+
+        let redis: RedisConnectConfig = serde_json::from_value(json!({ "db": 2 })).unwrap();
+        assert_eq!(redis.database, 2);
+
+        let clickhouse: ClickHouseConnectConfig =
+            serde_json::from_value(json!({ "secure": true })).unwrap();
+        assert_eq!(clickhouse.host, "127.0.0.1");
+        assert!(clickhouse.secure);
+
+        let mongo: MongoConnectConfig = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(mongo.auth_source, "admin");
+
+        assert_eq!(
+            session_key("mysql", "conn-1", "mysql-1"),
+            "mysql:conn-1:mysql-1"
+        );
+        assert!(validate_database_endpoint("127.0.0.1", 3306).is_ok());
+        assert!(validate_database_endpoint("", 3306).is_err());
+        assert!(validate_database_endpoint("127.0.0.1", 0).is_err());
     }
 
     #[test]

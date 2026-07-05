@@ -513,3 +513,79 @@ fn session_key(request: &HttpTunnelRequest) -> String {
         request.target_port
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parses_object_http_tunnel_request_and_normalizes_session_key() {
+        let request = parse_request(vec![json!({
+            "connectionId": "conn-1",
+            "targetHost": "Api.EXAMPLE.test",
+            "targetPort": 8443,
+            "path": "/health",
+            "timeoutSeconds": 5,
+            "headers": { "x-test": "ok" }
+        })])
+        .unwrap();
+
+        assert_eq!(request.connection_id, "conn-1");
+        assert_eq!(request.target_host, "Api.EXAMPLE.test");
+        assert_eq!(request.target_port, 8443);
+        assert_eq!(request.path, "/health");
+        assert_eq!(request_timeout(&request), Duration::from_secs(5));
+        assert_eq!(session_key(&request), "conn-1:api.example.test:8443");
+    }
+
+    #[test]
+    fn rejects_unsafe_http_tunnel_paths() {
+        assert!(validate_path("/api").is_ok());
+        assert!(validate_path("api").is_err());
+        assert!(validate_path("//example.test").is_err());
+        assert!(validate_path("https://example.test/api").is_err());
+    }
+
+    #[tokio::test]
+    async fn async_http_tunnel_timeout_and_host_header_contracts() {
+        tokio::task::yield_now().await;
+
+        let default_timeout_request = parse_request(vec![
+            json!("conn-1"),
+            json!("service.internal"),
+            json!(80),
+            json!("/"),
+            Value::Null,
+            Value::Null,
+            json!(false),
+            json!(false),
+            json!(0),
+        ])
+        .unwrap();
+        assert_eq!(request_timeout(&default_timeout_request), HTTP_TIMEOUT);
+
+        let clamped_timeout_request = parse_request(vec![
+            json!("conn-1"),
+            json!("service.internal"),
+            json!(443),
+            json!("/"),
+            Value::Null,
+            Value::Null,
+            json!(false),
+            json!(true),
+            json!(601),
+        ])
+        .unwrap();
+        assert_eq!(request_timeout(&clamped_timeout_request), HTTP_TIMEOUT);
+
+        assert_eq!(
+            target_host_header("example.test", 443, "https"),
+            "example.test"
+        );
+        assert_eq!(
+            target_host_header("example.test", 8443, "https"),
+            "example.test:8443"
+        );
+    }
+}

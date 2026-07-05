@@ -113,9 +113,10 @@ try {
   assert.equal(tauriConfig.bundle.windows.nsis.installMode, 'both');
 
   const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
-  for (const scriptName of ['release', 'pack', 'pack:dir', 'pack:win', 'pack:win-x64', 'pack:win-arm64', 'pack:mac', 'pack:linux', 'pack:linux-x64', 'pack:linux-arm64']) {
+  for (const scriptName of ['release', 'pack', 'pack:dir', 'pack:win-x64', 'pack:win-arm64', 'pack:mac', 'pack:linux', 'pack:linux-x64', 'pack:linux-arm64']) {
     assert.match(packageJson.scripts[scriptName], /node scripts\/run-tauri-build\.cjs/);
   }
+  assert.ok(!Object.hasOwn(packageJson.scripts, 'pack:win'));
 
   const buildWrapper = fs.readFileSync(path.join(repoRoot, 'scripts/run-tauri-build.cjs'), 'utf8');
   assert.match(buildWrapper, /TAURI_UPDATER_PUBLIC_KEY/);

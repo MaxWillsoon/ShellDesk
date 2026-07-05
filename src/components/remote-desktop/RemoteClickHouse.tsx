@@ -3378,6 +3378,7 @@ function RemoteClickHouse({ connectionId, hostId }: RemoteClickHouseProps) {
             {pendingEdit.error ? (
               <DismissibleAlert
                 className="mysql-message-banner error"
+                inline
                 onDismiss={() => setPendingEdit((current) => (current ? { ...current, error: '' } : current))}
                 role="alert"
               >

@@ -415,6 +415,7 @@ pub(super) fn conflict_summary(conflicts: &[Value]) -> Value {
     Value::Array(items)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn sync_summary(
     local_records: &Value,
     local_tombstones: &Value,

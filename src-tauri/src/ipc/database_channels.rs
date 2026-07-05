@@ -84,3 +84,38 @@ pub(crate) async fn dispatch(
 
     Some(result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::is_database_channel;
+
+    #[test]
+    fn database_channel_classifier_matches_all_database_prefixes_only() {
+        for channel in [
+            "connection:mysql-query",
+            "connection:postgres-query",
+            "connection:redis-scan",
+            "connection:sqlite-query",
+            "connection:clickhouse-query",
+            "connection:mongo-query",
+        ] {
+            assert!(
+                is_database_channel(channel),
+                "{channel} should be database IPC"
+            );
+        }
+
+        for channel in [
+            "connection:run-command",
+            "connection:http-tunnel-get",
+            "connection:get-ipc-capabilities",
+            "vault:get-snapshot",
+            "ai:chat",
+        ] {
+            assert!(
+                !is_database_channel(channel),
+                "{channel} should not be database IPC"
+            );
+        }
+    }
+}

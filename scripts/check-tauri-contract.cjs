@@ -47,20 +47,24 @@ assert.equal(packageJson.license, 'GPL-3.0-only');
 assert.ok(!Object.hasOwn(packageJson, 'main'), 'Tauri package.json must not expose an Electron main entry');
 
 assertScript(packageJson, 'dev', 'tauri dev');
-assertScript(packageJson, 'start', 'tauri dev');
 assertScript(packageJson, 'build', 'pnpm typecheck && vite build');
 assertScript(packageJson, 'preview', 'vite preview --host 127.0.0.1');
-assertScript(packageJson, 'release:dir', 'pnpm pack:dir');
 assertScript(packageJson, 'smoke:tauri-dev', 'node scripts/check-tauri-dev-start.cjs');
 assertScript(packageJson, 'smoke:ssh-live', 'node scripts/check-live-ssh-smoke.cjs');
-assert.equal(packageJson.scripts['check:tauri'], 'node scripts/check-tauri-contract.cjs');
-assert.match(packageJson.scripts.test, /pnpm check:tauri/);
+assert.equal(
+  packageJson.scripts['check:contracts'],
+  'node scripts/check-ipc-parity.cjs && node scripts/check-desktop-app-contract.cjs && node scripts/check-i18n-contract.cjs && node scripts/check-runtime-boundary.cjs && node scripts/check-tauri-contract.cjs && node scripts/check-default-settings-parity.cjs && node scripts/test-release-scripts.cjs',
+);
+assert.match(packageJson.scripts.test, /pnpm check:contracts/);
+
+for (const removedAlias of ['start', 'release:dir', 'pack:win']) {
+  assert.ok(!Object.hasOwn(packageJson.scripts, removedAlias), `${removedAlias} must not be reintroduced as a duplicate script alias`);
+}
 
 for (const scriptName of [
   'release',
   'pack',
   'pack:dir',
-  'pack:win',
   'pack:win-x64',
   'pack:win-arm64',
   'pack:mac',

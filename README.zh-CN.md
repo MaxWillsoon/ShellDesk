@@ -192,9 +192,11 @@ Stop-Process -Id <PID>
 | `pnpm dev` | 启动 Tauri 开发窗口和 Vite |
 | `pnpm typecheck` | 执行 TypeScript 类型检查 |
 | `pnpm build` | `tsc --noEmit` 后执行 Vite 生产构建 |
-| `pnpm test` | 执行 IPC 检查、发布脚本检查、前端构建、Rust fmt/test 和 `cargo check` |
-| `pnpm check:rust` | 执行 Rust 格式检查和测试 |
-| `pnpm start` | 启动 Tauri 开发窗口 |
+| `pnpm test` | 执行合同检查、前端构建、Playwright UI 冒烟、Rust fmt/clippy/test 和 `cargo check` |
+| `pnpm check:contracts` | 执行 IPC、桌面应用、i18n、运行时边界、Tauri、默认设置和发布脚本合同检查 |
+| `pnpm check:ui` | 执行数据库错误流程的 Playwright UI 冒烟 |
+| `pnpm check:rust` | 执行 Rust 格式检查、clippy `-D warnings` 和测试 |
+| `pnpm check:rust:coverage` | 使用 `cargo-llvm-cov` 生成 Rust 覆盖率摘要 |
 | `pnpm preview` | 预览 Vite 前端构建，不包含 Tauri 后端能力 |
 | `pnpm release` | 构建安装包 |
 

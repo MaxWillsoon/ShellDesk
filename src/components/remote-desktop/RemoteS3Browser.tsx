@@ -752,6 +752,7 @@ function RemoteS3Browser({ connectionId, hostId, systemType }: RemoteS3BrowserPr
             {pendingAction.error ? (
               <DismissibleAlert
                 className="s3-alert danger"
+                inline
                 onDismiss={() => setPendingAction((current) => (current ? { ...current, error: '' } : current))}
                 role="alert"
               >

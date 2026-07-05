@@ -192,13 +192,15 @@ Stop-Process -Id <PID>
 | `pnpm dev` | Starts the Tauri development window with Vite |
 | `pnpm typecheck` | Runs TypeScript type checking |
 | `pnpm build` | Runs `tsc --noEmit` and then the Vite production build |
-| `pnpm test` | Runs IPC checks, release-script checks, frontend build, Rust fmt/test, and `cargo check` |
-| `pnpm check:rust` | Runs Rust format checks and tests |
-| `pnpm start` | Starts the Tauri development window |
+| `pnpm test` | Runs contract checks, frontend build, Playwright UI smoke tests, Rust fmt/clippy/tests, and `cargo check` |
+| `pnpm check:contracts` | Runs IPC, desktop app, i18n, runtime-boundary, Tauri, default-settings, and release-script contract checks |
+| `pnpm check:ui` | Runs Playwright UI smoke tests for mocked database error flows |
+| `pnpm check:rust` | Runs Rust format checks, clippy with `-D warnings`, and tests |
+| `pnpm check:rust:coverage` | Runs Rust coverage with `cargo-llvm-cov` |
 | `pnpm preview` | Previews the Vite frontend build without Tauri backend capabilities |
 | `pnpm release` | Builds installer |
 
-More platform packaging scripts are available in [package.json](package.json).
+More platform packaging scripts are available in [package.json](package.json). See [docs/testing.md](docs/testing.md) for the testing layers and optional live smoke checks.
 
 ---
 

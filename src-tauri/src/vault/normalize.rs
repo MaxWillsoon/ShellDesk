@@ -545,10 +545,7 @@ fn read_remote_desktop_layout(value: Option<&Value>) -> Result<Value, String> {
         }
     }
     if app_catalog_version < REMOTE_DESKTOP_APP_CATALOG_VERSION {
-        let migration_key_set = REMOTE_DESKTOP_APP_CATALOG_MIGRATION_KEYS
-            .iter()
-            .copied()
-            .collect::<Vec<_>>();
+        let migration_key_set = REMOTE_DESKTOP_APP_CATALOG_MIGRATION_KEYS.to_vec();
         let legacy_app_keys = REMOTE_DESKTOP_APP_KEYS
             .iter()
             .copied()

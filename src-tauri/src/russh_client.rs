@@ -559,7 +559,7 @@ async fn open_agent_client(
             }
         }
         let agent = AgentClient::connect_pageant().await;
-        return Ok(agent.dynamic());
+        Ok(agent.dynamic())
     }
 
     #[cfg(not(any(unix, windows)))]

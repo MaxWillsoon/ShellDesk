@@ -13,7 +13,7 @@ const MAX_REMOTE_TEXT_WRITE_BYTES: usize = 10 * 1024 * 1024;
 pub(crate) fn list_local_directory(args: Vec<Value>) -> Result<Value, String> {
     let path = path_arg(&args, 1)?;
     #[cfg(windows)]
-    if path == PathBuf::from("/") {
+    if path == *"/" {
         return list_windows_drive_roots();
     }
     let metadata = fs::metadata(&path).map_err(error_string)?;
@@ -329,7 +329,7 @@ fn run_local_sudo(args: Vec<String>, stdin: String) -> Result<Vec<u8>, String> {
     #[cfg(not(unix))]
     {
         let _ = (args, stdin);
-        return Err("当前平台不支持 sudo 本地提权。".to_string());
+        Err("当前平台不支持 sudo 本地提权。".to_string())
     }
 
     #[cfg(unix)]
@@ -749,10 +749,10 @@ fn normalize_local_path(raw_path: String) -> PathBuf {
         if path.is_absolute() {
             return path;
         }
-        return dirs::home_dir()
+        dirs::home_dir()
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."))
-            .join(path);
+            .join(path)
     }
 
     #[cfg(not(windows))]
@@ -953,7 +953,7 @@ mod tests {
     #[test]
     fn normalizes_empty_local_path_to_home_or_current_dir() {
         let path = normalize_local_path("".to_string());
-        assert!(path.is_absolute() || path == PathBuf::from("."));
+        assert!(path.is_absolute() || path == *".");
     }
 
     #[cfg(windows)]

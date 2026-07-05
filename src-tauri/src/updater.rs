@@ -101,7 +101,7 @@ async fn check_tauri_update(app: tauri::AppHandle) -> Result<Option<Value>, Stri
             "downloadName": update
                 .download_url
                 .path_segments()
-                .and_then(|segments| segments.last())
+                .and_then(|mut segments| segments.next_back())
                 .unwrap_or("ShellDesk-update"),
             "downloadUrl": update.download_url.to_string(),
             "downloadSize": 0,
@@ -412,10 +412,8 @@ impl VersionParts {
             .split_once('+')
             .map(|(version, _)| version)
             .unwrap_or_else(|| value.trim().trim_start_matches('v').trim_start_matches('V'));
-        let (main_version, prerelease) = without_build
-            .split_once('-')
-            .map(|(main, pre)| (main, pre))
-            .unwrap_or((without_build, ""));
+        let (main_version, prerelease) =
+            without_build.split_once('-').unwrap_or((without_build, ""));
         let numbers = main_version
             .split('.')
             .map(|part| {

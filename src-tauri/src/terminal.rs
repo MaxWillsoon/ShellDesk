@@ -914,37 +914,18 @@ fn terminal_keys_for_connection<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::SshProfile;
+    use crate::test_helpers::active_ssh_connection;
     use serde_json::json;
-    use std::collections::HashSet;
 
     fn ssh_connection(
         system_type: &str,
         privilege: Option<crate::PrivilegeConfig>,
     ) -> ActiveConnection {
-        ActiveConnection {
-            id: "conn-1".to_string(),
-            kind: ConnectionKind::Ssh,
-            partition: "persist:conn-1".to_string(),
-            proxy_port: 0,
-            browser_certificate_trust: HashSet::new(),
-            connected_at: "now".to_string(),
-            host: json!({ "systemType": system_type }),
-            ssh: Some(SshProfile {
-                address: "example.test".to_string(),
-                port: 22,
-                username: "root".to_string(),
-                auth_method: "password".to_string(),
-                password: "secret".to_string(),
-                key_path: String::new(),
-                known_hosts_path: String::new(),
-                proxy_helper_exe: String::new(),
-                proxy: None,
-                jump: None,
-            }),
-            privilege,
-            temporary_key_paths: Vec::new(),
+        let mut connection = active_ssh_connection(system_type, privilege);
+        if let Some(profile) = connection.ssh.as_mut() {
+            profile.username = "root".to_string();
         }
+        connection
     }
 
     #[test]

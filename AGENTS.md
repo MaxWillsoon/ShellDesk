@@ -8,15 +8,15 @@ Tauri 2 + Rust + React 19 + TypeScript + Vite 图形化 SSH 客户端。pnpm（�
 pnpm dev            # 通过 Tauri 启动 Vite (127.0.0.1:5173) 和桌面窗口
 pnpm typecheck      # tsc --noEmit
 pnpm build          # pnpm typecheck && vite build
-pnpm test           # IPC/发布脚本/前端构建/Rust fmt+test/cargo check
+pnpm test           # 合同检查/前端构建/UI 冒烟/Rust fmt+clippy+test/cargo check
 pnpm preview        # Vite preview，绑定 127.0.0.1
-pnpm start          # 启动 Tauri 开发窗口
-pnpm check:rust     # cargo fmt --check + cargo test
+pnpm check:contracts # IPC/桌面应用/i18n/Tauri/默认设置/发布脚本合同检查
+pnpm check:ui       # Playwright UI 冒烟
+pnpm check:rust     # cargo fmt --check + cargo clippy -D warnings + cargo test
+pnpm check:rust:coverage # cargo-llvm-cov 覆盖率摘要
 pnpm release        # Windows x64 NSIS 安装包
-pnpm release:dir    # pnpm pack:dir 的别名
 pnpm pack:dir       # Tauri debug bundle
 pnpm pack           # Tauri 默认目标打包
-pnpm pack:win       # Windows x64
 pnpm pack:win-x64   # Windows x64
 pnpm pack:win-arm64 # Windows arm64
 pnpm pack:mac       # macOS

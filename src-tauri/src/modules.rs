@@ -42,6 +42,9 @@ pub(crate) mod sync_backend;
 pub(crate) mod system;
 #[path = "terminal.rs"]
 pub(crate) mod terminal;
+#[cfg(test)]
+#[path = "test_helpers.rs"]
+pub(crate) mod test_helpers;
 #[path = "tray.rs"]
 pub(crate) mod tray;
 #[path = "ui_prompts.rs"]

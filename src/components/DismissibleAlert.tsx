@@ -12,8 +12,10 @@ interface DismissibleAlertProps {
   className: string;
   children: ReactNode;
   onDismiss: () => void;
+  inline?: boolean;
   role?: 'alert' | 'status';
   source?: string;
+  'data-testid'?: string;
 }
 
 function createLogId() {
@@ -118,7 +120,7 @@ function shouldLogAlert(alertKey: string) {
   return true;
 }
 
-function DismissibleAlert({ className, children, onDismiss, role = 'status', source }: DismissibleAlertProps) {
+function DismissibleAlert({ className, children, onDismiss, inline = false, role = 'status', source, 'data-testid': testId }: DismissibleAlertProps) {
   const language = useCurrentAppLanguage();
   const closeLabel = t('common.closeAlert', language);
   const [portalElement, setPortalElement] = useState<HTMLDivElement | null>(null);
@@ -127,6 +129,11 @@ function DismissibleAlert({ className, children, onDismiss, role = 'status', sou
   const loggedAlertKeyRef = useRef('');
 
   useEffect(() => {
+    if (inline) {
+      setPortalElement(null);
+      return undefined;
+    }
+
     const layer = getAlertLayer();
     const element = document.createElement('div');
     element.className = 'shelldesk-alert-slot';
@@ -139,7 +146,7 @@ function DismissibleAlert({ className, children, onDismiss, role = 'status', sou
         layer.remove();
       }
     };
-  }, []);
+  }, [inline]);
 
   useEffect(() => {
     const timer = window.setTimeout(onDismiss, alertAutoDismissMs);
@@ -181,13 +188,17 @@ function DismissibleAlert({ className, children, onDismiss, role = 'status', sou
   }, [alertSource, alertText, className, language, role]);
 
   const alert = (
-    <div className={`dismissible-alert ${className}`} role={role}>
+    <div className={`dismissible-alert ${className}`} data-testid={testId} role={role}>
       <span className="dismissible-alert-content">{children}</span>
       <button type="button" className="dismissible-alert-close" onClick={onDismiss} aria-label={closeLabel} title={closeLabel}>
         ×
       </button>
     </div>
   );
+
+  if (inline) {
+    return alert;
+  }
 
   if (!portalElement) {
     return null;

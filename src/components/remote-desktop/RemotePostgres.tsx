@@ -2771,6 +2771,7 @@ function RemotePostgres({ connectionId, hostId }: RemotePostgresProps) {
             {pendingEdit.error ? (
               <DismissibleAlert
                 className="postgres-error-banner"
+                inline
                 onDismiss={() => setPendingEdit((current) => (current ? { ...current, error: '' } : current))}
                 role="alert"
               >

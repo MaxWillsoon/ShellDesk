@@ -647,9 +647,9 @@ pub(crate) async fn upload_connection_paths(
     let mut file_count = 0_u64;
     let planned_total = items
         .iter()
-        .filter_map(|item| {
+        .map(|item| {
             let path = PathBuf::from(read_string_field(item, "path", ""));
-            Some(local_path_file_stats(&path).0)
+            local_path_file_stats(&path).0
         })
         .sum::<u64>();
     let planned_files = items
@@ -854,39 +854,16 @@ pub(crate) async fn decompress_connection_archive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ActiveConnection, ActiveTransfer, PrivilegeConfig, SshProfile};
-    use std::collections::HashSet;
+    use crate::{
+        test_helpers::active_ssh_connection, ActiveConnection, ActiveTransfer, PrivilegeConfig,
+    };
 
     fn test_ssh_connection(privilege: Option<PrivilegeConfig>) -> ActiveConnection {
-        ActiveConnection {
-            id: "conn-1".to_string(),
-            kind: ConnectionKind::Ssh,
-            partition: "persist:conn-1".to_string(),
-            proxy_port: 0,
-            browser_certificate_trust: HashSet::new(),
-            connected_at: "now".to_string(),
-            host: json!({ "systemType": "linux" }),
-            ssh: Some(SshProfile {
-                address: "example.test".to_string(),
-                port: 22,
-                username: "user".to_string(),
-                auth_method: "password".to_string(),
-                password: "secret".to_string(),
-                key_path: String::new(),
-                known_hosts_path: String::new(),
-                proxy_helper_exe: String::new(),
-                proxy: None,
-                jump: None,
-            }),
-            privilege,
-            temporary_key_paths: Vec::new(),
-        }
+        active_ssh_connection("linux", privilege)
     }
 
     fn test_windows_connection() -> ActiveConnection {
-        let mut connection = test_ssh_connection(None);
-        connection.host = json!({ "systemType": "windows" });
-        connection
+        active_ssh_connection("windows", None)
     }
 
     #[test]

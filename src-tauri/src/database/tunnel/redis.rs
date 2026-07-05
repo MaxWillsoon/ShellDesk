@@ -285,13 +285,10 @@ async fn connect_redis_direct(
         RedisConfig::from_url(&redis_url).map_err(|error| format!("Redis URL 无效：{error}"))?;
     let client = RedisClient::new(redis_config, None, None, None);
     client.connect();
-    if let Err(error) = timeout_result(METADATA_TIMEOUT, client.wait_for_connect(), |error| {
+    timeout_result(METADATA_TIMEOUT, client.wait_for_connect(), |error| {
         DbTunnelError::RedisConnect(error.to_string()).user_message()
     })
-    .await
-    {
-        return Err(error);
-    }
+    .await?;
     let ping: Result<RedisValue, String> = timeout_result(
         METADATA_TIMEOUT,
         client.custom(

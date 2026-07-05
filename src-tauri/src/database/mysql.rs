@@ -101,7 +101,7 @@ pub(crate) async fn mysql_columns(state: &AppState, args: Vec<Value>) -> Result<
         .skip(1)
         .map(|row| {
             json!({
-                "name": row.get(0).cloned().unwrap_or_default(),
+                "name": row.first().cloned().unwrap_or_default(),
                 "type": row.get(1).cloned().unwrap_or_default(),
                 "nullable": row.get(2).is_some_and(|value| value == "YES"),
                 "key": row.get(3).cloned().unwrap_or_default(),
@@ -264,9 +264,9 @@ pub(super) fn mysql_cli_commands(
 ) -> (String, String) {
     let mut posix = format!(
         "mysql --batch --raw --host={} --port={} --user={}",
-        shell_quote(&host),
+        shell_quote(host),
         port,
-        shell_quote(&user)
+        shell_quote(user)
     );
     let mut windows = format!(
         "mysql --batch --raw --host={} --port={} --user={}",

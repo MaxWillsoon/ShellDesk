@@ -524,8 +524,7 @@ fn normalize_model_entry(raw_model: &Value) -> Option<Value> {
             Value::Number(value) => value
                 .as_i64()
                 .filter(|value| *value > 0)
-                .map(|value| Utc.timestamp_opt(value, 0).single())
-                .flatten()
+                .and_then(|value| Utc.timestamp_opt(value, 0).single())
                 .map(|value| value.to_rfc3339()),
             _ => None,
         });

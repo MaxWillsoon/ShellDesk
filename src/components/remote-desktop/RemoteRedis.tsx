@@ -1082,7 +1082,7 @@ function RemoteRedis({ connectionId, hostId }: RemoteRedisProps) {
             <strong>{host || '127.0.0.1'}:{parseInt(port, 10) || defaultPort} · {tCurrent('redis.connection.databaseLabel')} {parseInt(dbNum, 10) || 0}</strong>
             <em>{tCurrent('auto.remoteRedis.1urpodq')}</em>
           </div>
-          <button type="submit" className="redis-connect-btn" disabled={status === 'connecting'}>
+          <button type="submit" className="redis-connect-btn" data-testid="redis-connect-submit" disabled={status === 'connecting'}>
             {status === 'connecting' ? tCurrent('auto.remoteRedis.1i0m8cf') : tCurrent('auto.remoteRedis.fuxatj')}
           </button>
         </form>
@@ -1141,6 +1141,7 @@ function RemoteRedis({ connectionId, hostId }: RemoteRedisProps) {
                 key={entry.name}
                 type="button"
                 className={`redis-key-btn ${selectedKey === entry.name ? 'selected' : ''}`}
+                data-testid="redis-key-row"
                 onClick={() => void handleSelectKey(entry.name)}
                 title={`${entry.name}\n${getKeyTypeLabel(entry.type)} · ${formatTtl(entry.ttl)} · ${formatSizeHint(entry.type, entry.size)}`}
               >
@@ -1225,7 +1226,7 @@ function RemoteRedis({ connectionId, hostId }: RemoteRedisProps) {
                       <button type="button" onClick={handleFormatJson}>{tCurrent('auto.remoteRedis.1i126as')}</button>
                     ) : null}
                     <button type="button" className="redis-save-btn" onClick={requestSaveKeyValue} disabled={!valueEditable}>{tCurrent('auto.remoteRedis.1c3mapc2')}</button>
-                    <button type="button" className="redis-delete-key-btn" onClick={requestDeleteKey}>{tCurrent('auto.remoteRedis.1t2vi4h2')}</button>
+                    <button type="button" className="redis-delete-key-btn" data-testid="redis-delete-key-open" onClick={requestDeleteKey}>{tCurrent('auto.remoteRedis.1t2vi4h2')}</button>
                   </div>
                 </div>
                 {keyValue.truncated ? (
@@ -1285,7 +1286,7 @@ function RemoteRedis({ connectionId, hostId }: RemoteRedisProps) {
 
       {pendingAction ? createPortal(
         <div className="redis-modal-backdrop" role="presentation">
-          <div className="redis-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="redis-confirm-title">
+          <div className="redis-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="redis-confirm-title" data-testid="redis-confirm-dialog">
             <div className="redis-confirm-header">
               <strong id="redis-confirm-title">{pendingAction.title}</strong>
               <span>{pendingAction.danger ? tCurrent('auto.remoteRedis.5n03rt') : tCurrent('auto.remoteRedis.1gm39ou')}</span>
@@ -1294,6 +1295,8 @@ function RemoteRedis({ connectionId, hostId }: RemoteRedisProps) {
             {pendingAction.error ? (
               <DismissibleAlert
                 className="redis-message-banner error"
+                data-testid="redis-confirm-error"
+                inline
                 onDismiss={() => setPendingAction((current) => (current ? { ...current, error: '' } : current))}
                 role="alert"
               >
@@ -1302,7 +1305,7 @@ function RemoteRedis({ connectionId, hostId }: RemoteRedisProps) {
             ) : null}
             <div className="redis-confirm-actions">
               <button type="button" onClick={() => setPendingAction(null)} disabled={pendingRunning}>{tCurrent('auto.remoteRedis.1589w37')}</button>
-              <button type="button" className={pendingAction.danger ? 'danger' : 'primary'} onClick={() => void handleConfirmPendingAction()} disabled={pendingRunning}>
+              <button type="button" className={pendingAction.danger ? 'danger' : 'primary'} data-testid="redis-confirm-execute" onClick={() => void handleConfirmPendingAction()} disabled={pendingRunning}>
                 {pendingRunning ? tCurrent('auto.remoteRedis.1j4vco4') : pendingAction.confirmText}
               </button>
             </div>

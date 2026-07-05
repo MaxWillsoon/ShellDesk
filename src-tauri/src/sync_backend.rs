@@ -1139,6 +1139,7 @@ fn pending_shrink_result(
     Ok(result)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn sync_success_result(
     store: &Value,
     local: &Value,

@@ -197,7 +197,7 @@ pub(crate) async fn start(
 pub(crate) fn stop(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let vnc_id = string_arg(&args, 1)?;
-    stop_by_key(&state, &vnc_key(&connection_id, &vnc_id))?;
+    stop_by_key(state, &vnc_key(&connection_id, &vnc_id))?;
     Ok(json!(true))
 }
 

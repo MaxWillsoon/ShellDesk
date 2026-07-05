@@ -951,7 +951,7 @@ function RemoteMongo({ connectionId, hostId }: RemoteMongoProps) {
             <p>将按当前文档的 `_id` 删除 1 条记录，此操作不可撤销。</p>
             <code>{selectedDocumentFilter || '缺少 _id'}</code>
             {deleteConfirmError ? (
-              <DismissibleAlert className="mongo-alert danger" onDismiss={() => setDeleteConfirmError('')} role="alert">
+              <DismissibleAlert className="mongo-alert danger" inline onDismiss={() => setDeleteConfirmError('')} role="alert">
                 {deleteConfirmError}
               </DismissibleAlert>
             ) : null}

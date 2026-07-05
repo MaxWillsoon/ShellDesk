@@ -3010,6 +3010,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
           <button
             type="submit"
             className="mysql-connect-btn"
+            data-testid="mysql-connect-submit"
             disabled={status === 'connecting'}
           >
             {status === 'connecting' ? tCurrent('auto.remoteMySQL.1i0m8cf') : tCurrent('auto.remoteMySQL.5je50n')}
@@ -3040,6 +3041,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
               <button
                 type="button"
                 className="mysql-sidebar-text-action"
+                data-testid="mysql-create-table-open"
                 onClick={() => openCreateTableDialog()}
                 title={tCurrent('auto.remoteMySQL.createTable')}
               >
@@ -3428,7 +3430,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
 
       {createTableState.open ? createPortal(
         <div className="schema-dialog-overlay" role="presentation">
-          <div className="schema-dialog" role="dialog" aria-modal="true" aria-labelledby="mysql-create-table-title">
+          <div className="schema-dialog" role="dialog" aria-modal="true" aria-labelledby="mysql-create-table-title" data-testid="mysql-create-table-dialog">
             <div className="schema-dialog-header">
               <h3 id="mysql-create-table-title">
                 {createTableState.mode === 'edit'
@@ -3468,6 +3470,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
                 <input
                   type="text"
                   value={createTableState.tableName}
+                  data-testid="mysql-create-table-name"
                   onChange={(event) => setCreateTableState((current) => ({ ...current, tableName: event.target.value, dialogError: '' }))}
                   placeholder={tCurrent('auto.remoteMySQL.tableNamePlaceholder')}
                   disabled={createTableState.mode === 'edit'}
@@ -3523,7 +3526,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
             <div className="schema-section">
               <div className="schema-section-header">
                 <strong>{tCurrent('auto.remoteMySQL.columnName')}</strong>
-                <button type="button" onClick={addCreateTableColumn}>{tCurrent('auto.remoteMySQL.addColumn')}</button>
+                <button type="button" data-testid="mysql-create-table-add-column" onClick={addCreateTableColumn}>{tCurrent('auto.remoteMySQL.addColumn')}</button>
               </div>
               <div className="schema-columns-scroll">
                 <table className="schema-columns-table">
@@ -3559,6 +3562,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
                             <input
                               type="text"
                               value={column.name}
+                              data-testid="mysql-create-table-column-name"
                               onChange={(event) => updateCreateTableColumn(column.id, 'name', event.target.value)}
                             />
                           </td>
@@ -3749,6 +3753,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
               {createTableState.dialogError ? (
                 <div
                   className="dismissible-alert mysql-message-banner error schema-actions-alert schema-local-alert"
+                  data-testid="mysql-dialog-error"
                   role="alert"
                 >
                   <span className="dismissible-alert-content">{createTableState.dialogError}</span>
@@ -3770,6 +3775,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
                 <button
                   type="button"
                   className="primary"
+                  data-testid="mysql-create-table-execute"
                   onClick={() => void (createTableState.mode === 'edit' ? handleExecuteAlterTable() : handleExecuteCreateTable())}
                   disabled={createTableState.executing}
                 >
@@ -4070,6 +4076,7 @@ function RemoteMySQL({ connectionId, hostId }: RemoteMySQLProps) {
             {pendingEdit.error ? (
               <DismissibleAlert
                 className="mysql-message-banner error"
+                inline
                 onDismiss={() => setPendingEdit((current) => (current ? { ...current, error: '' } : current))}
                 role="alert"
               >

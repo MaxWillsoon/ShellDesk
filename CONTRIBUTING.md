@@ -27,10 +27,10 @@ pnpm typecheck
 pnpm build
 pnpm test
 pnpm preview
-pnpm release:dir
+pnpm pack:dir
 ```
 
-`pnpm test` runs IPC parity checks, release script checks, the production frontend build, Rust formatting/tests, and `cargo check`. For packaging-related changes, use the relevant `pnpm pack:*` or `pnpm release:*` command when practical.
+`pnpm test` runs repository contract checks, the production frontend build, Playwright UI smoke tests, Rust formatting/clippy/tests, and `cargo check`. For packaging-related changes, use the relevant `pnpm pack:*` or `pnpm release:*` command when practical.
 
 If `pnpm dev` exits and Vite still occupies port `5173`, find the specific PID before stopping it:
 

@@ -579,7 +579,7 @@ pub(super) fn merge_known_hosts_from_scan(
                     .get("id")
                     .and_then(Value::as_str)
                     .filter(|id| !id.trim().is_empty())
-                    .unwrap_or_else(|| {
+                    .unwrap_or({
                         if known_host_id.is_empty() {
                             ""
                         } else {

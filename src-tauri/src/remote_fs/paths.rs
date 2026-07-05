@@ -12,8 +12,7 @@ pub(super) fn default_transfer_name(path: &str) -> String {
 pub(super) fn remote_file_name(path: &str, fallback: &str) -> String {
     path.replace('\\', "/")
         .split('/')
-        .filter(|part| !part.is_empty())
-        .next_back()
+        .rfind(|part| !part.is_empty())
         .unwrap_or(fallback)
         .to_string()
 }

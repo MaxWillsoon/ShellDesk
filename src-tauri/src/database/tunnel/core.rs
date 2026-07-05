@@ -61,6 +61,7 @@ impl DbTunnelError {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum DatabaseTunnelSession {
     Mysql(MysqlTunnelSession),
     Postgres(PostgresTunnelSession),

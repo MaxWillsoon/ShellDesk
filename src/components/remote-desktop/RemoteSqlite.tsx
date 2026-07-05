@@ -1581,6 +1581,7 @@ function RemoteSqlite({ connectionId, initialFilePath, systemType }: RemoteSqlit
             {pendingEdit.error ? (
               <DismissibleAlert
                 className="sqlite-message-banner error"
+                inline
                 onDismiss={() => setPendingEdit((current) => (current ? { ...current, error: '' } : current))}
                 role="alert"
               >
