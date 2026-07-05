@@ -1,48 +1,24 @@
-use crate::askpass::{current_ui_window, start_askpass_broker, AskpassBroker};
-use crate::command_runner::{run_shell, run_shell_stream, run_spawned_command_stream};
+use crate::command_runner::{run_shell, run_shell_stream};
+use crate::russh_client::{run_exec_command, run_exec_command_stream, RusshExecOutput};
 use crate::{
-    connection, error_string, get_connection, now, prevent_process_window,
-    prevent_tokio_process_window, read_string_field, string_arg, ActiveConnection, AppState,
-    ConnectionKind, PrivilegeConfig, SshProfile,
+    connection, error_string, get_connection, now, read_string_field, string_arg, ActiveConnection,
+    AppState, ConnectionKind, PrivilegeConfig, SshProfile, UiWindowRef,
 };
 use serde_json::{json, Value};
-use std::{
-    process::{Child as StdChild, Command as StdCommand, Stdio},
-    time::Duration,
-};
+use std::time::Duration;
 use tauri::Emitter;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-    process::Command,
-    time,
-};
-
-#[path = "ssh_transport/auth.rs"]
-mod auth;
-
-pub(crate) use auth::{
-    apply_askpass_env_pty, apply_proxy_helper_env_pty, command_exists, shell_quote,
-    should_use_sshpass, ssh_args, ssh_args_with_askpass, ssh_destination,
-    unavailable_password_auth_error,
-};
-use auth::{
-    apply_askpass_env_tokio, apply_proxy_helper_env_tokio, askpass_secret, profile_can_use_askpass,
-};
-#[cfg(test)]
-use auth::{proxy_command_arg_for_platform, proxy_command_for_profile};
 
 const DEFAULT_SSH_COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
 
 pub(crate) async fn run_connection_command(
-    state: &AppState,
+    state: AppState,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     run_connection_command_with_options(state, args, 3).await
 }
 
 pub(crate) async fn run_connection_command_with_options(
-    state: &AppState,
+    state: AppState,
     args: Vec<Value>,
     options_index: usize,
 ) -> Result<Value, String> {
@@ -54,7 +30,7 @@ pub(crate) async fn run_connection_command_with_options(
         .unwrap_or("")
         .to_string();
     let options = args.get(options_index);
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
 
     if connection.kind == ConnectionKind::Local {
         return run_shell(command, &stdin, Some(Duration::from_secs(60))).await;
@@ -67,8 +43,8 @@ pub(crate) async fn run_connection_command_with_options(
     let privilege = configured_privilege(&connection, options);
     let (command, stdin) = apply_privilege_to_command(command, stdin, privilege.as_ref());
     let result = run_ssh_command_for_connection_with_retry(
-        state,
-        current_ui_window(state),
+        state.clone(),
+        crate::ui_prompts::current_ui_window(&state),
         &connection_id,
         profile,
         command,
@@ -205,7 +181,7 @@ fn assert_privilege_result(
 }
 
 pub(crate) async fn run_connection_command_stream(
-    state: &AppState,
+    state: AppState,
     window: tauri::Window,
     args: Vec<Value>,
 ) -> Result<Value, String> {
@@ -217,7 +193,7 @@ pub(crate) async fn run_connection_command_stream(
         .unwrap_or("")
         .to_string();
     let stream_id = string_arg(&args, 3)?;
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
 
     if connection.kind == ConnectionKind::Local {
         return run_shell_stream(
@@ -237,7 +213,7 @@ pub(crate) async fn run_connection_command_stream(
     let privilege = configured_privilege(&connection, args.get(4));
     let (command, stdin) = apply_privilege_to_command(command, stdin, privilege.as_ref());
     let result = run_ssh_command_stream_for_connection_with_retry(
-        state,
+        state.clone(),
         window,
         &connection_id,
         profile,
@@ -251,7 +227,7 @@ pub(crate) async fn run_connection_command_stream(
 }
 
 async fn run_ssh_command_for_connection_with_retry(
-    state: &AppState,
+    state: AppState,
     window: Option<tauri::Window>,
     connection_id: &str,
     profile: SshProfile,
@@ -259,7 +235,7 @@ async fn run_ssh_command_for_connection_with_retry(
     stdin: String,
 ) -> Result<Value, String> {
     let first = run_ssh_command_for_profile_with_window(
-        state,
+        state.clone(),
         window.clone(),
         profile.clone(),
         command.clone(),
@@ -292,7 +268,7 @@ async fn run_ssh_command_for_connection_with_retry(
 }
 
 async fn run_ssh_command_stream_for_connection_with_retry(
-    state: &AppState,
+    state: AppState,
     window: tauri::Window,
     connection_id: &str,
     profile: SshProfile,
@@ -301,7 +277,7 @@ async fn run_ssh_command_stream_for_connection_with_retry(
     stream_id: String,
 ) -> Result<Value, String> {
     let first = run_ssh_command_stream_for_profile(
-        state,
+        state.clone(),
         profile.clone(),
         command.clone(),
         stdin.clone(),
@@ -405,6 +381,7 @@ fn is_recoverable_ssh_message(message: &str) -> bool {
         "connection closed",
         "broken pipe",
         "kex_exchange_identification",
+        "connection lost",
     ]
     .iter()
     .any(|needle| message.contains(needle))
@@ -437,12 +414,15 @@ fn is_host_key_verification_message(message: &str) -> bool {
     message.contains("host key verification failed")
         || message.contains("remote host identification has changed")
         || message.contains("possible dns spoofing detected")
+        || message.contains("host key is not trusted")
+        || message.contains("known_hosts 校验")
+        || message.contains("known_hosts verification")
         || (message.contains("offending") && message.contains("known_hosts"))
         || (message.contains("no ") && message.contains("host key is known"))
 }
 
 async fn refresh_profile_after_host_key_verification_failure(
-    state: &AppState,
+    state: AppState,
     window: Option<tauri::Window>,
     profile: &SshProfile,
 ) -> Result<Option<SshProfile>, String> {
@@ -450,8 +430,8 @@ async fn refresh_profile_after_host_key_verification_failure(
         return Ok(None);
     };
     let mut refreshed = profile.clone();
-    connection::ensure_ssh_profile_host_key_trusted(state, &window, &mut refreshed).await?;
-    update_active_connection_profile(state, profile, &refreshed)?;
+    connection::ensure_ssh_profile_host_key_trusted(&state, &window, &mut refreshed).await?;
+    update_active_connection_profile(&state, profile, &refreshed)?;
     Ok(Some(refreshed))
 }
 
@@ -522,206 +502,109 @@ fn emit_connection_event(window: Option<&tauri::Window>, event: &str, payload: V
 }
 
 pub(crate) async fn run_ssh_command_stream_for_profile(
-    state: &AppState,
+    state: AppState,
     profile: SshProfile,
     command: String,
     stdin: String,
     window: tauri::Window,
     stream_id: String,
 ) -> Result<Value, String> {
-    let _askpass_broker =
-        start_optional_askpass_broker(state, Some(window.clone()), &profile).await?;
-    let mut child = ssh_process_command(&profile, command.clone(), _askpass_broker.as_ref())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(error_string)?;
-    let first = run_spawned_command_stream(
-        &mut child,
+    let first = run_exec_command_stream(
+        Some(state.clone()),
+        UiWindowRef::from_window(&window),
+        profile.clone(),
+        command.clone(),
         stdin.clone(),
-        Some(Duration::from_secs(90)),
-        window.clone(),
         stream_id.clone(),
-        "SSH command timed out.",
+        DEFAULT_SSH_COMMAND_TIMEOUT,
     )
-    .await;
+    .await
+    .map(output_to_value);
     if !ssh_result_is_host_key_verification_failure(&first) {
         return first;
     }
 
-    let Some(profile) =
-        refresh_profile_after_host_key_verification_failure(state, Some(window.clone()), &profile)
-            .await?
+    let Some(profile) = refresh_profile_after_host_key_verification_failure(
+        state.clone(),
+        Some(window.clone()),
+        &profile,
+    )
+    .await?
     else {
         return first;
     };
-    let _askpass_broker =
-        start_optional_askpass_broker(state, Some(window.clone()), &profile).await?;
-    let mut child = ssh_process_command(&profile, command, _askpass_broker.as_ref())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(error_string)?;
-    run_spawned_command_stream(
-        &mut child,
+    run_exec_command_stream(
+        Some(state.clone()),
+        UiWindowRef::from_window(&window),
+        profile,
+        command,
         stdin,
-        Some(Duration::from_secs(90)),
-        window,
         stream_id,
-        "SSH command timed out.",
+        DEFAULT_SSH_COMMAND_TIMEOUT,
     )
     .await
+    .map(output_to_value)
 }
 
 pub(crate) async fn run_ssh_command_for_profile_interactive(
-    state: &AppState,
+    state: AppState,
     profile: SshProfile,
     command: String,
     stdin: String,
 ) -> Result<Value, String> {
-    let window = current_ui_window(state);
+    let window = crate::ui_prompts::current_ui_window(&state);
     run_ssh_command_for_profile_with_window(state, window, profile, command, stdin).await
 }
 
 pub(crate) async fn run_ssh_command_for_profile_with_window(
-    state: &AppState,
+    state: AppState,
     window: Option<tauri::Window>,
     profile: SshProfile,
     command: String,
     stdin: String,
 ) -> Result<Value, String> {
-    let _askpass_broker = start_optional_askpass_broker(state, window.clone(), &profile).await?;
-    let first = run_ssh_command_for_profile_with_broker(
+    let first = run_exec_command(
+        Some(state.clone()),
+        window.as_ref().map(UiWindowRef::from_window),
         profile.clone(),
         command.clone(),
         stdin.clone(),
-        _askpass_broker.as_ref(),
+        DEFAULT_SSH_COMMAND_TIMEOUT,
     )
-    .await;
+    .await
+    .map(output_to_value);
     if !ssh_result_is_host_key_verification_failure(&first) {
         return first;
     }
 
-    let Some(profile) =
-        refresh_profile_after_host_key_verification_failure(state, window.clone(), &profile)
-            .await?
+    let Some(profile) = refresh_profile_after_host_key_verification_failure(
+        state.clone(),
+        window.clone(),
+        &profile,
+    )
+    .await?
     else {
         return first;
     };
-    let _askpass_broker = start_optional_askpass_broker(state, window, &profile).await?;
-    run_ssh_command_for_profile_with_broker(profile, command, stdin, _askpass_broker.as_ref()).await
-}
-
-async fn run_ssh_command_for_profile_with_broker(
-    profile: SshProfile,
-    command: String,
-    stdin: String,
-    askpass_broker: Option<&AskpassBroker>,
-) -> Result<Value, String> {
-    let mut child = ssh_process_command(&profile, command, askpass_broker);
-    child
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let mut child = child.spawn().map_err(error_string)?;
-    if let Some(mut child_stdin) = child.stdin.take() {
-        if !stdin.is_empty() {
-            child_stdin
-                .write_all(stdin.as_bytes())
-                .await
-                .map_err(error_string)?;
-        }
-    }
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "SSH stdout is unavailable.".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "SSH stderr is unavailable.".to_string())?;
-    let stdout_task = tokio::spawn(async move {
-        let mut reader = stdout;
-        let mut output = Vec::new();
-        reader
-            .read_to_end(&mut output)
-            .await
-            .map_err(error_string)?;
-        Ok::<Vec<u8>, String>(output)
-    });
-    let stderr_task = tokio::spawn(async move {
-        let mut reader = stderr;
-        let mut output = Vec::new();
-        reader
-            .read_to_end(&mut output)
-            .await
-            .map_err(error_string)?;
-        Ok::<Vec<u8>, String>(output)
-    });
-    let status = match time::timeout(DEFAULT_SSH_COMMAND_TIMEOUT, child.wait()).await {
-        Ok(result) => result.map_err(error_string)?,
-        Err(_) => {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            let _ = stdout_task.await;
-            let _ = stderr_task.await;
-            return Err("SSH command timed out.".to_string());
-        }
-    };
-    let stdout = stdout_task.await.map_err(error_string)??;
-    let stderr = stderr_task.await.map_err(error_string)??;
-    let code = status.code().unwrap_or(-1);
-    Ok(json!({
-        "stdout": String::from_utf8_lossy(&stdout),
-        "stderr": String::from_utf8_lossy(&stderr),
-        "code": code,
-        "success": status.success()
-    }))
-}
-
-pub(crate) async fn start_optional_askpass_broker(
-    state: &AppState,
-    window: Option<tauri::Window>,
-    profile: &SshProfile,
-) -> Result<Option<AskpassBroker>, String> {
-    if !profile_can_use_askpass(profile) {
-        return Ok(None);
-    }
-    let Some(window) = window else {
-        return Ok(None);
-    };
-    start_askpass_broker(state, window, profile.clone())
-        .await
-        .map(Some)
-}
-
-fn ssh_process_command(
-    profile: &SshProfile,
-    command: String,
-    askpass_broker: Option<&AskpassBroker>,
-) -> Command {
-    let mut child = if askpass_broker.is_none() && should_use_sshpass(profile) {
-        let mut command = Command::new("sshpass");
-        command.arg("-e");
-        command.arg("ssh");
-        command.env("SSHPASS", &profile.password);
-        command
-    } else {
-        Command::new("ssh")
-    };
-    child.args(ssh_args_with_askpass(
+    run_exec_command(
+        Some(state.clone()),
+        window.as_ref().map(UiWindowRef::from_window),
         profile,
-        askpass_broker.is_some() || askpass_secret(profile).is_some(),
-    ));
-    child.arg(ssh_destination(profile));
-    child.arg(command);
-    prevent_tokio_process_window(&mut child);
-    apply_askpass_env_tokio(&mut child, profile, askpass_broker);
-    apply_proxy_helper_env_tokio(&mut child, profile);
-    child
+        command,
+        stdin,
+        DEFAULT_SSH_COMMAND_TIMEOUT,
+    )
+    .await
+    .map(output_to_value)
+}
+
+fn output_to_value(output: RusshExecOutput) -> Value {
+    json!({
+        "stdout": output.stdout,
+        "stderr": output.stderr,
+        "code": output.code,
+        "success": output.success
+    })
 }
 
 pub(crate) fn value_to_bytes(value: Value) -> Result<Vec<u8>, String> {
@@ -744,60 +627,6 @@ pub(crate) fn value_to_bytes(value: Value) -> Result<Vec<u8>, String> {
     Err("终端二进制输入无效。".to_string())
 }
 
-pub(crate) fn start_ssh_local_forward(
-    profile: &SshProfile,
-    local_port: u16,
-    remote_host: &str,
-    remote_port: u16,
-) -> Result<StdChild, String> {
-    let mut command = if should_use_sshpass(profile) {
-        let mut command = StdCommand::new("sshpass");
-        command.arg("-e");
-        command.arg("ssh");
-        command.env("SSHPASS", &profile.password);
-        command
-    } else {
-        StdCommand::new("ssh")
-    };
-    command.args(ssh_args(profile));
-    command.arg("-o");
-    command.arg("ExitOnForwardFailure=yes");
-    command.arg("-N");
-    command.arg("-L");
-    command.arg(format!(
-        "127.0.0.1:{local_port}:{remote_host}:{remote_port}"
-    ));
-    command.arg(ssh_destination(profile));
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    prevent_process_window(&mut command);
-    command.spawn().map_err(error_string)
-}
-
-pub(crate) async fn wait_for_tcp(host: &str, port: u16, timeout: Duration) -> Result<(), String> {
-    let deadline = time::Instant::now() + timeout;
-    loop {
-        match TcpStream::connect((host, port)).await {
-            Ok(_) => return Ok(()),
-            Err(error) => {
-                if time::Instant::now() >= deadline {
-                    return Err(error.to_string());
-                }
-                time::sleep(Duration::from_millis(150)).await;
-            }
-        }
-    }
-}
-
-pub(crate) fn pick_free_local_port() -> Result<u16, String> {
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(error_string)?;
-    let port = listener.local_addr().map_err(error_string)?.port();
-    drop(listener);
-    Ok(port)
-}
-
 pub(crate) async fn run_cli_output(
     state: &AppState,
     connection_id: &str,
@@ -811,9 +640,11 @@ pub(crate) async fn run_cli_output(
     } else {
         posix_command
     };
-    let output =
-        run_connection_command(state, vec![json!(connection_id), json!(command), json!("")])
-            .await?;
+    let output = run_connection_command(
+        state.clone(),
+        vec![json!(connection_id), json!(command), json!("")],
+    )
+    .await?;
     if output.get("code").and_then(Value::as_i64).unwrap_or(1) != 0 {
         return Err(output
             .get("stderr")
@@ -838,6 +669,14 @@ pub(crate) async fn run_cli_output(
 
 pub(crate) fn ps_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
+}
+
+pub(crate) fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+pub(crate) fn unavailable_password_auth_error(_profile: &SshProfile) -> Option<String> {
+    None
 }
 
 #[cfg(test)]
@@ -911,6 +750,9 @@ mod tests {
         assert!(is_host_key_verification_message(
             "Host key verification failed."
         ));
+        assert!(is_host_key_verification_message(
+            "example.com:22 未通过 known_hosts 校验，请先信任该主机密钥。"
+        ));
         assert!(ssh_output_is_host_key_verification_failure(&json!({
             "success": false,
             "code": 255,
@@ -930,114 +772,6 @@ mod tests {
             "stderr": "Permission denied (publickey,password).",
             "stdout": ""
         })));
-    }
-
-    #[test]
-    fn key_auth_ssh_args_disable_password_fallback() {
-        let profile = SshProfile {
-            address: "example.com".to_string(),
-            port: 22,
-            username: "administrator".to_string(),
-            auth_method: "key".to_string(),
-            password: "key-passphrase".to_string(),
-            key_path: "C:\\Users\\me\\.ssh\\id_rsa".to_string(),
-            known_hosts_path: String::new(),
-            proxy_helper_exe: String::new(),
-            proxy: None,
-            jump: None,
-        };
-
-        let args = ssh_args_with_askpass(&profile, true);
-
-        assert!(args.contains(&"PreferredAuthentications=publickey".to_string()));
-        assert!(args.contains(&"PasswordAuthentication=no".to_string()));
-        assert!(args.contains(&"KbdInteractiveAuthentication=no".to_string()));
-        assert!(!args.contains(&"BatchMode=yes".to_string()));
-        assert!(args.contains(&"-i".to_string()));
-        assert!(args.contains(&"C:\\Users\\me\\.ssh\\id_rsa".to_string()));
-    }
-
-    #[test]
-    fn ssh_args_use_shell_desk_known_hosts_only() {
-        let mut profile = SshProfile {
-            address: "example.com".to_string(),
-            port: 22,
-            username: "administrator".to_string(),
-            auth_method: "password".to_string(),
-            password: String::new(),
-            key_path: String::new(),
-            known_hosts_path: String::new(),
-            proxy_helper_exe: String::new(),
-            proxy: None,
-            jump: None,
-        };
-
-        let args = ssh_args(&profile);
-        let null_known_hosts = if cfg!(windows) { "NUL" } else { "/dev/null" };
-        assert!(args.contains(&format!("UserKnownHostsFile={null_known_hosts}")));
-        assert!(args.contains(&format!("GlobalKnownHostsFile={null_known_hosts}")));
-
-        profile.known_hosts_path = "C:\\ShellDesk\\ssh.known_hosts".to_string();
-        let args = ssh_args(&profile);
-
-        assert!(args.contains(&"UserKnownHostsFile=C:\\ShellDesk\\ssh.known_hosts".to_string()));
-        assert!(args.contains(&format!("GlobalKnownHostsFile={null_known_hosts}")));
-    }
-
-    #[test]
-    fn windows_proxy_command_arg_uses_double_quotes_for_paths_with_spaces() {
-        let arg = proxy_command_arg_for_platform(
-            "UserKnownHostsFile=C:\\Users\\baicai\\AppData\\Roaming\\ShellDesk Data\\known_hosts",
-            true,
-        );
-
-        assert_eq!(
-            arg,
-            "\"UserKnownHostsFile=C:\\Users\\baicai\\AppData\\Roaming\\ShellDesk Data\\known_hosts\""
-        );
-        assert!(!arg.contains('\''));
-    }
-
-    #[test]
-    fn jump_proxy_command_quotes_known_hosts_for_nested_ssh() {
-        let jump = SshProfile {
-            address: "jump.example.com".to_string(),
-            port: 22,
-            username: "jump-user".to_string(),
-            auth_method: "password".to_string(),
-            password: String::new(),
-            key_path: String::new(),
-            known_hosts_path:
-                "C:\\Users\\baicai\\AppData\\Roaming\\ShellDesk Data\\jump.known_hosts".to_string(),
-            proxy_helper_exe: String::new(),
-            proxy: None,
-            jump: None,
-        };
-        let profile = SshProfile {
-            address: "target.example.com".to_string(),
-            port: 22,
-            username: "target-user".to_string(),
-            auth_method: "password".to_string(),
-            password: String::new(),
-            key_path: String::new(),
-            known_hosts_path: String::new(),
-            proxy_helper_exe: String::new(),
-            proxy: None,
-            jump: Some(Box::new(jump)),
-        };
-
-        let command = proxy_command_for_profile(&profile).unwrap();
-
-        if cfg!(windows) {
-            assert!(command.contains(
-                "-o \"UserKnownHostsFile=C:\\Users\\baicai\\AppData\\Roaming\\ShellDesk Data\\jump.known_hosts\""
-            ));
-            assert!(!command.contains("'UserKnownHostsFile"));
-        } else {
-            assert!(command.contains(
-                "-o 'UserKnownHostsFile=C:\\Users\\baicai\\AppData\\Roaming\\ShellDesk Data\\jump.known_hosts'"
-            ));
-        }
     }
 
     #[test]
@@ -1066,22 +800,11 @@ mod tests {
             }
             return;
         };
-        if profile.auth_method == "password"
-            && !should_use_sshpass(&profile)
-            && profile.proxy_helper_exe.trim().is_empty()
-        {
-            let message = "password auth live SSH backend smoke requires SHELLDESK_TEST_ASKPASS_EXE or sshpass";
-            if require_live_smoke {
-                panic!("{message}");
-            }
-            eprintln!("skipping live SSH backend smoke: {message}");
-            return;
-        }
         let state = AppState::new(
             std::env::temp_dir().join(format!("shelldesk-live-ssh-smoke-{}", std::process::id())),
         );
         let output = run_ssh_command_for_profile_with_window(
-            &state,
+            state.clone(),
             None,
             profile.clone(),
             "printf shelldesk-live-smoke".to_string(),
@@ -1119,10 +842,15 @@ mod tests {
             pid = std::process::id(),
             marker = shell_quote(&marker)
         );
-        let output =
-            run_ssh_command_for_profile_with_window(state, None, profile, command, String::new())
-                .await
-                .expect("live remote file smoke command should run");
+        let output = run_ssh_command_for_profile_with_window(
+            state.clone(),
+            None,
+            profile,
+            command,
+            String::new(),
+        )
+        .await
+        .expect("live remote file smoke command should run");
 
         assert_eq!(output.get("code").and_then(Value::as_i64), Some(0));
         let stdout = output.get("stdout").and_then(Value::as_str).unwrap_or("");
@@ -1133,7 +861,7 @@ mod tests {
 
     async fn run_live_sftp_probe_smoke(state: &AppState, profile: SshProfile) {
         let output = run_ssh_command_for_profile_with_window(
-            state,
+            state.clone(),
             None,
             profile,
             crate::remote_fs::remote_sftp_probe_command(),
@@ -1178,8 +906,7 @@ mod tests {
             key_path,
             known_hosts_path: test_env_value(&values, "SHELLDESK_TEST_SSH_KNOWN_HOSTS_PATH")
                 .unwrap_or_default(),
-            proxy_helper_exe: test_env_value(&values, "SHELLDESK_TEST_ASKPASS_EXE")
-                .unwrap_or_default(),
+            proxy_helper_exe: String::new(),
             proxy: None,
             jump: None,
         })
@@ -1194,7 +921,6 @@ mod tests {
             "SHELLDESK_TEST_SSH_PASSWORD",
             "SHELLDESK_TEST_SSH_KEY_PATH",
             "SHELLDESK_TEST_SSH_KNOWN_HOSTS_PATH",
-            "SHELLDESK_TEST_ASKPASS_EXE",
         ] {
             if let Ok(value) = std::env::var(key) {
                 values.insert(key.to_string(), value);

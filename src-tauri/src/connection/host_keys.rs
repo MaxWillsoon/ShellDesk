@@ -1,14 +1,12 @@
+use crate::russh_client::scan_host_public_keys;
 use crate::vault::{read_store, with_store_mut};
-use crate::{
-    command_exists, error_string, now, prevent_tokio_process_window, random_id,
-    run_ssh_command_for_profile_with_window, shell_quote, AppState, HostKeyRequest, SshProfile,
-};
+use crate::{error_string, now, random_id, AppState, HostKeyRequest, SshProfile, UiWindowRef};
 use base64::Engine;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{fs, future::Future, pin::Pin, process::Stdio, time::Duration};
+use std::{fs, future::Future, pin::Pin, time::Duration};
 use tauri::{AppHandle, Emitter};
-use tokio::{process::Command, sync::oneshot, time};
+use tokio::{sync::oneshot, time};
 
 pub(crate) fn respond_host_key_verification(
     state: &AppState,
@@ -85,32 +83,86 @@ fn host_key_match_key(hostname: &str, port: u16) -> String {
     format!("{}:{}", normalize_hostname(hostname), port)
 }
 
+#[derive(Clone)]
+struct HostKeyUi {
+    window: UiWindowRef,
+}
+
+impl HostKeyUi {
+    fn from_window(window: &tauri::Window) -> Self {
+        Self {
+            window: UiWindowRef::from_window(window),
+        }
+    }
+
+    fn emit(&self, event: &str, payload: Value) -> Result<(), String> {
+        self.window.emit(event, payload).map_err(error_string)
+    }
+}
+
 pub(super) fn ensure_ssh_host_key_trusted<'a>(
-    state: &'a AppState,
-    window: &'a tauri::Window,
+    state: &AppState,
+    window: &tauri::Window,
     profile: &'a mut SshProfile,
 ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+    let state = state.clone_without_ui_window();
+    let ui = HostKeyUi::from_window(window);
+    let original = profile.clone();
     Box::pin(async move {
-        if let Some(jump) = profile.jump.as_deref_mut() {
-            ensure_ssh_host_key_trusted(state, window, jump).await?;
-        }
-        ensure_direct_ssh_host_key_trusted(state, window, profile).await
+        let updated = ensure_ssh_host_key_trusted_owned(state, ui, original).await?;
+        *profile = updated;
+        Ok(())
     })
 }
 
 pub(super) fn prepare_ssh_host_key_trust<'a>(
-    state: &'a AppState,
-    window: &'a tauri::Window,
+    state: &AppState,
+    window: &tauri::Window,
     profile: &'a mut SshProfile,
 ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+    let state = state.clone_without_ui_window();
+    let ui = HostKeyUi::from_window(window);
+    let original = profile.clone();
     Box::pin(async move {
-        if let Some(jump) = profile.jump.as_deref_mut() {
-            prepare_ssh_host_key_trust(state, window, jump).await?;
+        let updated = prepare_ssh_host_key_trust_owned(state, ui, original).await?;
+        *profile = updated;
+        Ok(())
+    })
+}
+
+fn ensure_ssh_host_key_trusted_owned(
+    state: AppState,
+    ui: HostKeyUi,
+    mut profile: SshProfile,
+) -> Pin<Box<dyn Future<Output = Result<SshProfile, String>> + Send>> {
+    Box::pin(async move {
+        if let Some(jump) = profile.jump.take() {
+            let jump_state = state.clone();
+            let jump_ui = ui.clone();
+            let trusted_jump =
+                ensure_ssh_host_key_trusted_owned(jump_state, jump_ui, *jump).await?;
+            profile.jump = Some(Box::new(trusted_jump));
         }
-        if prepare_direct_ssh_host_key_trust_from_store(state, profile)? {
-            return Ok(());
+        ensure_direct_ssh_host_key_trusted(state, ui, profile).await
+    })
+}
+
+fn prepare_ssh_host_key_trust_owned(
+    state: AppState,
+    ui: HostKeyUi,
+    mut profile: SshProfile,
+) -> Pin<Box<dyn Future<Output = Result<SshProfile, String>> + Send>> {
+    Box::pin(async move {
+        if let Some(jump) = profile.jump.take() {
+            let jump_state = state.clone();
+            let jump_ui = ui.clone();
+            let trusted_jump = prepare_ssh_host_key_trust_owned(jump_state, jump_ui, *jump).await?;
+            profile.jump = Some(Box::new(trusted_jump));
         }
-        ensure_direct_ssh_host_key_trusted(state, window, profile).await
+        if prepare_direct_ssh_host_key_trust_from_store(&state, &mut profile)? {
+            return Ok(profile);
+        }
+        ensure_direct_ssh_host_key_trusted(state, ui, profile).await
     })
 }
 
@@ -122,74 +174,18 @@ pub(crate) async fn ensure_ssh_profile_host_key_trusted(
     ensure_ssh_host_key_trusted(state, window, profile).await
 }
 
-pub(crate) async fn confirm_ssh_host_public_key_trusted(
-    state: &AppState,
-    window: &tauri::Window,
-    hostname: &str,
-    port: u16,
-    username: &str,
-    public_key: &str,
-) -> Result<bool, String> {
-    let store = read_store(state)?;
-    let known_hosts = store
-        .get("knownHosts")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let scanned = scanned_host_key_from_public_key(public_key)?;
-    let decision = classify_scanned_host_key(&known_hosts, hostname, port, &scanned);
-    match decision
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-    {
-        "trusted" => Ok(true),
-        "unknown" | "changed" => {
-            let profile = SshProfile {
-                address: hostname.to_string(),
-                port,
-                username: username.to_string(),
-                auth_method: String::new(),
-                password: String::new(),
-                key_path: String::new(),
-                known_hosts_path: String::new(),
-                proxy_helper_exe: String::new(),
-                proxy: None,
-                jump: None,
-            };
-            let response =
-                request_host_key_decision(state, window, &profile, &scanned, &decision).await?;
-            let accept = response
-                .get("accept")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            if accept
-                && response
-                    .get("addToKnownHosts")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-            {
-                upsert_known_host_from_scan(state, &profile, &scanned, &decision)?;
-                let _ = window.emit("vault:changed", json!({ "kind": "hostKeyTrust" }));
-            }
-            Ok(accept)
-        }
-        _ => Ok(false),
-    }
-}
-
 async fn ensure_direct_ssh_host_key_trusted(
-    state: &AppState,
-    window: &tauri::Window,
-    profile: &mut SshProfile,
-) -> Result<(), String> {
-    let store = read_store(state)?;
+    state: AppState,
+    ui: HostKeyUi,
+    mut profile: SshProfile,
+) -> Result<SshProfile, String> {
+    let store = read_store(&state)?;
     let known_hosts = store
         .get("knownHosts")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let scanned_keys = scan_ssh_host_keys(state, window, profile).await?;
+    let scanned_keys = scan_ssh_host_keys(profile.clone()).await?;
     let (scanned, decision) = select_scanned_host_key_decision(
         &known_hosts,
         &profile.address,
@@ -197,40 +193,47 @@ async fn ensure_direct_ssh_host_key_trusted(
         &scanned_keys,
     )
     .ok_or_else(|| "未能扫描 SSH 主机密钥。".to_string())?;
-    match decision
+    let status = decision
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("unknown")
-    {
-        "trusted" => {
-            profile.known_hosts_path =
-                write_connection_known_hosts_from_scans(state, profile, &scanned_keys)?;
-            Ok(())
-        }
-        "unknown" | "changed" => {
-            let response =
-                request_host_key_decision(state, window, profile, &scanned, &decision).await?;
-            if !response
-                .get("accept")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
-                return Err("已取消 SSH 主机密钥确认。".to_string());
-            }
-            if response
-                .get("addToKnownHosts")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
-                upsert_known_host_from_scan(state, profile, &scanned, &decision)?;
-                let _ = window.emit("vault:changed", json!({ "kind": "hostKeyTrust" }));
-            }
-            profile.known_hosts_path =
-                write_connection_known_hosts_from_scans(state, profile, &scanned_keys)?;
-            Ok(())
-        }
-        _ => Err("SSH 主机密钥校验失败。".to_string()),
+        .to_string();
+    if status == "trusted" {
+        profile.known_hosts_path =
+            write_connection_known_hosts_from_scans(&state, &profile, &scanned_keys)?;
+        return Ok(profile);
     }
+    if status != "unknown" && status != "changed" {
+        return Err("SSH 主机密钥校验失败。".to_string());
+    }
+
+    let decision_ui = ui.clone();
+    let response = request_host_key_decision(
+        state.clone(),
+        decision_ui,
+        profile.clone(),
+        scanned.clone(),
+        decision.clone(),
+    )
+    .await?;
+    if !response
+        .get("accept")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err("已取消 SSH 主机密钥确认。".to_string());
+    }
+    if response
+        .get("addToKnownHosts")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        upsert_known_host_from_scan(&state, &profile, &scanned, &decision)?;
+        let _ = ui.emit("vault:changed", json!({ "kind": "hostKeyTrust" }));
+    }
+    profile.known_hosts_path =
+        write_connection_known_hosts_from_scans(&state, &profile, &scanned_keys)?;
+    Ok(profile)
 }
 
 fn prepare_direct_ssh_host_key_trust_from_store(
@@ -254,13 +257,13 @@ fn prepare_direct_ssh_host_key_trust_from_store(
 }
 
 async fn request_host_key_decision(
-    state: &AppState,
-    window: &tauri::Window,
-    profile: &SshProfile,
-    scanned: &Value,
-    decision: &Value,
+    state: AppState,
+    ui: HostKeyUi,
+    profile: SshProfile,
+    scanned: Value,
+    decision: Value,
 ) -> Result<Value, String> {
-    if host_key_already_trusted(state, profile, scanned) {
+    if host_key_already_trusted(&state, &profile, &scanned) {
         return Ok(json!({ "accept": true, "addToKnownHosts": false }));
     }
     let request_id = random_id("hostkey");
@@ -289,7 +292,8 @@ async fn request_host_key_decision(
         "knownHostId": decision.get("knownHostId").and_then(Value::as_str).unwrap_or(""),
         "knownFingerprint": decision.get("expectedFingerprint").and_then(Value::as_str).unwrap_or("")
     });
-    if let Err(error) = window.emit("connection:host-key-verification", payload) {
+    let emit_result = ui.emit("connection:host-key-verification", payload);
+    if let Err(error) = emit_result {
         let _ = state
             .host_key_responses
             .lock()
@@ -327,180 +331,17 @@ fn host_key_already_trusted(state: &AppState, profile: &SshProfile, scanned: &Va
         == "trusted"
 }
 
-async fn scan_ssh_host_keys(
-    state: &AppState,
-    window: &tauri::Window,
-    profile: &SshProfile,
-) -> Result<Vec<Value>, String> {
-    if let Some(jump) = profile.jump.as_deref() {
-        return scan_ssh_host_keys_via_jump(state, window, jump, profile).await;
-    }
-    if !command_exists("ssh-keyscan") {
-        return scan_ssh_host_keys_via_accept_new(
-            state,
-            profile,
-            "未找到 ssh-keyscan，无法执行 SSH 主机密钥预检。",
-        )
-        .await;
-    }
-    let mut command = Command::new("ssh-keyscan");
-    prevent_tokio_process_window(&mut command);
-    let output = command
-        .args([
-            "-T",
-            "3",
-            "-t",
-            "ed25519,ecdsa,rsa",
-            "-p",
-            &profile.port.to_string(),
-            &profile.address,
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(error_string)?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let scanned_keys = scanned_host_keys_from_keyscan_output(&stdout);
-    if scanned_keys.is_empty() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let keyscan_error = if stderr.is_empty() {
-            "未能扫描 SSH 主机密钥。".to_string()
-        } else {
-            format!("未能扫描 SSH 主机密钥：{stderr}")
-        };
-        return scan_ssh_host_keys_via_accept_new(state, profile, &keyscan_error).await;
-    }
-    Ok(scanned_keys)
-}
-
-async fn scan_ssh_host_keys_via_accept_new(
-    state: &AppState,
-    profile: &SshProfile,
-    keyscan_error: &str,
-) -> Result<Vec<Value>, String> {
-    if !command_exists("ssh") {
-        return Err(format!(
-            "{keyscan_error}；未找到 ssh，无法使用备用主机密钥预检。"
-        ));
-    }
-
-    let known_hosts_dir = state.data_dir.join("known-hosts");
-    fs::create_dir_all(&known_hosts_dir).map_err(error_string)?;
-    let path = known_hosts_dir.join(format!("{}.scan.known_hosts", random_id("ssh")));
-    let path_text = path.to_string_lossy().to_string();
-
-    let mut command = Command::new("ssh");
-    prevent_tokio_process_window(&mut command);
-    let args = vec![
-        "-p".to_string(),
-        profile.port.to_string(),
-        "-o".to_string(),
-        "ConnectTimeout=8".to_string(),
-        "-o".to_string(),
-        "StrictHostKeyChecking=accept-new".to_string(),
-        "-o".to_string(),
-        format!("UserKnownHostsFile={path_text}"),
-        "-o".to_string(),
-        format!("GlobalKnownHostsFile={}", null_known_hosts_path()),
-        "-o".to_string(),
-        "BatchMode=yes".to_string(),
-        "-o".to_string(),
-        "PasswordAuthentication=no".to_string(),
-        "-o".to_string(),
-        "KbdInteractiveAuthentication=no".to_string(),
-        "-o".to_string(),
-        "ChallengeResponseAuthentication=no".to_string(),
-        "-o".to_string(),
-        "NumberOfPasswordPrompts=0".to_string(),
-        ssh_scan_destination(profile),
-        "true".to_string(),
-    ];
-    command
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let output = time::timeout(Duration::from_secs(10), command.output())
-        .await
-        .map_err(|_| format!("{keyscan_error}；备用 SSH 主机密钥预检超时。"))?
-        .map_err(error_string)?;
-
-    let known_hosts_text = fs::read_to_string(&path).unwrap_or_default();
-    let _ = fs::remove_file(&path);
-    let scanned_keys = scanned_host_keys_from_keyscan_output(&known_hosts_text);
-    if scanned_keys.is_empty() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            format!("{keyscan_error}；备用 SSH 主机密钥预检未写入 known_hosts。")
-        } else {
-            format!("{keyscan_error}；备用 SSH 主机密钥预检未写入 known_hosts：{stderr}")
-        });
-    }
-
-    Ok(scanned_keys)
-}
-
-fn ssh_scan_destination(profile: &SshProfile) -> String {
-    if profile.username.trim().is_empty() {
-        profile.address.clone()
-    } else {
-        format!("{}@{}", profile.username, profile.address)
-    }
-}
-
-fn null_known_hosts_path() -> &'static str {
-    if cfg!(windows) {
-        "NUL"
-    } else {
-        "/dev/null"
-    }
-}
-
-async fn scan_ssh_host_keys_via_jump(
-    state: &AppState,
-    window: &tauri::Window,
-    jump: &SshProfile,
-    profile: &SshProfile,
-) -> Result<Vec<Value>, String> {
-    let command = format!(
-        "ssh-keyscan -T 3 -t ed25519,ecdsa,rsa -p {} {}",
-        profile.port,
-        shell_quote(&profile.address)
-    );
-    let output = run_ssh_command_for_profile_with_window(
-        state,
-        Some(window.clone()),
-        jump.clone(),
-        command,
-        String::new(),
-    )
-    .await?;
-    let stdout = output.get("stdout").and_then(Value::as_str).unwrap_or("");
-    let scanned_keys = scanned_host_keys_from_keyscan_output(stdout);
-    if scanned_keys.is_empty() {
-        let stderr = output
-            .get("stderr")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        return Err(if stderr.is_empty() {
-            "未能通过跳板机读取目标主机 SSH 公钥。".to_string()
-        } else {
-            format!("未能通过跳板机读取目标主机 SSH 公钥：{stderr}")
-        });
-    }
-    Ok(scanned_keys)
-}
-
-fn scanned_host_keys_from_keyscan_output(stdout: &str) -> Vec<Value> {
-    stdout
-        .lines()
-        .filter_map(parse_ssh_keyscan_line)
+async fn scan_ssh_host_keys(profile: SshProfile) -> Result<Vec<Value>, String> {
+    let scanned_keys = scan_host_public_keys(profile)
+        .await?
+        .into_iter()
+        .filter_map(|public_key| public_key.to_openssh().ok())
         .filter_map(|public_key| scanned_host_key_from_public_key(&public_key).ok())
-        .collect()
+        .collect::<Vec<_>>();
+    if scanned_keys.is_empty() {
+        return Err("未能读取 SSH 主机公钥。".to_string());
+    }
+    Ok(scanned_keys)
 }
 
 fn scanned_host_key_from_public_key(public_key: &str) -> Result<Value, String> {
@@ -515,24 +356,6 @@ fn scanned_host_key_from_public_key(public_key: &str) -> Result<Value, String> {
         "publicKey": public_key,
         "fingerprint": fingerprint
     }))
-}
-
-fn parse_ssh_keyscan_line(line: &str) -> Option<String> {
-    let trimmed = line.trim();
-    if trimmed.is_empty() || trimmed.starts_with('#') {
-        return None;
-    }
-    let parts = trimmed.split_whitespace().collect::<Vec<_>>();
-    if parts.len() < 3 {
-        return None;
-    }
-    if !parts[1].starts_with("ssh-")
-        && !parts[1].starts_with("ecdsa-")
-        && !parts[1].starts_with("sk-")
-    {
-        return None;
-    }
-    Some(format!("{} {}", parts[1], parts[2]))
 }
 
 fn normalize_fingerprint(value: &str) -> String {

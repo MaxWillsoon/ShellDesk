@@ -75,8 +75,8 @@ fn tauri_updater(app: &tauri::AppHandle) -> Result<Option<tauri_plugin_updater::
     Ok(Some(updater))
 }
 
-async fn check_tauri_update(app: &tauri::AppHandle) -> Result<Option<Value>, String> {
-    let Some(updater) = tauri_updater(app)? else {
+async fn check_tauri_update(app: tauri::AppHandle) -> Result<Option<Value>, String> {
+    let Some(updater) = tauri_updater(&app)? else {
         return Ok(None);
     };
     let current_version = app.package_info().version.to_string();
@@ -127,15 +127,15 @@ async fn check_tauri_update(app: &tauri::AppHandle) -> Result<Option<Value>, Str
     }
 }
 
-pub(crate) async fn check_release_info(app: &tauri::AppHandle) -> Result<Value, String> {
-    match check_tauri_update(app).await {
+pub(crate) async fn check_release_info(app: tauri::AppHandle) -> Result<Value, String> {
+    match check_tauri_update(app.clone()).await {
         Ok(Some(update)) => Ok(update),
         Ok(None) => check_github_release(app).await,
         Err(_) => check_github_release(app).await,
     }
 }
 
-async fn check_github_release(app: &tauri::AppHandle) -> Result<Value, String> {
+async fn check_github_release(app: tauri::AppHandle) -> Result<Value, String> {
     let current_version = app.package_info().version.to_string();
     let checked_at = now();
     let release = fetch_latest_release().await?;
@@ -483,17 +483,17 @@ fn compare_prerelease_identifier(left: &str, right: &str) -> i32 {
 }
 
 pub(crate) async fn check_for_update_download(
-    state: &AppState,
-    window: &tauri::Window,
-    app: &tauri::AppHandle,
+    state: AppState,
+    window: tauri::Window,
+    app: tauri::AppHandle,
 ) -> Result<Value, String> {
     check_for_update_download_inner(state, window, app, false).await
 }
 
 async fn check_for_update_download_inner<R, W>(
-    state: &AppState,
-    window: &W,
-    app: &tauri::AppHandle,
+    state: AppState,
+    window: W,
+    app: tauri::AppHandle,
     automatic: bool,
 ) -> Result<Value, String>
 where
@@ -501,7 +501,7 @@ where
     W: Emitter<R> + Clone + Send + Sync + 'static,
 {
     let (supported, unsupported_reason) = auto_update_support();
-    if automatic && !is_auto_update_enabled(state) {
+    if automatic && !is_auto_update_enabled(&state) {
         return Ok(json!({
             "available": false,
             "supported": supported,
@@ -518,7 +518,7 @@ where
             &app.package_info().version.to_string(),
             None,
         );
-        set_update_state(state, status)?;
+        set_update_state(&state, status)?;
         return Ok(json!({
             "available": false,
             "supported": false,
@@ -536,9 +536,9 @@ where
         None,
     )
     .with_field("isChecking", json!(true));
-    set_update_state(state, checking)?;
+    set_update_state(&state, checking)?;
 
-    let release_info = check_release_info(app).await?;
+    let release_info = check_release_info(app.clone()).await?;
     let available = release_info
         .get("updateAvailable")
         .and_then(Value::as_bool)
@@ -584,7 +584,7 @@ where
             .unwrap_or(Value::Null),
     )
     .with_field("isChecking", json!(false));
-    set_update_state(state, update_state.clone())?;
+    set_update_state(&state, update_state.clone())?;
     if available {
         let _ = window.emit("app:update:available", update_state);
     } else {
@@ -592,7 +592,8 @@ where
     }
 
     if available {
-        let download_result = download_tauri_update(state, window, app).await?;
+        let download_result =
+            download_tauri_update(state.clone(), window.clone(), app.clone()).await?;
         let success = download_result
             .get("success")
             .and_then(Value::as_bool)
@@ -635,7 +636,7 @@ pub(crate) fn start_auto_update_check(
 
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(delay).await;
-        let _ = check_for_update_download_inner(&state, &window, &app, true).await;
+        let _ = check_for_update_download_inner(state, window, app, true).await;
     });
 }
 
@@ -655,9 +656,9 @@ fn auto_update_enabled_from_store(store: &Value) -> bool {
 }
 
 pub(crate) async fn download_update(
-    state: &AppState,
-    window: &tauri::Window,
-    app: &tauri::AppHandle,
+    state: AppState,
+    window: tauri::Window,
+    app: tauri::AppHandle,
 ) -> Result<Value, String> {
     let (supported, unsupported_reason) = auto_update_support();
     if !supported {
@@ -667,7 +668,7 @@ pub(crate) async fn download_update(
             &app.package_info().version.to_string(),
             Some(&unsupported_reason),
         );
-        set_update_state(state, status.clone())?;
+        set_update_state(&state, status.clone())?;
         let _ = window.emit("app:update:error", status);
         return Ok(json!({ "success": false, "error": unsupported_reason }));
     }
@@ -676,15 +677,15 @@ pub(crate) async fn download_update(
 }
 
 async fn download_tauri_update<R, W>(
-    state: &AppState,
-    window: &W,
-    app: &tauri::AppHandle,
+    state: AppState,
+    window: W,
+    app: tauri::AppHandle,
 ) -> Result<Value, String>
 where
     R: Runtime,
     W: Emitter<R> + Clone + Send + Sync + 'static,
 {
-    let Some(updater) = tauri_updater(app)? else {
+    let Some(updater) = tauri_updater(&app)? else {
         return Ok(json!({ "success": false, "error": "更新模块未配置公钥。" }));
     };
     let Some(update) = updater.check().await.map_err(error_string)? else {
@@ -704,11 +705,11 @@ where
         .with_field("version", json!(version.clone()))
         .with_field("percent", json!(0))
         .with_field("installer", json!("tauri-updater"));
-    set_update_state(state, downloading.clone())?;
+    set_update_state(&state, downloading.clone())?;
     let _ = window.emit("app:update:download-progress", downloading);
 
     let progress_state = state.clone();
-    let progress_window = (*window).clone();
+    let progress_window = window.clone();
     let progress_data_dir = state.data_dir.clone();
     let progress_current_version = current_version.clone();
     let progress_version = version.clone();
@@ -748,7 +749,7 @@ where
                 Some(&error_message),
             )
             .with_field("version", json!(version));
-            set_update_state(state, status.clone())?;
+            set_update_state(&state, status.clone())?;
             let _ = window.emit("app:update:error", status);
             return Ok(json!({ "success": false, "error": error_message }));
         }
@@ -761,14 +762,14 @@ where
         .with_field("percent", json!(100))
         .with_field("installer", json!("tauri-updater"))
         .with_field("filePath", json!(file_path.to_string_lossy().to_string()));
-    set_update_state(state, ready.clone())?;
+    set_update_state(&state, ready.clone())?;
     let _ = window.emit("app:update:downloaded", ready);
     Ok(json!({ "success": true }))
 }
 
 pub(crate) async fn install_update(
-    state: &AppState,
-    app: &tauri::AppHandle,
+    state: AppState,
+    app: tauri::AppHandle,
 ) -> Result<Value, String> {
     let (supported, unsupported_reason) = auto_update_support();
     if !supported {
@@ -786,7 +787,7 @@ pub(crate) async fn install_update(
             .filter(|value| !value.is_empty())
             .ok_or_else(|| "安装包尚未下载完成。".to_string())?;
         let bytes = fs::read(file_path).map_err(error_string)?;
-        let Some(updater) = tauri_updater(app)? else {
+        let Some(updater) = tauri_updater(&app)? else {
             return Err("更新模块未配置公钥。".to_string());
         };
         let update = state

@@ -62,12 +62,12 @@ const UPLOAD_FOLDERS_TITLE: &str = "选择要上传的文件夹";
 const DOWNLOAD_DIRECTORY_TITLE: &str = "选择下载保存目录";
 
 pub(crate) async fn list_connection_directory(
-    state: &AppState,
+    state: AppState,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let remote_path = string_arg(&args, 1)?;
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
     if connection.kind == ConnectionKind::Local {
         return list_local_directory(vec![
             json!(connection_id),
@@ -77,7 +77,7 @@ pub(crate) async fn list_connection_directory(
     }
     let command = remote_list_directory_command(&connection, &remote_path);
     let output = run_connection_command_with_options(
-        state,
+        state.clone(),
         vec![
             json!(connection_id),
             json!(command),
@@ -95,12 +95,12 @@ pub(crate) async fn list_connection_directory(
 }
 
 pub(crate) async fn stat_connection_path(
-    state: &AppState,
+    state: AppState,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let remote_path = string_arg(&args, 1)?;
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
     if connection.kind == ConnectionKind::Local {
         return stat_local_path(vec![
             json!(connection_id),
@@ -110,7 +110,7 @@ pub(crate) async fn stat_connection_path(
     }
     let command = remote_stat_path_command(&connection, &remote_path);
     let output = run_connection_command_with_options(
-        state,
+        state.clone(),
         vec![
             json!(connection_id),
             json!(command),
@@ -128,12 +128,12 @@ pub(crate) async fn stat_connection_path(
 }
 
 pub(crate) async fn read_connection_file(
-    state: &AppState,
+    state: AppState,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let remote_path = string_arg(&args, 1)?;
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
     if connection.kind == ConnectionKind::Local {
         return read_local_file(vec![
             json!(connection_id),
@@ -142,7 +142,7 @@ pub(crate) async fn read_connection_file(
         ]);
     }
     let output = run_connection_command_with_options(
-        state,
+        state.clone(),
         vec![
             json!(connection_id),
             json!(remote_read_file_command(&connection, &remote_path)),
@@ -166,7 +166,7 @@ pub(crate) async fn read_connection_file(
 }
 
 pub(crate) async fn write_connection_file(
-    state: &AppState,
+    state: AppState,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
@@ -176,7 +176,7 @@ pub(crate) async fn write_connection_file(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
     if connection.kind == ConnectionKind::Local {
         return write_local_file(vec![
             json!(connection_id),
@@ -186,7 +186,7 @@ pub(crate) async fn write_connection_file(
         ]);
     }
     let output = run_connection_command_with_options(
-        state,
+        state.clone(),
         vec![
             json!(connection_id),
             json!(remote_write_file_command(&connection, &remote_path)),
@@ -208,12 +208,12 @@ pub(crate) async fn write_connection_file(
 }
 
 pub(crate) async fn create_connection_directory(
-    state: &AppState,
+    state: AppState,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let remote_path = string_arg(&args, 1)?;
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
     if connection.kind == ConnectionKind::Local {
         return create_local_directory(vec![
             json!(connection_id),
@@ -223,7 +223,7 @@ pub(crate) async fn create_connection_directory(
     }
     let command = remote_create_directory_command(&connection, &remote_path);
     let output = run_connection_command_with_options(
-        state,
+        state.clone(),
         vec![
             json!(connection_id),
             json!(command),
@@ -237,12 +237,12 @@ pub(crate) async fn create_connection_directory(
 }
 
 pub(crate) async fn create_connection_file(
-    state: &AppState,
+    state: AppState,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let remote_path = string_arg(&args, 1)?;
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
     if connection.kind == ConnectionKind::Local {
         return create_local_file(vec![
             json!(connection_id),
@@ -252,7 +252,7 @@ pub(crate) async fn create_connection_file(
     }
     let command = remote_create_file_command(&connection, &remote_path);
     let output = run_connection_command_with_options(
-        state,
+        state.clone(),
         vec![
             json!(connection_id),
             json!(command),
@@ -266,7 +266,7 @@ pub(crate) async fn create_connection_file(
 }
 
 pub(crate) async fn delete_connection_path(
-    state: &AppState,
+    state: AppState,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
@@ -276,7 +276,7 @@ pub(crate) async fn delete_connection_path(
         .and_then(Value::as_str)
         .unwrap_or("file")
         .to_string();
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
     if connection.kind == ConnectionKind::Local {
         return delete_local_path(vec![
             json!(connection_id),
@@ -287,7 +287,7 @@ pub(crate) async fn delete_connection_path(
     }
     let command = remote_delete_path_command(&connection, &remote_path, &entry_type);
     let output = run_connection_command_with_options(
-        state,
+        state.clone(),
         vec![
             json!(connection_id),
             json!(command),
@@ -301,13 +301,13 @@ pub(crate) async fn delete_connection_path(
 }
 
 pub(crate) async fn rename_connection_path(
-    state: &AppState,
+    state: AppState,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let old_path = string_arg(&args, 1)?;
     let new_path = string_arg(&args, 2)?;
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
     if connection.kind == ConnectionKind::Local {
         return rename_local_path(vec![
             json!(connection_id),
@@ -318,7 +318,7 @@ pub(crate) async fn rename_connection_path(
     }
     let command = remote_rename_path_command(&connection, &old_path, &new_path);
     let output = run_connection_command_with_options(
-        state,
+        state.clone(),
         vec![
             json!(connection_id),
             json!(command),
@@ -332,11 +332,11 @@ pub(crate) async fn rename_connection_path(
 }
 
 pub(crate) async fn check_connection_sftp(
-    state: &AppState,
+    state: AppState,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
     if connection.kind == ConnectionKind::Local {
         return Ok(json!({ "available": true }));
     }
@@ -344,7 +344,7 @@ pub(crate) async fn check_connection_sftp(
         .ssh
         .ok_or_else(|| "SSH profile is unavailable.".to_string())?;
     let output = run_ssh_command_for_profile_interactive(
-        state,
+        state.clone(),
         profile,
         remote_sftp_probe_command(),
         String::new(),
@@ -392,8 +392,8 @@ pub(crate) fn select_upload_items(folders: bool) -> Result<Value, String> {
 }
 
 pub(crate) async fn upload_selected_paths(
-    state: &AppState,
-    window: &tauri::Window,
+    state: AppState,
+    window: tauri::Window,
     args: Vec<Value>,
     folders: bool,
     multiple: bool,
@@ -444,15 +444,15 @@ pub(crate) async fn upload_selected_paths(
 }
 
 pub(crate) async fn download_connection_file(
-    state: &AppState,
-    window: &tauri::Window,
+    state: AppState,
+    window: tauri::Window,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let remote_path = string_arg(&args, 1)?;
     let transfer = TransferReporter::new(
-        state,
-        window,
+        &state,
+        &window,
         &connection_id,
         "download",
         args.get(2),
@@ -467,7 +467,7 @@ pub(crate) async fn download_connection_file(
     else {
         return Ok(json!({ "canceled": true }));
     };
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
     if connection.kind == ConnectionKind::Local {
         let size = fs::metadata(&remote_path)
             .map(|metadata| metadata.len())
@@ -485,7 +485,7 @@ pub(crate) async fn download_connection_file(
         transfer.start_file(&default_name, 0);
         transfer.check_canceled()?;
         let bytes = read_remote_file_bytes_with_options(
-            state,
+            &state,
             &connection_id,
             profile,
             &remote_path,
@@ -508,8 +508,8 @@ pub(crate) async fn download_connection_file(
 }
 
 pub(crate) async fn download_connection_paths(
-    state: &AppState,
-    window: &tauri::Window,
+    state: AppState,
+    window: tauri::Window,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
@@ -519,8 +519,8 @@ pub(crate) async fn download_connection_paths(
         .cloned()
         .unwrap_or_default();
     let transfer = TransferReporter::new(
-        state,
-        window,
+        &state,
+        &window,
         &connection_id,
         "download",
         args.get(2),
@@ -532,7 +532,7 @@ pub(crate) async fn download_connection_paths(
     else {
         return Ok(json!({ "canceled": true }));
     };
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
     let mut total_size = 0_u64;
     let mut file_count = 0_u64;
     let mut item_count = 0_u64;
@@ -567,14 +567,14 @@ pub(crate) async fn download_connection_paths(
                 .ssh
                 .clone()
                 .ok_or_else(|| "SSH profile is unavailable.".to_string())?;
-            let kind = remote_path_kind(state, profile.clone(), remote_path).await?;
+            let kind = remote_path_kind(&state, profile.clone(), remote_path).await?;
             if kind == "directory" {
-                let size = remote_path_size(state, profile.clone(), remote_path)
+                let size = remote_path_size(&state, profile.clone(), remote_path)
                     .await
                     .unwrap_or(0);
                 transfer.start_file(&file_name, size);
                 let bytes = download_remote_directory_archive_with_options(
-                    state,
+                    &state,
                     &connection_id,
                     profile,
                     remote_path,
@@ -588,12 +588,12 @@ pub(crate) async fn download_connection_paths(
                 file_count += 1;
                 item_count += 1;
             } else {
-                let size = remote_path_size(state, profile.clone(), remote_path)
+                let size = remote_path_size(&state, profile.clone(), remote_path)
                     .await
                     .unwrap_or(0);
                 transfer.start_file(&file_name, size);
                 let bytes = read_remote_file_bytes_with_options(
-                    state,
+                    &state,
                     &connection_id,
                     profile,
                     remote_path,
@@ -621,8 +621,8 @@ pub(crate) async fn download_connection_paths(
 }
 
 pub(crate) async fn upload_connection_paths(
-    state: &AppState,
-    window: &tauri::Window,
+    state: AppState,
+    window: tauri::Window,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
@@ -634,14 +634,14 @@ pub(crate) async fn upload_connection_paths(
         .unwrap_or_default();
     let item_count = items.len() as u64;
     let transfer = TransferReporter::new(
-        state,
-        window,
+        &state,
+        &window,
         &connection_id,
         "upload",
         args.get(3),
         "upload".to_string(),
     );
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
     let mut uploaded_paths = Vec::new();
     let mut total_size = 0_u64;
     let mut file_count = 0_u64;
@@ -706,7 +706,7 @@ pub(crate) async fn upload_connection_paths(
                 let bytes = fs::read(&local_path_buf).map_err(error_string)?;
                 transfer.start_file(&remote_name, bytes.len() as u64);
                 write_remote_file_bytes_with_options(
-                    state,
+                    &state,
                     &connection_id,
                     profile.clone(),
                     &remote_path,
@@ -724,7 +724,7 @@ pub(crate) async fn upload_connection_paths(
                 let (size, files) = local_path_file_stats(&local_path_buf);
                 transfer.start_file(&remote_name, size);
                 upload_local_directory_to_remote(
-                    state,
+                    &state,
                     profile.clone(),
                     &local_path_buf,
                     &remote_dir,
@@ -751,7 +751,7 @@ pub(crate) async fn upload_connection_paths(
 }
 
 pub(crate) async fn set_connection_path_permissions(
-    state: &AppState,
+    state: AppState,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
@@ -762,7 +762,7 @@ pub(crate) async fn set_connection_path_permissions(
         .get("recursive")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
     if connection.kind == ConnectionKind::Local {
         return set_local_path_permissions(vec![json!(connection_id), json!(remote_path), options]);
     }
@@ -772,7 +772,7 @@ pub(crate) async fn set_connection_path_permissions(
         format!("chmod {:o} -- {}", mode, shell_quote(&remote_path))
     };
     let output = run_connection_command_with_options(
-        state,
+        state.clone(),
         vec![json!(connection_id), json!(command), json!(""), options],
         3,
     )
@@ -781,7 +781,7 @@ pub(crate) async fn set_connection_path_permissions(
 }
 
 pub(crate) async fn compress_connection_paths(
-    state: &AppState,
+    state: AppState,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
@@ -801,13 +801,13 @@ pub(crate) async fn compress_connection_paths(
     if sources.is_empty() {
         return Err("请选择要压缩的路径。".to_string());
     }
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
     let command = archive_compress_command(&connection, &sources, &format, &dest_path)?;
     let output = if connection.kind == ConnectionKind::Local {
         run_shell(command, "", Some(Duration::from_secs(300))).await?
     } else {
         run_ssh_command_for_profile_interactive(
-            state,
+            state.clone(),
             connection
                 .ssh
                 .ok_or_else(|| "SSH profile is unavailable.".to_string())?,
@@ -821,7 +821,7 @@ pub(crate) async fn compress_connection_paths(
 }
 
 pub(crate) async fn decompress_connection_archive(
-    state: &AppState,
+    state: AppState,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
@@ -832,13 +832,13 @@ pub(crate) async fn decompress_connection_archive(
         .filter(|value| !value.is_empty())
         .unwrap_or(".")
         .to_string();
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
     let command = archive_decompress_command(&connection, &archive_path, &dest_dir)?;
     let output = if connection.kind == ConnectionKind::Local {
         run_shell(command, "", Some(Duration::from_secs(300))).await?
     } else {
         run_ssh_command_for_profile_interactive(
-            state,
+            state.clone(),
             connection
                 .ssh
                 .ok_or_else(|| "SSH profile is unavailable.".to_string())?,

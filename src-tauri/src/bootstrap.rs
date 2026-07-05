@@ -1,7 +1,5 @@
-use crate::{
-    app_data_dir, askpass::run_askpass_helper_from_env, ipc, proxy::run_proxy_helper_from_args,
-    state::AppState,
-};
+use crate::ui_prompts::remember_ui_window;
+use crate::{app_data_dir, ipc, proxy::run_proxy_helper_from_args, state::AppState};
 use serde_json::Value;
 use std::{fs, time::Duration};
 use tauri::Manager;
@@ -16,6 +14,8 @@ async fn ipc_dispatch(
     channel: String,
     args: Vec<Value>,
 ) -> Result<Value, String> {
+    remember_ui_window(&state, &window);
+    let state = state.inner().clone();
     ipc::dispatch(app, window, state, channel, args).await
 }
 
@@ -23,10 +23,6 @@ pub(crate) fn run() {
     if let Some(exit_code) = run_proxy_helper_from_args() {
         std::process::exit(exit_code);
     }
-    if let Some(exit_code) = run_askpass_helper_from_env() {
-        std::process::exit(exit_code);
-    }
-
     let data_dir = app_data_dir();
     if let Err(error) = fs::create_dir_all(&data_dir) {
         eprintln!("failed to create app data dir: {error}");

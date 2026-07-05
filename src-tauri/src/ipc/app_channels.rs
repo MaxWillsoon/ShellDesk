@@ -7,23 +7,27 @@ use serde_json::{json, Value};
 use tauri::Emitter;
 
 pub(crate) async fn dispatch(
-    app: &tauri::AppHandle,
-    window: &tauri::Window,
-    state: &AppState,
-    channel: &str,
+    app: tauri::AppHandle,
+    window: tauri::Window,
+    state: AppState,
+    channel: String,
     args: &[Value],
 ) -> Result<Option<Value>, String> {
-    let value = match channel {
-        "app:get-info" => json!(app_handlers::get_info(app)),
+    let value = match channel.as_str() {
+        "app:get-info" => json!(app_handlers::get_info(&app)),
         "app:open-external" => app_handlers::open_external(args.to_vec())?,
         "app:open-connection-window" => {
-            app_handlers::open_connection_window(app, state, args.to_vec())?
+            app_handlers::open_connection_window(&app, &state, args.to_vec())?
         }
-        "app:check-for-updates" => check_release_info(app).await?,
-        "app:get-update-status" => read_update_state(state, app),
-        "app:check-for-update-download" => check_for_update_download(state, window, app).await?,
-        "app:download-update" => download_update(state, window, app).await?,
-        "app:install-update" => install_update(state, app).await?,
+        "app:check-for-updates" => check_release_info(app.clone()).await?,
+        "app:get-update-status" => read_update_state(&state, &app),
+        "app:check-for-update-download" => {
+            check_for_update_download(state.clone(), window.clone(), app.clone()).await?
+        }
+        "app:download-update" => {
+            download_update(state.clone(), window.clone(), app.clone()).await?
+        }
+        "app:install-update" => install_update(state.clone(), app.clone()).await?,
 
         "window:show" => {
             window.show().map_err(error_string)?;
@@ -53,7 +57,7 @@ pub(crate) async fn dispatch(
         }
         "window:is-maximized" => json!(window.is_maximized().map_err(error_string)?),
         "window:close" => {
-            tray::close_window(window, state)?;
+            tray::close_window(&window, &state)?;
             Value::Null
         }
         _ => return Ok(None),

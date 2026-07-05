@@ -69,13 +69,6 @@ if (missing.length) {
 }
 
 const command = process.platform === 'win32' ? 'cargo.exe' : 'cargo';
-const appBinary = path.join(
-  root,
-  'src-tauri',
-  'target',
-  'debug',
-  process.platform === 'win32' ? 'shelldesk.exe' : 'shelldesk',
-);
 
 function runCargo(args) {
   return spawnSync(command, args, {
@@ -83,7 +76,6 @@ function runCargo(args) {
     env: {
       ...process.env,
       ...liveEnv,
-      SHELLDESK_TEST_ASKPASS_EXE: appBinary,
       SHELLDESK_REQUIRE_LIVE_SSH_SMOKE: '1',
     },
     encoding: 'utf8',

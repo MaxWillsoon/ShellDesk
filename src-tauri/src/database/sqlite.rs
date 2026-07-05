@@ -231,7 +231,7 @@ async fn run_sqlite_cli(
     {
         args.push(effective_options);
     }
-    let output = run_connection_command(state, args).await?;
+    let output = run_connection_command(state.clone(), args).await?;
     if output.get("code").and_then(Value::as_i64).unwrap_or(1) != 0 {
         return Err(output
             .get("stderr")

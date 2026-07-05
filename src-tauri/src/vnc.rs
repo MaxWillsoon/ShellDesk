@@ -12,7 +12,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::{
     error_string, get_connection, random_id, read_string_field,
-    ssh_tunnel::{create_tunnel_with_fallback, spawn_tunnel_shutdown, SshTunnelHandle},
+    ssh_tunnel::{create_tunnel_for_connection, spawn_tunnel_shutdown, SshTunnelHandle},
     string_arg, AppState, ConnectionKind, VncProxySession,
 };
 
@@ -39,25 +39,25 @@ impl Drop for VncTunnelGuard {
 }
 
 pub(crate) async fn probe(
-    state: &AppState,
-    window: &tauri::Window,
+    state: AppState,
+    window: tauri::Window,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let config = args.get(1).cloned().unwrap_or_else(|| json!({}));
     let (host, port, vnc_id) = read_vnc_config(&config)?;
     emit_diagnostic(
-        window,
+        &window,
         &connection_id,
         &vnc_id,
         "probe",
         &format!("Checking VNC target {host}:{port}"),
     );
-    let result = probe_vnc_target(state, window, &connection_id, &host, port).await;
+    let result = probe_vnc_target(&state, &window, &connection_id, &host, port).await;
     let probe = match result {
         Ok(probe) => probe,
         Err(error) => {
-            emit_diagnostic(window, &connection_id, &vnc_id, "probe-error", &error);
+            emit_diagnostic(&window, &connection_id, &vnc_id, "probe-error", &error);
             return Err(error);
         }
     };
@@ -67,11 +67,11 @@ pub(crate) async fn probe(
         .is_none()
     {
         let error = "VNC 服务探测结果无效。".to_string();
-        emit_diagnostic(window, &connection_id, &vnc_id, "probe-error", &error);
+        emit_diagnostic(&window, &connection_id, &vnc_id, "probe-error", &error);
         return Err(error);
     }
     emit_diagnostic(
-        window,
+        &window,
         &connection_id,
         &vnc_id,
         "probe-ready",
@@ -81,27 +81,27 @@ pub(crate) async fn probe(
 }
 
 pub(crate) async fn start(
-    state: &AppState,
-    window: &tauri::Window,
+    state: AppState,
+    window: tauri::Window,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let config = args.get(1).cloned().unwrap_or_else(|| json!({}));
     let (host, port, vnc_id) = read_vnc_config(&config)?;
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
     emit_diagnostic(
-        window,
+        &window,
         &connection_id,
         &vnc_id,
         "start",
         &format!("Starting VNC proxy for {host}:{port}"),
     );
 
-    stop_by_key(state, &vnc_key(&connection_id, &vnc_id))?;
+    stop_by_key(&state, &vnc_key(&connection_id, &vnc_id))?;
 
     let (target_host, target_port, ssh_tunnel) = if connection.kind == ConnectionKind::Local {
         emit_diagnostic(
-            window,
+            &window,
             &connection_id,
             &vnc_id,
             "target",
@@ -110,18 +110,18 @@ pub(crate) async fn start(
         (host.clone(), port, None)
     } else {
         emit_diagnostic(
-            window,
+            &window,
             &connection_id,
             &vnc_id,
             "ssh-forward",
             &format!("Opening SSH tunnel 127.0.0.1:* -> {host}:{port}"),
         );
         let (tunnel, local_addr) =
-            create_tunnel_with_fallback(state, window, &connection_id, &host, port).await?;
+            create_tunnel_for_connection(&state, &window, &connection_id, &host, port).await?;
         let local_addr = tunnel.local_addr().unwrap_or(local_addr);
         let forward_port = local_addr.port();
         emit_diagnostic(
-            window,
+            &window,
             &connection_id,
             &vnc_id,
             "ssh-forward-ready",
@@ -136,7 +136,7 @@ pub(crate) async fn start(
         .map_err(error_string)?;
     let ws_port = listener.local_addr().map_err(error_string)?.port();
     emit_diagnostic(
-        window,
+        &window,
         &connection_id,
         &vnc_id,
         "websocket-ready",
@@ -197,7 +197,7 @@ pub(crate) async fn start(
 pub(crate) fn stop(state: &AppState, args: Vec<Value>) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let vnc_id = string_arg(&args, 1)?;
-    stop_by_key(state, &vnc_key(&connection_id, &vnc_id))?;
+    stop_by_key(&state, &vnc_key(&connection_id, &vnc_id))?;
     Ok(json!(true))
 }
 
@@ -248,7 +248,7 @@ async fn probe_vnc_target(
             (host.to_string(), port, None)
         } else {
             let (tunnel, local_addr) =
-                create_tunnel_with_fallback(state, window, connection_id, host, port).await?;
+                create_tunnel_for_connection(state, window, connection_id, host, port).await?;
             let local_addr = tunnel.local_addr().unwrap_or(local_addr);
             let forward_port = local_addr.port();
             (local_addr.ip().to_string(), forward_port, Some(tunnel))

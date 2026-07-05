@@ -2,8 +2,6 @@
 pub(crate) mod ai;
 #[path = "app.rs"]
 pub(crate) mod app;
-#[path = "askpass.rs"]
-pub(crate) mod askpass;
 #[path = "bootstrap.rs"]
 pub(crate) mod bootstrap;
 #[path = "browser_proxy.rs"]
@@ -30,6 +28,8 @@ pub(crate) mod logs;
 pub(crate) mod proxy;
 #[path = "remote_fs.rs"]
 pub(crate) mod remote_fs;
+#[path = "russh_client.rs"]
+pub(crate) mod russh_client;
 #[path = "ssh_transport.rs"]
 pub(crate) mod ssh_transport;
 #[path = "ssh_tunnel.rs"]
@@ -44,6 +44,8 @@ pub(crate) mod system;
 pub(crate) mod terminal;
 #[path = "tray.rs"]
 pub(crate) mod tray;
+#[path = "ui_prompts.rs"]
+pub(crate) mod ui_prompts;
 #[path = "updater.rs"]
 pub(crate) mod updater;
 #[path = "util.rs"]
@@ -59,16 +61,13 @@ pub(crate) mod zmodem;
 
 pub(crate) use connection::get_connection;
 pub(crate) use ssh_transport::{
-    apply_askpass_env_pty, apply_proxy_helper_env_pty, command_exists, pick_free_local_port,
     ps_quote, run_cli_output, run_connection_command, run_connection_command_stream,
-    run_connection_command_with_options, run_ssh_command_for_profile_interactive,
-    run_ssh_command_for_profile_with_window, shell_quote, should_use_sshpass,
-    ssh_args_with_askpass, ssh_destination, start_optional_askpass_broker, start_ssh_local_forward,
-    unavailable_password_auth_error, value_to_bytes, wait_for_tcp,
+    run_connection_command_with_options, run_ssh_command_for_profile_interactive, shell_quote,
+    unavailable_password_auth_error, value_to_bytes,
 };
 pub(crate) use state::{
     ActiveConnection, ActiveTransfer, AppState, ConnectionKind, HostKeyRequest, PrivilegeConfig,
-    SshProfile, VncProxySession,
+    SshProfile, UiWindowRef, VncProxySession,
 };
 pub(crate) use util::{
     app_data_dir, error_string, escape_pointer, https_url_origin, node_platform, now,

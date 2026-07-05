@@ -26,10 +26,7 @@ use host_keys::{
     classify_scanned_host_key, known_host_matches_host, known_hosts_host_pattern,
     merge_known_hosts_from_scan, select_scanned_host_key_decision,
 };
-pub(crate) use host_keys::{
-    confirm_ssh_host_public_key_trusted, ensure_ssh_profile_host_key_trusted,
-    respond_host_key_verification,
-};
+pub(crate) use host_keys::{ensure_ssh_profile_host_key_trusted, respond_host_key_verification};
 pub(crate) fn open_local_connection(state: &AppState) -> Result<Value, String> {
     {
         let connections = state.connections.lock().map_err(error_string)?;
@@ -486,19 +483,19 @@ pub(crate) fn respond_keyboard_interactive(
 }
 
 pub(crate) async fn connect_ssh(
-    state: &AppState,
-    window: &tauri::Window,
+    state: AppState,
+    window: tauri::Window,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let raw_host = args.first().cloned().unwrap_or_else(|| json!({}));
-    let mut temp_key_guard = TempKeyGuard::new(state);
-    let mut profile = build_ssh_profile(state, &raw_host, false, temp_key_guard.paths_mut())?;
-    let privilege = build_privilege_config(state, &raw_host)?;
-    let jump_host_display = build_jump_host_display(state, &raw_host)?;
+    let mut temp_key_guard = TempKeyGuard::new(&state);
+    let mut profile = build_ssh_profile(&state, &raw_host, false, temp_key_guard.paths_mut())?;
+    let privilege = build_privilege_config(&state, &raw_host)?;
+    let jump_host_display = build_jump_host_display(&state, &raw_host)?;
     if let Some(error) = unavailable_password_auth_error(&profile) {
         return Ok(json!({ "ok": false, "error": error }));
     }
-    if let Err(error) = prepare_ssh_host_key_trust(state, window, &mut profile).await {
+    if let Err(error) = prepare_ssh_host_key_trust(&state, &window, &mut profile).await {
         return Ok(json!({ "ok": false, "error": error }));
     }
 
