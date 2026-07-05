@@ -6,10 +6,10 @@ use russh::{
 use serde::Deserialize;
 use std::{
     fmt,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{Ipv4Addr, SocketAddr},
     path::Path,
     pin::Pin,
-    process::{Child as StdChild, Stdio},
+    process::Stdio,
     sync::Arc,
     task::{Context, Poll},
     time::Duration,
@@ -25,10 +25,9 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    connection::{confirm_ssh_host_public_key_trusted, ensure_ssh_profile_host_key_trusted},
-    error_string, get_connection, pick_free_local_port, prevent_tokio_process_window,
-    proxy::SshProxyConfig,
-    shell_quote, start_ssh_local_forward, wait_for_tcp, AppState, ConnectionKind, SshProfile,
+    connection::ensure_ssh_profile_host_key_trusted, error_string, get_connection,
+    prevent_tokio_process_window, proxy::SshProxyConfig, shell_quote, AppState, ConnectionKind,
+    SshProfile,
 };
 use serde_json::Value;
 
@@ -42,10 +41,6 @@ pub(crate) struct SshTunnelConfig {
     pub(crate) ssh_key_path: Option<String>,
     pub(crate) ssh_key_passphrase: Option<String>,
     pub(crate) known_hosts_path: Option<String>,
-    #[serde(skip)]
-    pub(crate) trust_state: Option<AppState>,
-    #[serde(skip)]
-    pub(crate) trust_window: Option<tauri::Window>,
     #[serde(skip)]
     pub(crate) proxy_helper_exe: String,
     #[serde(skip)]
@@ -75,14 +70,6 @@ impl fmt::Debug for SshTunnelConfig {
                 &self.ssh_key_passphrase.as_ref().map(|_| "<redacted>"),
             )
             .field("known_hosts_path", &self.known_hosts_path)
-            .field(
-                "trust_state",
-                &self.trust_state.as_ref().map(|_| "<available>"),
-            )
-            .field(
-                "trust_window",
-                &self.trust_window.as_ref().map(|_| "<available>"),
-            )
             .field("proxy_helper_exe", &self.proxy_helper_exe)
             .field("proxy", &self.proxy)
             .field("jump", &self.jump)
@@ -191,7 +178,6 @@ pub(crate) struct SshTunnel {
 
 pub(crate) enum SshTunnelHandle {
     Native(SshTunnel),
-    OpenSsh(StdChild),
 }
 
 impl SshTunnelHandle {
@@ -200,17 +186,12 @@ impl SshTunnelHandle {
             Self::Native(tunnel) => {
                 let _ = tunnel.shutdown().await;
             }
-            Self::OpenSsh(mut child) => {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
         }
     }
 
     pub(crate) fn local_addr(&self) -> Option<SocketAddr> {
         match self {
             Self::Native(tunnel) => Some(tunnel.local_addr()),
-            Self::OpenSsh(_) => None,
         }
     }
 }
@@ -240,10 +221,7 @@ impl SshTunnel {
 struct TunnelHandler {
     host: String,
     port: u16,
-    username: String,
     known_hosts_path: Option<String>,
-    trust_state: Option<AppState>,
-    trust_window: Option<tauri::Window>,
 }
 
 impl client::Handler for TunnelHandler {
@@ -285,40 +263,7 @@ impl client::Handler for TunnelHandler {
             );
         }
 
-        let (Some(state), Some(window)) = (self.trust_state.as_ref(), self.trust_window.as_ref())
-        else {
-            return Ok(false);
-        };
-        let public_key = match server_public_key.to_openssh() {
-            Ok(value) => value,
-            Err(error) => {
-                eprintln!(
-                    "[ssh-tunnel] failed to encode host key for {}:{}: {}",
-                    self.host, self.port, error
-                );
-                return Ok(false);
-            }
-        };
-        match confirm_ssh_host_public_key_trusted(
-            state,
-            window,
-            &self.host,
-            self.port,
-            &self.username,
-            &public_key,
-        )
-        .await
-        {
-            Ok(true) => Ok(true),
-            Ok(false) => Ok(false),
-            Err(error) => {
-                eprintln!(
-                    "[ssh-tunnel] host key confirmation failed for {}:{}: {}",
-                    self.host, self.port, error
-                );
-                Ok(false)
-            }
-        }
+        Ok(false)
     }
 }
 
@@ -391,7 +336,7 @@ pub(crate) async fn create_tunnel(config: SshTunnelConfig) -> Result<SshTunnel, 
     })
 }
 
-pub(crate) async fn create_tunnel_with_fallback(
+pub(crate) async fn create_tunnel_for_connection(
     state: &AppState,
     window: &tauri::Window,
     connection_id: &str,
@@ -400,42 +345,11 @@ pub(crate) async fn create_tunnel_with_fallback(
 ) -> Result<(SshTunnelHandle, SocketAddr), String> {
     let config =
         config_from_connection_with_window(state, window, connection_id, host, port, None).await?;
-    match create_tunnel(config).await {
-        Ok(tunnel) => {
-            let addr = tunnel.local_addr();
-            Ok((SshTunnelHandle::Native(tunnel), addr))
-        }
-        Err(native_error) => {
-            eprintln!(
-                "[ssh-tunnel] Native tunnel failed, trying OpenSSH: {}",
-                native_error.user_message()
-            );
-            let profile = get_connection(state, connection_id)?
-                .ssh
-                .ok_or_else(|| "SSH profile is unavailable.".to_string())?;
-            let local_port = pick_free_local_port()?;
-            let mut child =
-                start_ssh_local_forward(&profile, local_port, host, port).map_err(|error| {
-                    format!(
-                        "{}；OpenSSH 本地转发启动失败：{}",
-                        native_error.user_message(),
-                        error
-                    )
-                })?;
-            if let Err(error) = wait_for_tcp("127.0.0.1", local_port, Duration::from_secs(8)).await
-            {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!(
-                    "{}；OpenSSH 本地转发不可用：{}",
-                    native_error.user_message(),
-                    error
-                ));
-            }
-            let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), local_port);
-            Ok((SshTunnelHandle::OpenSsh(child), addr))
-        }
-    }
+    let tunnel = create_tunnel(config)
+        .await
+        .map_err(|error| error.user_message())?;
+    let addr = tunnel.local_addr();
+    Ok((SshTunnelHandle::Native(tunnel), addr))
 }
 
 pub(crate) fn spawn_tunnel_shutdown(label: impl Into<String>, tunnel: SshTunnelHandle) {
@@ -460,10 +374,7 @@ async fn connect_profile(
     let handler = TunnelHandler {
         host: config.ssh_host.clone(),
         port: config.ssh_port,
-        username: config.ssh_user.clone(),
         known_hosts_path: config.known_hosts_path.clone(),
-        trust_state: config.trust_state.clone(),
-        trust_window: config.trust_window.clone(),
     };
 
     let transport = open_transport(config, timeout).await?;
@@ -817,10 +728,12 @@ pub(crate) async fn config_from_connection_with_window(
         &mut local_profile
     };
     ensure_ssh_profile_host_key_trusted(state, window, profile).await?;
-    let mut config = config_from_profile(profile, remote_host, remote_port, overrides);
-    config.trust_state = Some(state.clone());
-    config.trust_window = Some(window.clone());
-    Ok(config)
+    Ok(config_from_profile(
+        profile,
+        remote_host,
+        remote_port,
+        overrides,
+    ))
 }
 
 fn config_from_profile(
@@ -857,8 +770,6 @@ fn config_from_profile(
         ssh_key_path,
         ssh_key_passphrase,
         known_hosts_path: Some(profile.known_hosts_path.clone()).filter(|value| !value.is_empty()),
-        trust_state: None,
-        trust_window: None,
         proxy_helper_exe: profile.proxy_helper_exe.clone(),
         proxy: profile.proxy.clone(),
         jump: profile.jump.clone(),
@@ -952,8 +863,6 @@ mod tests {
             ssh_key_path: None,
             ssh_key_passphrase: None,
             known_hosts_path: None,
-            trust_state: None,
-            trust_window: None,
             proxy_helper_exe: String::new(),
             proxy: None,
             jump: None,

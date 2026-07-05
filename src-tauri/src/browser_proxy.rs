@@ -1,10 +1,8 @@
 use crate::{
     error_string, get_connection, https_url_origin,
-    ssh_tunnel::{create_tunnel_with_fallback, spawn_tunnel_shutdown, SshTunnelHandle},
-    string_arg, AppState, ConnectionKind, SshProfile,
+    ssh_tunnel::{create_tunnel_for_connection, spawn_tunnel_shutdown, SshTunnelHandle},
+    string_arg, AppState, ConnectionKind,
 };
-use crate::{run_ssh_command_for_profile_with_window, shell_quote};
-use base64::Engine;
 use reqwest::header::{CONTENT_ENCODING, CONTENT_TYPE, COOKIE, HOST, SET_COOKIE};
 use serde_json::{json, Value};
 use std::{
@@ -27,13 +25,6 @@ pub(crate) struct BrowserProxySession {
     pub(crate) ssh_tunnel: Option<SshTunnelHandle>,
 }
 
-#[derive(Clone)]
-struct BrowserRemoteFallback {
-    state: AppState,
-    window: tauri::Window,
-    profile: SshProfile,
-}
-
 #[derive(Clone, Default)]
 struct BrowserCookieJar {
     cookies: Arc<Mutex<HashMap<String, BrowserCookie>>>,
@@ -48,13 +39,13 @@ struct BrowserCookie {
 }
 
 pub(crate) async fn browser_resolve_url(
-    state: &AppState,
-    window: &tauri::Window,
+    state: AppState,
+    window: tauri::Window,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
     let raw_url = string_arg(&args, 1)?;
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
     let parsed = reqwest::Url::parse(&raw_url).map_err(|_| "浏览器 URL 无效。".to_string())?;
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
         return Err("远程浏览器只支持 http 和 https URL。".to_string());
@@ -73,13 +64,12 @@ pub(crate) async fn browser_resolve_url(
                 parsed.port_or_known_default().unwrap_or(443),
             );
             let proxy_port = ensure_browser_reverse_proxy(
-                state,
+                &state,
                 key,
                 connection_id.clone(),
                 parsed.clone(),
                 None,
                 true,
-                None,
             )
             .await?;
             let browser_url = browser_proxy_url(&parsed, proxy_port, "http")?;
@@ -121,7 +111,7 @@ pub(crate) async fn browser_resolve_url(
     };
     let key = browser_proxy_key(&connection_id, proxy_key_scheme, &target_host, target_port);
 
-    if let Some(existing_port) = healthy_browser_proxy_port(state, &key).await? {
+    if let Some(existing_port) = healthy_browser_proxy_port(&state, &key).await? {
         let browser_url = browser_proxy_url(&parsed, existing_port, "http")?;
         return Ok(json!({
             "url": parsed.to_string(),
@@ -136,35 +126,22 @@ pub(crate) async fn browser_resolve_url(
         }));
     }
 
-    let profile = connection
-        .ssh
-        .clone()
-        .ok_or_else(|| "SSH profile is unavailable.".to_string())?;
     let (tunnel, local_addr) =
-        create_tunnel_with_fallback(state, window, &connection_id, &target_host, target_port)
+        create_tunnel_for_connection(&state, &window, &connection_id, &target_host, target_port)
             .await?;
     let local_addr = tunnel.local_addr().unwrap_or(local_addr);
     let tunnel_port = local_addr.port();
 
-    let remote_fallback = Some(BrowserRemoteFallback {
-        state: state.clone(),
-        window: window.clone(),
-        profile: profile.clone(),
-    });
-    let proxy_port = match start_browser_reverse_proxy(
-        parsed.clone(),
-        Some(tunnel_port),
-        trusted_certificate,
-        remote_fallback,
-    )
-    .await
-    {
-        Ok(proxy_port) => proxy_port,
-        Err(error) => {
-            spawn_tunnel_shutdown("browser", tunnel);
-            return Err(error);
-        }
-    };
+    let proxy_port =
+        match start_browser_reverse_proxy(parsed.clone(), Some(tunnel_port), trusted_certificate)
+            .await
+        {
+            Ok(proxy_port) => proxy_port,
+            Err(error) => {
+                spawn_tunnel_shutdown("browser", tunnel);
+                return Err(error);
+            }
+        };
     let browser_port = proxy_port.0;
     let browser_url = browser_proxy_url(&parsed, browser_port, "http")?;
     let shutdown = Some(proxy_port.1);
@@ -223,18 +200,13 @@ async fn ensure_browser_reverse_proxy(
     upstream_url: reqwest::Url,
     upstream_forward_port: Option<u16>,
     accept_invalid_certs: bool,
-    remote_fallback: Option<BrowserRemoteFallback>,
 ) -> Result<u16, String> {
     if let Some(existing_port) = healthy_browser_proxy_port(state, &key).await? {
         return Ok(existing_port);
     }
-    let (proxy_port, shutdown) = start_browser_reverse_proxy(
-        upstream_url,
-        upstream_forward_port,
-        accept_invalid_certs,
-        remote_fallback,
-    )
-    .await?;
+    let (proxy_port, shutdown) =
+        start_browser_reverse_proxy(upstream_url, upstream_forward_port, accept_invalid_certs)
+            .await?;
     state.browser_proxies.lock().map_err(error_string)?.insert(
         key,
         BrowserProxySession {
@@ -308,7 +280,6 @@ async fn start_browser_reverse_proxy(
     upstream_url: reqwest::Url,
     upstream_forward_port: Option<u16>,
     accept_invalid_certs: bool,
-    remote_fallback: Option<BrowserRemoteFallback>,
 ) -> Result<(u16, oneshot::Sender<()>), String> {
     let host = upstream_url
         .host_str()
@@ -344,7 +315,6 @@ async fn start_browser_reverse_proxy(
                             let next_origin = upstream_origin.clone();
                             let next_request_origin = request_origin.clone();
                             let next_host_header = upstream_host_header.clone();
-                            let next_remote_fallback = remote_fallback.clone();
                             let next_cookie_jar = cookie_jar.clone();
                             tauri::async_runtime::spawn(async move {
                                 let _ = handle_trusted_https_browser_proxy(
@@ -353,7 +323,6 @@ async fn start_browser_reverse_proxy(
                                     next_origin,
                                     next_request_origin,
                                     next_host_header,
-                                    next_remote_fallback,
                                     next_cookie_jar,
                                 ).await;
                             });
@@ -426,7 +395,6 @@ async fn handle_trusted_https_browser_proxy(
     upstream_origin: String,
     request_origin: String,
     upstream_host_header: String,
-    remote_fallback: Option<BrowserRemoteFallback>,
     cookie_jar: BrowserCookieJar,
 ) -> Result<(), String> {
     let (method, target, headers, body) = read_browser_http_request(&mut stream).await?;
@@ -441,17 +409,8 @@ async fn handle_trusted_https_browser_proxy(
         &upstream_origin,
         &request_origin,
     );
-    let remote_upstream_url = browser_request_url(
-        &target,
-        browser_host.as_str(),
-        &upstream_origin,
-        &upstream_origin,
-    );
     let method = reqwest::Method::from_bytes(method.as_bytes())
         .map_err(|_| "浏览器请求方法无效。".to_string())?;
-    let method_text = method.as_str().to_string();
-    let fallback_headers = headers.clone();
-    let fallback_body = body.clone();
     let request_path = request_path_from_url(&upstream_url);
     let is_secure_upstream = upstream_url.starts_with("https://");
     let browser_cookie_header = header_value(&headers, "cookie");
@@ -479,22 +438,6 @@ async fn handle_trusted_https_browser_proxy(
     let response = match request.send().await {
         Ok(response) => response,
         Err(error) => {
-            if let Some(fallback) = remote_fallback {
-                return handle_remote_browser_proxy(
-                    &mut stream,
-                    fallback,
-                    method_text,
-                    remote_upstream_url,
-                    fallback_headers,
-                    fallback_body,
-                    upstream_origin,
-                    request_origin,
-                    upstream_host_header,
-                    browser_host,
-                    cookie_jar,
-                )
-                .await;
-            }
             return Err(error_string(error));
         }
     };
@@ -557,11 +500,8 @@ async fn handle_trusted_https_browser_proxy(
         "Content-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     ));
-    stream
-        .write_all(raw.as_bytes())
-        .await
-        .map_err(error_string)?;
-    stream.write_all(&body).await.map_err(error_string)?;
+    write_all_owned(&mut stream, raw.into_bytes()).await?;
+    write_all_owned(&mut stream, body).await?;
     let _ = stream.shutdown().await;
     Ok(())
 }
@@ -611,150 +551,11 @@ fn path_query_fragment(url: &reqwest::Url) -> String {
     output
 }
 
-async fn handle_remote_browser_proxy(
-    stream: &mut TcpStream,
-    fallback: BrowserRemoteFallback,
-    method: String,
-    upstream_url: String,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
-    upstream_origin: String,
-    request_origin: String,
-    upstream_host_header: String,
-    browser_host: String,
-    cookie_jar: BrowserCookieJar,
-) -> Result<(), String> {
-    let request_path = request_path_from_url(&upstream_url);
-    let is_secure_upstream = upstream_url.starts_with("https://");
-    let jar_cookie_header = cookie_jar.header_for_request(&request_path, is_secure_upstream);
-    let browser_cookie_header = header_value(&headers, "cookie");
-    let combined_cookie_header =
-        combine_cookie_headers(jar_cookie_header.as_deref(), browser_cookie_header);
-    let command = remote_browser_curl_command(
-        &method,
-        &upstream_url,
-        &upstream_host_header,
-        &headers,
-        combined_cookie_header.as_deref(),
-        !body.is_empty(),
-    );
-    let stdin = String::from_utf8_lossy(&body).to_string();
-    let output = run_ssh_command_for_profile_with_window(
-        &fallback.state,
-        Some(fallback.window),
-        fallback.profile,
-        command,
-        stdin,
-    )
-    .await?;
-    let stdout = output
-        .get("stdout")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
-    let stderr = output.get("stderr").and_then(Value::as_str).unwrap_or("");
-    let success = output
-        .get("success")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    if stdout.is_empty() {
-        let reason = if stderr.trim().is_empty() {
-            "远程 curl 未返回数据。".to_string()
-        } else {
-            format!("远程 curl 请求失败：{}", stderr.trim())
-        };
-        write_browser_error_response(stream, 502, &reason).await?;
-        return Ok(());
-    }
-    let response_bytes = base64::engine::general_purpose::STANDARD
-        .decode(stdout)
-        .map_err(|error| format!("远程浏览器响应解码失败：{error}"))?;
-    if !success && response_bytes.is_empty() {
-        let reason = if stderr.trim().is_empty() {
-            "远程 curl 请求失败。".to_string()
-        } else {
-            format!("远程 curl 请求失败：{}", stderr.trim())
-        };
-        write_browser_error_response(stream, 502, &reason).await?;
-        return Ok(());
-    }
-    cookie_jar.store_from_response_bytes(&response_bytes, &request_path);
-    write_remote_browser_response(
-        stream,
-        &response_bytes,
-        &upstream_origin,
-        &request_origin,
-        &browser_host,
-    )
-    .await
-}
-
-fn remote_browser_curl_command(
-    method: &str,
-    upstream_url: &str,
-    upstream_host_header: &str,
-    headers: &[(String, String)],
-    cookie_header: Option<&str>,
-    has_body: bool,
-) -> String {
-    let mut parts = vec![
-        "curl".to_string(),
-        "-sS".to_string(),
-        "--max-time".to_string(),
-        "30".to_string(),
-        "--http1.1".to_string(),
-        "-i".to_string(),
-        "-X".to_string(),
-        shell_quote(method),
-        "-H".to_string(),
-        shell_quote(&format!("Host: {upstream_host_header}")),
-    ];
-    for (name, value) in headers {
-        let name_lower = name.to_ascii_lowercase();
-        if should_skip_browser_request_header(&name_lower)
-            || matches!(name_lower.as_str(), "host" | "content-length" | "cookie")
-        {
-            continue;
-        }
-        parts.push("-H".to_string());
-        parts.push(shell_quote(&format!("{name}: {value}")));
-    }
-    if let Some(cookie_header) = cookie_header.filter(|value| !value.trim().is_empty()) {
-        parts.push("-H".to_string());
-        parts.push(shell_quote(&format!("Cookie: {cookie_header}")));
-    }
-    if has_body {
-        parts.push("--data-binary".to_string());
-        parts.push("@-".to_string());
-    }
-    parts.push(shell_quote(upstream_url));
-    format!(
-        "{} | (base64 2>/dev/null || openssl base64 -A) | tr -d '\\r\\n'",
-        parts.join(" ")
-    )
-}
-
 impl BrowserCookieJar {
     fn store_from_header_map(&self, headers: &reqwest::header::HeaderMap, request_path: &str) {
         for value in headers.get_all(SET_COOKIE).iter() {
             if let Ok(value) = value.to_str() {
                 self.store_set_cookie(value, request_path);
-            }
-        }
-    }
-
-    fn store_from_response_bytes(&self, response_bytes: &[u8], request_path: &str) {
-        let Some(header_end) = find_http_header_end(response_bytes) else {
-            return;
-        };
-        let header_text = String::from_utf8_lossy(&response_bytes[..header_end]);
-        for line in header_text.lines().skip(1) {
-            let line = line.trim_end_matches('\r');
-            let Some((name, value)) = line.split_once(':') else {
-                continue;
-            };
-            if name.eq_ignore_ascii_case(SET_COOKIE.as_str()) {
-                self.store_set_cookie(value.trim(), request_path);
             }
         }
     }
@@ -1134,127 +935,8 @@ fn remove_csp_frame_ancestors(value: &str) -> String {
         .join("; ")
 }
 
-async fn write_remote_browser_response(
-    stream: &mut TcpStream,
-    response_bytes: &[u8],
-    upstream_origin: &str,
-    request_origin: &str,
-    browser_host: &str,
-) -> Result<(), String> {
-    let Some(header_end) = find_http_header_end(response_bytes) else {
-        write_browser_error_response(stream, 502, "远程浏览器响应格式无效。").await?;
-        return Ok(());
-    };
-    let (header_bytes, body) = response_bytes.split_at(header_end);
-    let header_text = String::from_utf8_lossy(header_bytes);
-    let mut lines = header_text.lines();
-    let status_line = lines.next().unwrap_or("HTTP/1.1 502 Bad Gateway");
-    let mut status_parts = status_line.splitn(3, ' ');
-    let _http_version = status_parts.next();
-    let status_code = status_parts.next().unwrap_or("502");
-    let reason = status_parts.next().unwrap_or("Bad Gateway");
-    let response_headers = lines
-        .filter_map(|line| {
-            let line = line.trim_end_matches('\r');
-            if line.is_empty() {
-                return None;
-            }
-            let (name, value) = line.split_once(':')?;
-            Some((name.to_string(), value.trim().to_string()))
-        })
-        .collect::<Vec<_>>();
-    let content_type = header_value(&response_headers, "content-type");
-    let content_encoding = header_value(&response_headers, "content-encoding");
-    let (body, body_rewritten) = rewrite_browser_response_body(
-        body.to_vec(),
-        content_type,
-        content_encoding,
-        upstream_origin,
-        request_origin,
-        browser_host,
-    );
-    let mut raw = format!("HTTP/1.1 {status_code} {reason}\r\n");
-    for (name, value) in response_headers {
-        let name_lower = name.to_ascii_lowercase();
-        if is_skipped_browser_response_header(&name_lower) {
-            continue;
-        }
-        if body_rewritten && is_body_integrity_response_header(&name_lower) {
-            continue;
-        }
-        let mut value = value;
-        if is_content_security_policy_header(&name_lower) {
-            value = remove_csp_frame_ancestors(&value);
-            if value.is_empty() {
-                continue;
-            }
-        }
-        if name_lower == SET_COOKIE.as_str() {
-            value = rewrite_browser_set_cookie_header(&value);
-        }
-        if name_lower == "location"
-            && (value.starts_with(upstream_origin) || value.starts_with(request_origin))
-            && !browser_host.is_empty()
-        {
-            let origin = if value.starts_with(upstream_origin) {
-                upstream_origin
-            } else {
-                request_origin
-            };
-            value = format!("http://{}{}", browser_host, &value[origin.len()..]);
-        }
-        raw.push_str(&name);
-        raw.push_str(": ");
-        raw.push_str(&value);
-        raw.push_str("\r\n");
-    }
-    raw.push_str(&format!(
-        "Content-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    ));
-    stream
-        .write_all(raw.as_bytes())
-        .await
-        .map_err(error_string)?;
-    stream.write_all(&body).await.map_err(error_string)?;
-    let _ = stream.shutdown().await;
-    Ok(())
-}
-
-fn find_http_header_end(bytes: &[u8]) -> Option<usize> {
-    bytes
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .map(|index| index + 4)
-        .or_else(|| {
-            bytes
-                .windows(2)
-                .position(|window| window == b"\n\n")
-                .map(|index| index + 2)
-        })
-}
-
-async fn write_browser_error_response(
-    stream: &mut TcpStream,
-    status: u16,
-    message: &str,
-) -> Result<(), String> {
-    let body = message.as_bytes();
-    let reason = match status {
-        502 => "Bad Gateway",
-        _ => "Error",
-    };
-    let raw = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
-    stream
-        .write_all(raw.as_bytes())
-        .await
-        .map_err(error_string)?;
-    stream.write_all(body).await.map_err(error_string)?;
-    let _ = stream.shutdown().await;
-    Ok(())
+async fn write_all_owned(stream: &mut TcpStream, data: Vec<u8>) -> Result<(), String> {
+    stream.write_all(&data).await.map_err(error_string)
 }
 
 async fn read_browser_http_request(
@@ -1408,7 +1090,7 @@ mod tests {
     }
 
     #[test]
-    fn absolute_upstream_request_rewrites_to_remote_origin_for_exec_fallback() {
+    fn absolute_upstream_request_rewrites_to_remote_origin_for_absolute_url() {
         assert_eq!(
             browser_request_url(
                 "http://127.0.0.1:51234/app?q=1",
@@ -1418,32 +1100,6 @@ mod tests {
             ),
             "http://127.0.0.1:3000/app?q=1"
         );
-    }
-
-    #[test]
-    fn remote_browser_curl_command_preserves_upstream_host_and_skips_proxy_headers() {
-        let headers = vec![
-            ("Host".to_string(), "127.0.0.1:51234".to_string()),
-            ("Connection".to_string(), "keep-alive".to_string()),
-            ("Accept-Encoding".to_string(), "gzip, br".to_string()),
-            ("Accept".to_string(), "text/html".to_string()),
-        ];
-
-        let command = remote_browser_curl_command(
-            "GET",
-            "http://127.0.0.1:3000/app?q=1",
-            "127.0.0.1:3000",
-            &headers,
-            Some("sid=proxy"),
-            false,
-        );
-
-        assert!(command.contains("'Host: 127.0.0.1:3000'"));
-        assert!(command.contains("'Accept: text/html'"));
-        assert!(command.contains("'Cookie: sid=proxy'"));
-        assert!(!command.contains("127.0.0.1:51234"));
-        assert!(!command.contains("'Connection: keep-alive'"));
-        assert!(!command.contains("Accept-Encoding"));
     }
 
     #[test]

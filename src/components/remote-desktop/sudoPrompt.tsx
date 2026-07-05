@@ -36,7 +36,6 @@ const sudoPasswordRequiredPatterns = [
   /sudo:.*password is required/i,
   /sudo:.*a terminal is required/i,
   /sudo:.*no tty present/i,
-  /askpass/i,
   /a password is required/i,
 ];
 

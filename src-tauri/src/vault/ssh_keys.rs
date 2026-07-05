@@ -1,11 +1,15 @@
 use base64::Engine;
+use rand::rngs::OsRng;
+use russh::keys::{
+    load_secret_key,
+    ssh_key::{private::RsaKeypair, LineEnding, PrivateKey},
+};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, fs, process::Stdio};
+use std::{collections::HashMap, fs};
 use tauri::Emitter;
-use tokio::process::Command;
 
-use crate::{error_string, now, prevent_tokio_process_window, random_id, AppState};
+use crate::{error_string, now, random_id, AppState};
 
 use super::{to_snapshot, with_store_mut, MAX_PRIVATE_KEY_BYTES, MAX_PUBLIC_KEY_BYTES};
 
@@ -91,9 +95,8 @@ pub(crate) async fn import_key_pair(
         .and_then(Value::as_str)
         .unwrap_or("");
     if public_key.trim().is_empty() {
-        public_key = derive_public_key_from_private_key(&private_key_path, passphrase)
-            .await
-            .unwrap_or_default();
+        public_key =
+            derive_public_key_from_private_key(&private_key_path, passphrase).unwrap_or_default();
     }
     let fingerprint = public_key_fingerprint(&public_key).unwrap_or_default();
     let algorithm = public_key_algorithm(&public_key)
@@ -137,50 +140,32 @@ pub(crate) async fn generate_key_pair(
         .get("modulusLength")
         .and_then(Value::as_u64)
         .filter(|value| matches!(*value, 2048 | 3072 | 4096))
-        .unwrap_or(4096)
-        .to_string();
+        .unwrap_or(4096) as usize;
     let passphrase = payload
         .get("passphrase")
         .and_then(Value::as_str)
         .unwrap_or("");
     let key_id = random_id("key");
-    let key_dir = state.data_dir.join("generated-keys");
-    fs::create_dir_all(&key_dir).map_err(error_string)?;
-    let private_path = key_dir.join(&key_id);
-    let public_path = key_dir.join(format!("{key_id}.pub"));
-    if private_path.exists() {
-        let _ = fs::remove_file(&private_path);
-    }
-    if public_path.exists() {
-        let _ = fs::remove_file(&public_path);
-    }
-    let mut command = Command::new("ssh-keygen");
-    prevent_tokio_process_window(&mut command);
-    let output = command
-        .args([
-            "-t",
-            "rsa",
-            "-b",
-            &modulus_length,
-            "-N",
-            passphrase,
-            "-C",
-            &name,
-            "-f",
-            &private_path.to_string_lossy(),
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
+    let mut rng = OsRng;
+    let rsa_key = RsaKeypair::random(&mut rng, modulus_length).map_err(error_string)?;
+    let mut private_key = PrivateKey::from(rsa_key);
+    private_key.set_comment(name.clone());
+    let private_key = if passphrase.is_empty() {
+        private_key
+    } else {
+        private_key
+            .encrypt(&mut rng, passphrase.as_bytes())
+            .map_err(error_string)?
+    };
+    let private_key = private_key
+        .to_openssh(LineEnding::LF)
+        .map_err(error_string)?
+        .to_string();
+    let public_key = PrivateKey::from_openssh(&private_key)
+        .map_err(error_string)?
+        .public_key()
+        .to_openssh()
         .map_err(error_string)?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-    let private_key = fs::read_to_string(&private_path).map_err(error_string)?;
-    let public_key = fs::read_to_string(&public_path).unwrap_or_default();
-    let _ = fs::remove_file(&private_path);
-    let _ = fs::remove_file(&public_path);
     let fingerprint = public_key_fingerprint(&public_key).unwrap_or_default();
     let algorithm = public_key_algorithm(&public_key)
         .unwrap_or("RSA")
@@ -222,23 +207,16 @@ fn read_local_text_file(path: &str, label: &str, max_bytes: u64) -> Result<Strin
     fs::read_to_string(trimmed).map_err(error_string)
 }
 
-async fn derive_public_key_from_private_key(
+fn derive_public_key_from_private_key(
     private_key_path: &str,
     passphrase: &str,
 ) -> Result<String, String> {
-    let mut command = Command::new("ssh-keygen");
-    prevent_tokio_process_window(&mut command);
-    let output = command
-        .args(["-y", "-f", private_key_path, "-P", passphrase])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(error_string)?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let private_key = load_secret_key(
+        private_key_path,
+        (!passphrase.is_empty()).then_some(passphrase),
+    )
+    .map_err(error_string)?;
+    private_key.public_key().to_openssh().map_err(error_string)
 }
 
 pub(super) fn public_key_algorithm(public_key: &str) -> Option<&str> {

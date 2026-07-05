@@ -20,7 +20,8 @@ pub(super) async fn remote_path_kind(
         path = shell_quote(remote_path)
     );
     let output =
-        run_ssh_command_for_profile_interactive(state, profile, command, String::new()).await?;
+        run_ssh_command_for_profile_interactive(state.clone(), profile, command, String::new())
+            .await?;
     if output.get("code").and_then(Value::as_i64).unwrap_or(1) != 0 {
         return Err(output
             .get("stderr")
@@ -46,7 +47,8 @@ pub(super) async fn remote_path_size(
         path = shell_quote(remote_path)
     );
     let output =
-        run_ssh_command_for_profile_interactive(state, profile, command, String::new()).await?;
+        run_ssh_command_for_profile_interactive(state.clone(), profile, command, String::new())
+            .await?;
     if output.get("code").and_then(Value::as_i64).unwrap_or(1) != 0 {
         return Ok(0);
     }
@@ -69,7 +71,8 @@ async fn download_remote_directory_archive(
 ) -> Result<Vec<u8>, String> {
     let command = remote_directory_archive_command(remote_path);
     let output =
-        run_ssh_command_for_profile_interactive(state, profile, command, String::new()).await?;
+        run_ssh_command_for_profile_interactive(state.clone(), profile, command, String::new())
+            .await?;
     if output.get("code").and_then(Value::as_i64).unwrap_or(1) != 0 {
         return Err(output
             .get("stderr")
@@ -130,7 +133,8 @@ pub(super) async fn upload_local_directory_to_remote(
         archive = shell_quote(&remote_archive)
     );
     let output =
-        run_ssh_command_for_profile_interactive(state, profile, command, String::new()).await?;
+        run_ssh_command_for_profile_interactive(state.clone(), profile, command, String::new())
+            .await?;
     if output.get("code").and_then(Value::as_i64).unwrap_or(1) != 0 {
         return Err(output
             .get("stderr")
@@ -148,7 +152,8 @@ async fn read_remote_file_bytes(
 ) -> Result<Vec<u8>, String> {
     let command = remote_file_read_command(remote_path);
     let output =
-        run_ssh_command_for_profile_interactive(state, profile, command, String::new()).await?;
+        run_ssh_command_for_profile_interactive(state.clone(), profile, command, String::new())
+            .await?;
     if output.get("code").and_then(Value::as_i64).unwrap_or(1) != 0 {
         return Err(output
             .get("stderr")
@@ -202,7 +207,8 @@ async fn write_remote_file_bytes(
 ) -> Result<(), String> {
     let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
     let command = remote_file_write_command(remote_path);
-    let output = run_ssh_command_for_profile_interactive(state, profile, command, encoded).await?;
+    let output =
+        run_ssh_command_for_profile_interactive(state.clone(), profile, command, encoded).await?;
     if output.get("code").and_then(Value::as_i64).unwrap_or(1) != 0 {
         return Err(output
             .get("stderr")
@@ -230,7 +236,7 @@ pub(super) async fn write_remote_file_bytes_with_options(
 
             let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
             let output = run_connection_command_with_options(
-                state,
+                state.clone(),
                 vec![
                     json!(connection_id),
                     json!(remote_file_write_command(remote_path)),
@@ -262,7 +268,7 @@ async fn run_privileged_remote_output_base64(
     fallback_error: &str,
 ) -> Result<String, String> {
     let output = run_connection_command_with_options(
-        state,
+        state.clone(),
         vec![
             json!(connection_id),
             json!(command),

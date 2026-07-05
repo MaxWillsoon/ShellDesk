@@ -223,35 +223,35 @@ struct HttpTunnelRequest {
 }
 
 pub(crate) async fn get(
-    state: &AppState,
-    window: &tauri::Window,
+    state: AppState,
+    window: tauri::Window,
     args: Vec<Value>,
 ) -> Result<Value, String> {
-    execute(state, window, "GET", args).await
+    execute(&state, &window, "GET", args).await
 }
 
 pub(crate) async fn post(
-    state: &AppState,
-    window: &tauri::Window,
+    state: AppState,
+    window: tauri::Window,
     args: Vec<Value>,
 ) -> Result<Value, String> {
-    execute(state, window, "POST", args).await
+    execute(&state, &window, "POST", args).await
 }
 
 pub(crate) async fn put(
-    state: &AppState,
-    window: &tauri::Window,
+    state: AppState,
+    window: tauri::Window,
     args: Vec<Value>,
 ) -> Result<Value, String> {
-    execute(state, window, "PUT", args).await
+    execute(&state, &window, "PUT", args).await
 }
 
 pub(crate) async fn delete(
-    state: &AppState,
-    window: &tauri::Window,
+    state: AppState,
+    window: tauri::Window,
     args: Vec<Value>,
 ) -> Result<Value, String> {
-    execute(state, window, "DELETE", args).await
+    execute(&state, &window, "DELETE", args).await
 }
 
 async fn execute(

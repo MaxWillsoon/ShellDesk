@@ -1,20 +1,17 @@
 use crate::{
-    error_string, get_connection, pick_free_local_port,
+    error_string,
     ssh_tunnel::{
         config_from_connection_with_window, create_tunnel, SshTunnel, SshTunnelConfig,
         SshTunnelError,
     },
-    start_ssh_local_forward, string_arg, wait_for_tcp, AppState,
+    string_arg, AppState,
 };
 use fred::prelude::{Client as RedisClient, ClientLike};
 use mongodb::Client as MongoClient;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{MySqlPool, PgPool};
-use std::{
-    process::Child as StdChild,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 use tauri::Emitter;
 use thiserror::Error;
 
@@ -147,7 +144,6 @@ pub(crate) struct MongoTunnelSession {
 
 pub(super) enum DatabaseSshTunnel {
     Native(SshTunnel),
-    OpenSsh(StdChild),
 }
 
 pub(super) struct DatabaseSshEndpoint {
@@ -162,10 +158,6 @@ impl DatabaseSshTunnel {
         match self {
             Self::Native(tunnel) => {
                 let _ = tunnel.shutdown().await;
-            }
-            Self::OpenSsh(mut child) => {
-                let _ = child.kill();
-                let _ = child.wait();
             }
         }
     }
@@ -365,63 +357,15 @@ pub(super) async fn open_database_ssh_tunnel(
     options: &TunnelOptions,
 ) -> Result<DatabaseSshEndpoint, String> {
     let tunnel_config = tunnel_config_from_options(state, window, connection_id, options).await?;
-    match create_tunnel(tunnel_config).await {
-        Ok(tunnel) => {
-            let local_addr = tunnel.local_addr();
-            Ok(DatabaseSshEndpoint {
-                host: local_addr.ip().to_string(),
-                port: local_addr.port(),
-                tunnel: DatabaseSshTunnel::Native(tunnel),
-                transport: "ssh-tunnel",
-            })
-        }
-        Err(native_error) => {
-            eprintln!(
-                "[database] Native SSH tunnel unavailable, trying OpenSSH local forward: {}",
-                native_error.user_message()
-            );
-            open_database_openssh_forward(state, connection_id, options, native_error).await
-        }
-    }
-}
-
-async fn open_database_openssh_forward(
-    state: &AppState,
-    connection_id: &str,
-    options: &TunnelOptions,
-    native_error: SshTunnelError,
-) -> Result<DatabaseSshEndpoint, String> {
-    let profile = get_connection(state, connection_id)?
-        .ssh
-        .ok_or_else(|| "当前连接缺少 SSH 配置。".to_string())?;
-    let local_port = pick_free_local_port()?;
-    let mut child = start_ssh_local_forward(
-        &profile,
-        local_port,
-        &options.remote_host,
-        options.remote_port,
-    )
-    .map_err(|error| {
-        format!(
-            "{}；OpenSSH 本地转发启动失败：{}",
-            native_error.user_message(),
-            error
-        )
-    })?;
-    if let Err(error) = wait_for_tcp("127.0.0.1", local_port, Duration::from_secs(8)).await {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(format!(
-            "{}；OpenSSH 本地转发不可用：{}",
-            native_error.user_message(),
-            error
-        ));
-    }
+    let tunnel = create_tunnel(tunnel_config)
+        .await
+        .map_err(|error| error.user_message())?;
+    let local_addr = tunnel.local_addr();
     Ok(DatabaseSshEndpoint {
-        host: "127.0.0.1".to_string(),
-        port: local_port,
-        tunnel: DatabaseSshTunnel::OpenSsh(child),
-        transport: "ssh-forward",
+        host: local_addr.ip().to_string(),
+        port: local_addr.port(),
+        tunnel: DatabaseSshTunnel::Native(tunnel),
+        transport: "ssh-tunnel",
     })
 }
 

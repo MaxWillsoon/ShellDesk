@@ -2,6 +2,7 @@ use crate::{
     browser_proxy, database::tunnel::DatabaseTunnelSession, http_tunnel::HttpTunnelSession,
     proxy::SshProxyConfig, ssh_tunnel::SshTunnelHandle, terminal, updater::update_status, zmodem,
 };
+use serde::Serialize;
 use serde_json::Value;
 use std::{
     collections::{HashMap, HashSet},
@@ -27,7 +28,7 @@ pub(crate) struct AppState {
     pub(crate) update_state: Arc<Mutex<Value>>,
     pub(crate) pending_tauri_update: Arc<Mutex<Option<tauri_plugin_updater::Update>>>,
     pub(crate) sync_schedule_generation: Arc<Mutex<u64>>,
-    pub(crate) ui_window: Arc<Mutex<Option<tauri::Window>>>,
+    pub(crate) ui_window: Arc<Mutex<Option<UiWindowRef>>>,
     pub(crate) host_key_responses: Arc<Mutex<HashMap<String, HostKeyRequest>>>,
     pub(crate) keyboard_interactive_responses: Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>,
     pub(crate) store_lock: Arc<Mutex<()>>,
@@ -38,6 +39,28 @@ pub(crate) struct HostKeyRequest {
     pub(crate) sender: oneshot::Sender<Value>,
     pub(crate) hostname: String,
     pub(crate) port: u16,
+}
+
+#[derive(Clone)]
+pub(crate) struct UiWindowRef {
+    pub(crate) window: tauri::Window,
+}
+
+impl UiWindowRef {
+    pub(crate) fn from_window(window: &tauri::Window) -> Self {
+        Self {
+            window: window.clone(),
+        }
+    }
+
+    pub(crate) fn emit<S>(&self, event: &str, payload: S) -> tauri::Result<()>
+    where
+        S: Serialize + Clone,
+    {
+        use tauri::Emitter;
+
+        self.window.emit(event, payload)
+    }
 }
 
 impl AppState {
@@ -62,6 +85,30 @@ impl AppState {
             keyboard_interactive_responses: Arc::new(Mutex::new(HashMap::new())),
             store_lock: Arc::new(Mutex::new(())),
             vault_operation_lock: Arc::new(AsyncMutex::new(())),
+        }
+    }
+
+    pub(crate) fn clone_without_ui_window(&self) -> Self {
+        Self {
+            data_dir: self.data_dir.clone(),
+            connections: self.connections.clone(),
+            terminals: self.terminals.clone(),
+            vnc_proxies: self.vnc_proxies.clone(),
+            browser_proxies: self.browser_proxies.clone(),
+            transfer_cancellations: self.transfer_cancellations.clone(),
+            active_transfers: self.active_transfers.clone(),
+            zmodem_upload_selections: self.zmodem_upload_selections.clone(),
+            database_sessions: self.database_sessions.clone(),
+            database_tunnel_sessions: self.database_tunnel_sessions.clone(),
+            http_tunnel_sessions: self.http_tunnel_sessions.clone(),
+            update_state: self.update_state.clone(),
+            pending_tauri_update: self.pending_tauri_update.clone(),
+            sync_schedule_generation: self.sync_schedule_generation.clone(),
+            ui_window: Arc::new(Mutex::new(None)),
+            host_key_responses: self.host_key_responses.clone(),
+            keyboard_interactive_responses: self.keyboard_interactive_responses.clone(),
+            store_lock: self.store_lock.clone(),
+            vault_operation_lock: self.vault_operation_lock.clone(),
         }
     }
 }

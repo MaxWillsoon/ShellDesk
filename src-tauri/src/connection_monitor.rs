@@ -18,33 +18,33 @@ struct MonitorItem {
 }
 
 pub(crate) async fn get_connection_status(
-    state: &AppState,
+    state: AppState,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
     let is_windows = connection_is_windows(&connection);
     let items = status_items(is_windows);
-    run_command_report(state, &connection, &items, is_windows).await
+    run_command_report(state, connection, &items, is_windows).await
 }
 
 pub(crate) async fn get_connection_system_info(
-    state: &AppState,
+    state: AppState,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
     let is_windows = connection_is_windows(&connection);
     let items = system_info_items(is_windows);
-    run_command_report(state, &connection, &items, is_windows).await
+    run_command_report(state, connection, &items, is_windows).await
 }
 
 pub(crate) async fn get_connection_metrics(
-    state: &AppState,
+    state: AppState,
     args: Vec<Value>,
 ) -> Result<Value, String> {
     let connection_id = string_arg(&args, 0)?;
-    let connection = get_connection(state, &connection_id)?;
+    let connection = get_connection(&state, &connection_id)?;
     let is_windows = connection_is_windows(&connection);
     let command = if is_windows {
         create_windows_metrics_command()
@@ -55,7 +55,7 @@ pub(crate) async fn get_connection_metrics(
         run_shell(command, "", Some(Duration::from_secs(15))).await?
     } else {
         run_ssh_command_for_profile_interactive(
-            state,
+            state.clone(),
             connection
                 .ssh
                 .ok_or_else(|| "SSH profile is unavailable.".to_string())?,
@@ -83,8 +83,8 @@ pub(crate) async fn get_connection_metrics(
 }
 
 async fn run_command_report(
-    state: &AppState,
-    connection: &ActiveConnection,
+    state: AppState,
+    connection: ActiveConnection,
     items: &[MonitorItem],
     is_windows: bool,
 ) -> Result<Value, String> {
@@ -123,8 +123,8 @@ async fn run_command_report(
 }
 
 async fn run_monitor_command(
-    state: &AppState,
-    connection: &ActiveConnection,
+    state: AppState,
+    connection: ActiveConnection,
     command: String,
     timeout: Duration,
 ) -> Result<Value, String> {
@@ -132,7 +132,7 @@ async fn run_monitor_command(
         return run_shell(command, "", Some(timeout)).await;
     }
     run_ssh_command_for_profile_interactive(
-        state,
+        state.clone(),
         connection
             .ssh
             .clone()
