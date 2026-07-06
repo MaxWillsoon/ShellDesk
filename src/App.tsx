@@ -661,10 +661,20 @@ function protectSettingsFromStaleSnapshot(
   incomingSettings: ShellDeskAppSettings,
   currentSettings: ShellDeskAppSettings,
 ) {
-  return protectTerminalSnippetsFromStaleSnapshot(
+  const settings = protectTerminalSnippetsFromStaleSnapshot(
     protectRemoteDesktopLayoutFromStaleSnapshot(incomingSettings, currentSettings),
     currentSettings,
   );
+
+  if (!currentSettings.minimizeToTrayPromptedOnClose || settings.minimizeToTrayPromptedOnClose) {
+    return settings;
+  }
+
+  return {
+    ...settings,
+    minimizeToTrayOnClose: currentSettings.minimizeToTrayOnClose,
+    minimizeToTrayPromptedOnClose: true,
+  };
 }
 
 const hostSystemIconUrls: Record<HostSystemType, string> = {

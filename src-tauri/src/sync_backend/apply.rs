@@ -27,6 +27,35 @@ fn map_by_id(items: &[Value]) -> HashMap<String, Value> {
         .collect()
 }
 
+fn preserve_local_close_to_tray_decision(settings: &mut Value, current: &Value) {
+    let current_settings = current.get("settings").unwrap_or(&Value::Null);
+    if !current_settings
+        .get("minimizeToTrayPromptedOnClose")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return;
+    }
+    if settings
+        .get("minimizeToTrayPromptedOnClose")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    if let Some(object) = settings.as_object_mut() {
+        object.insert("minimizeToTrayPromptedOnClose".to_string(), json!(true));
+        object.insert(
+            "minimizeToTrayOnClose".to_string(),
+            json!(current_settings
+                .get("minimizeToTrayOnClose")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)),
+        );
+    }
+}
+
 pub(super) fn apply_sync_document_to_vault(
     state: &AppState,
     document: &Value,
@@ -157,6 +186,7 @@ pub(super) fn apply_sync_document_to_vault(
                 .into(),
         );
     }
+    preserve_local_close_to_tray_decision(&mut settings, &current);
 
     let mut bookmarks_by_scope: HashMap<String, Vec<Value>> = HashMap::new();
     for payload in records_array(document, "bookmark") {
@@ -213,6 +243,50 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&dir);
         AppState::new(dir)
+    }
+
+    #[test]
+    fn applies_sync_document_preserves_local_close_to_tray_prompt_decision() {
+        let state = temp_state("close-to-tray-settings");
+        let mut current_settings = default_settings();
+        current_settings["minimizeToTrayOnClose"] = json!(true);
+        current_settings["minimizeToTrayPromptedOnClose"] = json!(true);
+        write_store(
+            &state,
+            &json!({
+                "hosts": [],
+                "sshKeys": [],
+                "proxyProfiles": [],
+                "knownHosts": [],
+                "settings": current_settings,
+                "browserBookmarks": []
+            }),
+        )
+        .unwrap();
+
+        let mut remote_settings = default_settings();
+        remote_settings["minimizeToTrayOnClose"] = json!(false);
+        remote_settings["minimizeToTrayPromptedOnClose"] = json!(false);
+        let snapshot = apply_sync_document_to_vault(
+            &state,
+            &json!({
+                "records": {
+                    "settings:app": {
+                        "id": "settings:app",
+                        "type": "settings",
+                        "updatedAt": "2026-01-02T00:00:00.000Z",
+                        "hash": "hash-settings",
+                        "payload": remote_settings
+                    }
+                }
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(snapshot["settings"]["minimizeToTrayOnClose"], true);
+        assert_eq!(snapshot["settings"]["minimizeToTrayPromptedOnClose"], true);
+
+        let _ = fs::remove_dir_all(&state.data_dir);
     }
 
     #[test]
