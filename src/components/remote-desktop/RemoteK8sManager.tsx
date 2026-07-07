@@ -438,11 +438,6 @@ function RemoteK8sManager({ connectionId, systemType }: RemoteK8sManagerProps) {
     selectedNamespace ? pods.filter((pod) => pod.namespace === selectedNamespace) : pods
   ), [pods, selectedNamespace]);
 
-  const namespacePodCounts = useMemo(() => pods.reduce<Record<string, number>>((counts, pod) => {
-    counts[pod.namespace] = (counts[pod.namespace] ?? 0) + 1;
-    return counts;
-  }, {}), [pods]);
-
   const filteredPods = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     return namespacePods.filter((pod) => {
@@ -863,7 +858,7 @@ function RemoteK8sManager({ connectionId, systemType }: RemoteK8sManagerProps) {
         <div className="k8s-manager-toolbar">
           <select value={selectedNamespace} onChange={(event) => setSelectedNamespace(event.target.value)} aria-label={tCurrent('auto.remoteK8sManager.podNamespace')}>
             <option value="">{tCurrent('auto.remoteK8sManager.allNamespacesWithLoadNote')}</option>
-            {namespaces.map((namespace) => <option key={namespace.name} value={namespace.name}>{namespace.name} ({namespacePodCounts[namespace.name] ?? 0})</option>)}
+            {namespaces.map((namespace) => <option key={namespace.name} value={namespace.name}>{namespace.name}</option>)}
           </select>
           <span>{kubectlVersion || tCurrent(`auto.remoteK8sManager.kubectlStatus.${kubectlStatus}` as MessageId)}</span>
           <button type="button" onClick={() => void refreshAll()} disabled={loading}>{tCurrent('auto.remoteK8sManager.refresh')}</button>
