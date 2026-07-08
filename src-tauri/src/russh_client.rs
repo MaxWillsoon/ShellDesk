@@ -31,6 +31,8 @@ use tokio::{
 };
 
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const DEFAULT_KEEPALIVE_INTERVAL_MS: u64 = 15_000;
+const SSH_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(300);
 
 pub(crate) struct RusshSession {
     handle: client::Handle<ShellDeskClientHandler>,
@@ -285,8 +287,14 @@ async fn connect_profile(
     timeout: Duration,
     policy: HostKeyPolicy,
 ) -> Result<client::Handle<ShellDeskClientHandler>, String> {
+    let keepalive_interval = keepalive_interval(&profile);
     let ssh_config = Arc::new(client::Config {
-        inactivity_timeout: Some(Duration::from_secs(300)),
+        inactivity_timeout: if profile.keepalive_enabled {
+            None
+        } else {
+            Some(SSH_INACTIVITY_TIMEOUT)
+        },
+        keepalive_interval,
         ..Default::default()
     });
     let handler = ShellDeskClientHandler {
@@ -315,6 +323,43 @@ async fn connect_profile(
             format!("SSH 连接失败：{message}")
         }
     })
+}
+
+pub(crate) fn keepalive_interval(profile: &SshProfile) -> Option<Duration> {
+    keepalive_interval_from_settings(profile.keepalive_enabled, profile.keepalive_interval_ms)
+}
+
+pub(crate) fn keepalive_interval_from_settings(
+    keepalive_enabled: bool,
+    keepalive_interval_ms: u64,
+) -> Option<Duration> {
+    if !keepalive_enabled {
+        return None;
+    }
+
+    Some(Duration::from_millis(if keepalive_interval_ms == 0 {
+        DEFAULT_KEEPALIVE_INTERVAL_MS
+    } else {
+        keepalive_interval_ms
+    }))
+}
+
+pub(crate) fn configure_tcp_keepalive(stream: &TcpStream, keepalive_interval_ms: u64) {
+    let duration = Duration::from_millis(if keepalive_interval_ms == 0 {
+        DEFAULT_KEEPALIVE_INTERVAL_MS
+    } else {
+        keepalive_interval_ms
+    });
+    let socket = socket2::SockRef::from(stream);
+    if let Err(error) = socket.set_keepalive(true) {
+        eprintln!("[russh-client] failed to enable TCP keepalive: {error}");
+    }
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(duration)
+        .with_interval(duration);
+    if let Err(error) = socket.set_tcp_keepalive(&keepalive) {
+        eprintln!("[russh-client] failed to configure TCP keepalive: {error}");
+    }
 }
 
 async fn authenticate_profile(
@@ -603,6 +648,9 @@ async fn open_transport(
         .await
         .map_err(|_| "SSH TCP 连接超时。".to_string())?
         .map_err(|error| format!("SSH TCP 连接失败：{error}"))?;
+    if profile.keepalive_enabled {
+        configure_tcp_keepalive(&stream, profile.keepalive_interval_ms);
+    }
     Ok(RusshTransport::Tcp(stream))
 }
 

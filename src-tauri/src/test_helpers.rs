@@ -14,6 +14,8 @@ pub(crate) fn ssh_profile() -> SshProfile {
         proxy_helper_exe: String::new(),
         proxy: None,
         jump: None,
+        keepalive_enabled: false,
+        keepalive_interval_ms: 15_000,
     }
 }
 

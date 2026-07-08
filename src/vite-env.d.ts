@@ -477,6 +477,8 @@ interface ShellDeskStoredHostRecord {
   jumpHostId?: string;
   canBeJumpHost?: boolean;
   proxyProfileId?: string;
+  keepaliveEnabled?: boolean;
+  keepaliveIntervalMs?: number;
   systemType?: ShellDeskHostSystemType;
   systemName?: string;
   hostInfo?: ShellDeskHostInfoSnapshot | null;
@@ -574,6 +576,8 @@ interface ShellDeskHostConnectionRequest {
   rootPassword?: string;
   jumpHostId?: string;
   proxyProfileId?: string;
+  keepaliveEnabled?: boolean;
+  keepaliveIntervalMs?: number;
   systemType?: ShellDeskHostSystemType;
   systemName?: string;
 }
@@ -924,6 +928,8 @@ interface ShellDeskDatabaseTunnelConfig {
   remoteHost: string;
   remotePort: number;
   connectTimeoutMs?: number;
+  keepaliveEnabled?: boolean;
+  keepaliveIntervalMs?: number;
 }
 
 interface ShellDeskMysqlConnectConfig {
