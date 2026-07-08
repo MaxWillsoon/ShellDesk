@@ -895,6 +895,8 @@ type AuthMethod = 'password' | 'key';
 type ConnectionAuthMethod = AuthMethod | 'agent';
 type HostConnectionStatus = 'unknown' | 'success' | 'failed';
 type PrivilegeMode = 'sudo' | 'su-root';
+const defaultKeepaliveIntervalSeconds = 15;
+const defaultKeepaliveIntervalMs = defaultKeepaliveIntervalSeconds * 1000;
 
 interface HostInfoItem {
   key: string;
@@ -927,6 +929,8 @@ interface Host {
   jumpHostId: string;
   canBeJumpHost: boolean;
   proxyProfileId: string;
+  keepaliveEnabled?: boolean;
+  keepaliveIntervalMs?: number;
   systemType: HostSystemType;
   systemName: string;
   hostInfo: HostInfoSnapshot | null;
@@ -962,8 +966,8 @@ interface ConnectionErrorNotice {
 
 type ConnectionLaunchSource = 'host-card' | 'quick-connect' | 'credential';
 
-type StoredHost = Omit<Host, 'authMethod' | 'password' | 'keyId' | 'keyPath' | 'passphrase' | 'privilegeMode' | 'rootPassword' | 'jumpHostId' | 'canBeJumpHost' | 'proxyProfileId' | 'systemType' | 'systemName' | 'hostInfo' | 'lastConnectionStatus' | 'lastConnectionAt' | 'lastConnectionError'> &
-  Partial<Pick<Host, 'authMethod' | 'password' | 'keyId' | 'keyPath' | 'passphrase' | 'privilegeMode' | 'rootPassword' | 'jumpHostId' | 'canBeJumpHost' | 'proxyProfileId' | 'systemType' | 'systemName' | 'lastConnectionStatus' | 'lastConnectionAt' | 'lastConnectionError'>> & {
+type StoredHost = Omit<Host, 'authMethod' | 'password' | 'keyId' | 'keyPath' | 'passphrase' | 'privilegeMode' | 'rootPassword' | 'jumpHostId' | 'canBeJumpHost' | 'proxyProfileId' | 'keepaliveEnabled' | 'keepaliveIntervalMs' | 'systemType' | 'systemName' | 'hostInfo' | 'lastConnectionStatus' | 'lastConnectionAt' | 'lastConnectionError'> &
+  Partial<Pick<Host, 'authMethod' | 'password' | 'keyId' | 'keyPath' | 'passphrase' | 'privilegeMode' | 'rootPassword' | 'jumpHostId' | 'canBeJumpHost' | 'proxyProfileId' | 'keepaliveEnabled' | 'keepaliveIntervalMs' | 'systemType' | 'systemName' | 'lastConnectionStatus' | 'lastConnectionAt' | 'lastConnectionError'>> & {
     hostInfo?: unknown;
   };
 
@@ -982,6 +986,8 @@ interface HostFormState {
   jumpHostId: string;
   canBeJumpHost: boolean;
   proxyProfileId: string;
+  keepaliveEnabled: boolean;
+  keepaliveIntervalSeconds: string;
   group: string;
   tags: string;
   note: string;
@@ -1057,6 +1063,8 @@ const emptyHostForm: HostFormState = {
   jumpHostId: '',
   canBeJumpHost: false,
   proxyProfileId: '',
+  keepaliveEnabled: false,
+  keepaliveIntervalSeconds: String(defaultKeepaliveIntervalSeconds),
   group: '',
   tags: '',
   note: '',
@@ -1150,6 +1158,12 @@ function isRootLoginUsername(username: string) {
 
 function getHostConnectionStatus(value: unknown): HostConnectionStatus {
   return value === 'success' || value === 'failed' ? value : 'unknown';
+}
+
+function getKeepaliveIntervalMs(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.round(value)
+    : defaultKeepaliveIntervalMs;
 }
 
 function readHostInfoItem(value: unknown): HostInfoItem | null {
@@ -1586,6 +1600,8 @@ function normalizeStoredHost(host: StoredHost): Host {
     jumpHostId: typeof host.jumpHostId === 'string' ? host.jumpHostId : '',
     canBeJumpHost: host.canBeJumpHost === true,
     proxyProfileId: typeof host.proxyProfileId === 'string' ? host.proxyProfileId : '',
+    keepaliveEnabled: host.keepaliveEnabled === true,
+    keepaliveIntervalMs: getKeepaliveIntervalMs(host.keepaliveIntervalMs),
     systemType: getHostSystemType(host.systemType, host.systemName),
     systemName: typeof host.systemName === 'string' ? host.systemName : '',
     hostInfo: hostInfo && (!hostInfo.address || hostInfo.address === normalizedAddress) ? hostInfo : null,
@@ -2042,6 +2058,7 @@ function createHostFromForm(form: HostFormState, selectedKey: SshKey | null): Ho
   const now = new Date().toISOString();
   const rootLogin = isRootLoginUsername(form.username);
   const privilegeMode = rootLogin ? 'sudo' : form.privilegeMode;
+  const keepaliveIntervalMs = (parsePositiveInteger(form.keepaliveIntervalSeconds) ?? defaultKeepaliveIntervalSeconds) * 1000;
 
   return {
     id: createId(),
@@ -2059,6 +2076,8 @@ function createHostFromForm(form: HostFormState, selectedKey: SshKey | null): Ho
     jumpHostId: form.jumpHostId.trim(),
     canBeJumpHost: form.canBeJumpHost,
     proxyProfileId: form.proxyProfileId.trim(),
+    keepaliveEnabled: form.keepaliveEnabled,
+    keepaliveIntervalMs,
     systemType: 'unknown',
     systemName: '',
     hostInfo: null,
@@ -2089,6 +2108,7 @@ function updateHostFromForm(host: Host, form: HostFormState, selectedKey: SshKey
   const rootLogin = isRootLoginUsername(form.username);
   const nextPrivilegeMode: PrivilegeMode = rootLogin ? 'sudo' : form.privilegeMode;
   const nextRootPassword = nextPrivilegeMode === 'su-root' ? form.rootPassword : '';
+  const nextKeepaliveIntervalMs = (parsePositiveInteger(form.keepaliveIntervalSeconds) ?? defaultKeepaliveIntervalSeconds) * 1000;
   const connectionProfileChanged =
     endpointChanged ||
     jumpHostChanged ||
@@ -2097,7 +2117,9 @@ function updateHostFromForm(host: Host, form: HostFormState, selectedKey: SshKey
     host.password !== nextPassword ||
     host.keyId !== nextKeyId ||
     host.privilegeMode !== nextPrivilegeMode ||
-    host.rootPassword !== nextRootPassword;
+    host.rootPassword !== nextRootPassword ||
+    host.keepaliveEnabled !== form.keepaliveEnabled ||
+    getKeepaliveIntervalMs(host.keepaliveIntervalMs) !== nextKeepaliveIntervalMs;
 
   return {
     ...host,
@@ -2115,6 +2137,8 @@ function updateHostFromForm(host: Host, form: HostFormState, selectedKey: SshKey
     jumpHostId: nextJumpHostId,
     canBeJumpHost: form.canBeJumpHost,
     proxyProfileId: nextProxyProfileId,
+    keepaliveEnabled: form.keepaliveEnabled,
+    keepaliveIntervalMs: nextKeepaliveIntervalMs,
     systemType: addressChanged ? 'unknown' : host.systemType,
     systemName: addressChanged ? '' : host.systemName,
     hostInfo: addressChanged ? null : host.hostInfo,
@@ -2144,6 +2168,8 @@ function toFormState(host: Host): HostFormState {
     jumpHostId: host.jumpHostId,
     canBeJumpHost: host.canBeJumpHost,
     proxyProfileId: host.proxyProfileId,
+    keepaliveEnabled: host.keepaliveEnabled === true,
+    keepaliveIntervalSeconds: String(Math.max(1, Math.round(getKeepaliveIntervalMs(host.keepaliveIntervalMs) / 1000))),
     group: host.group,
     tags: formatTags(host.tags),
     note: host.note,
@@ -5645,6 +5671,33 @@ function App() {
                   </label>
                   <small className="field-note">{t('app.host.field.canBeJumpHostHint', appLanguage)}</small>
                 </div>
+
+                <div className="host-form-check-block">
+                  <label className="check-field">
+                    <input
+                      type="checkbox"
+                      checked={form.keepaliveEnabled}
+                      onChange={(event) => updateFormField('keepaliveEnabled', event.target.checked)}
+                    />
+                    <span>{t('host.ssh.keepalive', appLanguage)}</span>
+                  </label>
+                  <small className="field-note">{t('host.ssh.keepaliveDescription', appLanguage)}</small>
+                </div>
+
+                {form.keepaliveEnabled ? (
+                  <label className="field">
+                    <span>{t('host.ssh.keepaliveInterval', appLanguage)}</span>
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      inputMode="numeric"
+                      value={form.keepaliveIntervalSeconds}
+                      onChange={(event) => updateFormField('keepaliveIntervalSeconds', event.target.value)}
+                      placeholder={String(defaultKeepaliveIntervalSeconds)}
+                    />
+                  </label>
+                ) : null}
 
                 <label className="field">
                   <span>{t('app.host.field.group', appLanguage)}</span>

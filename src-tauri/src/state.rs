@@ -145,6 +145,8 @@ pub(crate) struct SshProfile {
     pub(crate) proxy_helper_exe: String,
     pub(crate) proxy: Option<SshProxyConfig>,
     pub(crate) jump: Option<Box<SshProfile>>,
+    pub(crate) keepalive_enabled: bool,
+    pub(crate) keepalive_interval_ms: u64,
 }
 
 impl fmt::Debug for SshProfile {
@@ -161,6 +163,8 @@ impl fmt::Debug for SshProfile {
             .field("proxy_helper_exe", &self.proxy_helper_exe)
             .field("proxy", &self.proxy)
             .field("jump", &self.jump)
+            .field("keepalive_enabled", &self.keepalive_enabled)
+            .field("keepalive_interval_ms", &self.keepalive_interval_ms)
             .finish()
     }
 }

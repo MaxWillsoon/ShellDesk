@@ -806,6 +806,8 @@ fn read_stored_host_record(value: &Value) -> Result<Value, String> {
         "jumpHostId": read_optional_bounded_string(host.get("jumpHostId"), "跳板机 ID", 128, true, true)?,
         "canBeJumpHost": read_bool(host.get("canBeJumpHost"), false),
         "proxyProfileId": read_optional_bounded_string(host.get("proxyProfileId"), "代理 ID", 128, true, true)?,
+        "keepaliveEnabled": read_bool(host.get("keepaliveEnabled"), false),
+        "keepaliveIntervalMs": read_i64_range(host.get("keepaliveIntervalMs"), 1_000, 3_600_000, 15_000),
         "systemType": read_remote_system_type(host.get("systemType")),
         "systemName": read_optional_bounded_string(host.get("systemName"), "系统名称", 160, true, true)?,
         "hostInfo": read_host_info_snapshot(host.get("hostInfo"))?,

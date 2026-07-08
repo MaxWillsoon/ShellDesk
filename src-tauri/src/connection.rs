@@ -175,6 +175,15 @@ fn build_ssh_profile(
 
     let jump_host_id = read_string_field(&host, "jumpHostId", "");
     let proxy_profile_id = read_string_field(&host, "proxyProfileId", "");
+    let keepalive_enabled = host
+        .get("keepaliveEnabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let keepalive_interval_ms = host
+        .get("keepaliveIntervalMs")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .unwrap_or(15_000);
     if !is_jump && !jump_host_id.is_empty() && !proxy_profile_id.is_empty() {
         return Err("当前不能同时为目标主机选择代理和跳板机。".to_string());
     }
@@ -227,6 +236,8 @@ fn build_ssh_profile(
             .unwrap_or_else(|_| "shelldesk".to_string()),
         proxy,
         jump,
+        keepalive_enabled,
+        keepalive_interval_ms,
     })
 }
 
@@ -966,6 +977,8 @@ mod tests {
             proxy_helper_exe: String::new(),
             proxy: None,
             jump: None,
+            keepalive_enabled: false,
+            keepalive_interval_ms: 15_000,
         };
         let current = vec![
             json!({

@@ -26,7 +26,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     connection::ensure_ssh_profile_host_key_trusted, error_string, get_connection,
-    prevent_tokio_process_window, proxy::SshProxyConfig, shell_quote, AppState, ConnectionKind,
+    prevent_tokio_process_window, proxy::SshProxyConfig,
+    russh_client::keepalive_interval_from_settings, shell_quote, AppState, ConnectionKind,
     SshProfile,
 };
 use serde_json::Value;
@@ -51,6 +52,10 @@ pub(crate) struct SshTunnelConfig {
     pub(crate) remote_port: u16,
     #[serde(default = "default_connect_timeout_ms")]
     pub(crate) connect_timeout_ms: u64,
+    #[serde(default)]
+    pub(crate) keepalive_enabled: bool,
+    #[serde(default = "default_keepalive_interval_ms")]
+    pub(crate) keepalive_interval_ms: u64,
 }
 
 impl fmt::Debug for SshTunnelConfig {
@@ -76,11 +81,17 @@ impl fmt::Debug for SshTunnelConfig {
             .field("remote_host", &self.remote_host)
             .field("remote_port", &self.remote_port)
             .field("connect_timeout_ms", &self.connect_timeout_ms)
+            .field("keepalive_enabled", &self.keepalive_enabled)
+            .field("keepalive_interval_ms", &self.keepalive_interval_ms)
             .finish()
     }
 }
 
 fn default_connect_timeout_ms() -> u64 {
+    15_000
+}
+
+fn default_keepalive_interval_ms() -> u64 {
     15_000
 }
 
@@ -368,7 +379,15 @@ async fn connect_profile(
     label: &str,
 ) -> Result<client::Handle<TunnelHandler>, SshTunnelError> {
     let ssh_config = Arc::new(client::Config {
-        inactivity_timeout: Some(Duration::from_secs(300)),
+        inactivity_timeout: if config.keepalive_enabled {
+            None
+        } else {
+            Some(Duration::from_secs(300))
+        },
+        keepalive_interval: keepalive_interval_from_settings(
+            config.keepalive_enabled,
+            config.keepalive_interval_ms,
+        ),
         ..Default::default()
     });
     let handler = TunnelHandler {
@@ -761,6 +780,15 @@ fn config_from_profile(
         .and_then(|value| value.get("connectTimeoutMs"))
         .and_then(Value::as_u64)
         .unwrap_or(15_000);
+    let keepalive_enabled = overrides
+        .and_then(|value| value.get("keepaliveEnabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(profile.keepalive_enabled);
+    let keepalive_interval_ms = overrides
+        .and_then(|value| value.get("keepaliveIntervalMs"))
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .unwrap_or(profile.keepalive_interval_ms);
 
     SshTunnelConfig {
         ssh_host: profile.address.clone(),
@@ -776,6 +804,8 @@ fn config_from_profile(
         remote_host: remote_host.to_string(),
         remote_port,
         connect_timeout_ms,
+        keepalive_enabled,
+        keepalive_interval_ms,
     }
 }
 
@@ -816,6 +846,15 @@ fn profile_from_overrides(overrides: Option<&Value>) -> Result<SshProfile, Strin
             .unwrap_or_else(|_| "shelldesk".to_string()),
         proxy: None,
         jump: None,
+        keepalive_enabled: value
+            .get("keepaliveEnabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        keepalive_interval_ms: value
+            .get("keepaliveIntervalMs")
+            .and_then(Value::as_u64)
+            .filter(|value| *value > 0)
+            .unwrap_or_else(default_keepalive_interval_ms),
     })
 }
 
@@ -869,6 +908,8 @@ mod tests {
             remote_host: "127.0.0.1".to_string(),
             remote_port: 3306,
             connect_timeout_ms: 1_000,
+            keepalive_enabled: false,
+            keepalive_interval_ms: 15_000,
         }
     }
 
