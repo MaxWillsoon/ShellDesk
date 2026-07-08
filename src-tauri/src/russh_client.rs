@@ -344,6 +344,24 @@ pub(crate) fn keepalive_interval_from_settings(
     }))
 }
 
+pub(crate) fn configure_tcp_keepalive(stream: &TcpStream, keepalive_interval_ms: u64) {
+    let duration = Duration::from_millis(if keepalive_interval_ms == 0 {
+        DEFAULT_KEEPALIVE_INTERVAL_MS
+    } else {
+        keepalive_interval_ms
+    });
+    let socket = socket2::SockRef::from(stream);
+    if let Err(error) = socket.set_keepalive(true) {
+        eprintln!("[russh-client] failed to enable TCP keepalive: {error}");
+    }
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(duration)
+        .with_interval(duration);
+    if let Err(error) = socket.set_tcp_keepalive(&keepalive) {
+        eprintln!("[russh-client] failed to configure TCP keepalive: {error}");
+    }
+}
+
 async fn authenticate_profile(
     session: &mut client::Handle<ShellDeskClientHandler>,
     profile: SshProfile,
@@ -630,6 +648,9 @@ async fn open_transport(
         .await
         .map_err(|_| "SSH TCP 连接超时。".to_string())?
         .map_err(|error| format!("SSH TCP 连接失败：{error}"))?;
+    if profile.keepalive_enabled {
+        configure_tcp_keepalive(&stream, profile.keepalive_interval_ms);
+    }
     Ok(RusshTransport::Tcp(stream))
 }
 

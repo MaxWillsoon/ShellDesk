@@ -27,8 +27,8 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     connection::ensure_ssh_profile_host_key_trusted, error_string, get_connection,
     prevent_tokio_process_window, proxy::SshProxyConfig,
-    russh_client::keepalive_interval_from_settings, shell_quote, AppState, ConnectionKind,
-    SshProfile,
+    russh_client::{configure_tcp_keepalive, keepalive_interval_from_settings},
+    shell_quote, AppState, ConnectionKind, SshProfile,
 };
 use serde_json::Value;
 
@@ -497,6 +497,9 @@ async fn open_transport(
     .await
     .map_err(|_| SshTunnelError::SshConnect("连接超时。".to_string()))?
     .map_err(|error| SshTunnelError::SshConnect(error.to_string()))?;
+    if config.keepalive_enabled {
+        configure_tcp_keepalive(&stream, config.keepalive_interval_ms);
+    }
     Ok(TunnelTransport::Tcp(stream))
 }
 
