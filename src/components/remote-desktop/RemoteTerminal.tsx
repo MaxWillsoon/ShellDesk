@@ -40,6 +40,9 @@ export type {
   RemoteTerminalToolRequest,
 } from './terminalTypes';
 
+const RECONNECT_MAX_RETRIES = 5;
+const RECONNECT_INITIAL_DELAY_MS = 3000;
+
 function RemoteTerminal({
   connectionId,
   terminalId,
@@ -66,6 +69,10 @@ function RemoteTerminal({
   const fitAndSyncSizeRef = useRef<(() => void) | null>(null);
   const restartTerminalRef = useRef<(() => void) | null>(null);
   const sendInputRef = useRef<((data: string) => void) | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const reconnectCountRef = useRef(0);
+  const autoReconnectActiveRef = useRef(false);
+  const autoReconnectTimerFiringRef = useRef(false);
   const lastSizeRef = useRef({ columns: 0, rows: 0 });
   const isTerminalReadyRef = useRef(false);
   const useLegacyTerminalIpcRef = useRef(false);
@@ -428,6 +435,81 @@ function RemoteTerminal({
       }
     };
 
+    const clearReconnectTimer = () => {
+      if (reconnectTimerRef.current) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+    };
+
+    const resetAutoReconnect = () => {
+      clearReconnectTimer();
+      reconnectCountRef.current = 0;
+      autoReconnectActiveRef.current = false;
+      autoReconnectTimerFiringRef.current = false;
+    };
+
+    const cancelAutoReconnect = (notify: boolean) => {
+      if (!autoReconnectActiveRef.current && !reconnectTimerRef.current) {
+        return false;
+      }
+
+      resetAutoReconnect();
+
+      if (notify) {
+        writeTerminalNotice(t('terminal.message.autoReconnectCancelled', settingsRef.current.language));
+      }
+
+      return true;
+    };
+
+    const scheduleAutoReconnect = () => {
+      if (disposed) {
+        return;
+      }
+
+      clearReconnectTimer();
+
+      const completedAttempts = reconnectCountRef.current;
+
+      if (completedAttempts >= RECONNECT_MAX_RETRIES) {
+        autoReconnectActiveRef.current = false;
+        writeTerminalNotice(t('terminal.message.autoReconnectFailed', settingsRef.current.language));
+        return;
+      }
+
+      const nextAttempt = completedAttempts + 1;
+      const delayMs = RECONNECT_INITIAL_DELAY_MS * nextAttempt;
+      const delaySeconds = Math.ceil(delayMs / 1000);
+
+      autoReconnectActiveRef.current = true;
+
+      if (completedAttempts === 0) {
+        const language = settingsRef.current.language;
+        const message = t('terminal.message.autoReconnect', language, { value0: delaySeconds });
+        const hint = t('terminal.message.autoReconnectCancelHint', language);
+        writeTerminalNotice(language === 'zh-CN' ? `${message}${hint}` : `${message} ${hint}`);
+      } else {
+        writeTerminalNotice(t('terminal.message.autoReconnectAttempt', settingsRef.current.language, {
+          value0: completedAttempts,
+          value1: delaySeconds,
+        }));
+      }
+
+      reconnectTimerRef.current = window.setTimeout(() => {
+        reconnectTimerRef.current = null;
+
+        if (disposed || !autoReconnectActiveRef.current) {
+          return;
+        }
+
+        reconnectCountRef.current = nextAttempt;
+        autoReconnectTimerFiringRef.current = true;
+        restartTerminalRef.current?.();
+        autoReconnectTimerFiringRef.current = false;
+      }, delayMs);
+    };
+
     const writeSftpProgressLine = (text: string, endLine = false) => {
       const padding = ' '.repeat(Math.max(0, sftpProgressLineLengthRef.current - text.length));
       terminal.write(`\r${text}${padding}${endLine ? '\r\n' : ''}`, () => {
@@ -563,6 +645,7 @@ function RemoteTerminal({
 
         isTerminalReadyRef.current = true;
         setSessionStatus('running');
+        resetAutoReconnect();
         fitAndSyncSize();
         terminal.focus();
       } catch (error) {
@@ -576,6 +659,9 @@ function RemoteTerminal({
         setSessionError(message);
         setSessionStatus('exited');
         terminal.writeln(`\r\n${t('terminal.message.startFailed', settings.language, { error: message })}`);
+        if (autoReconnectActiveRef.current) {
+          scheduleAutoReconnect();
+        }
       }
     };
 
@@ -586,6 +672,9 @@ function RemoteTerminal({
         return;
       }
 
+      if (!autoReconnectTimerFiringRef.current) {
+        cancelAutoReconnect(false);
+      }
       terminal.writeln(`\r\n${t('terminal.message.restarting', settings.language)}\r\n`);
       void startTerminalSession();
     };
@@ -676,18 +765,25 @@ function RemoteTerminal({
       setSessionError(payload.reason ?? '');
       setSessionStatus('disconnected');
       terminal.writeln(`\r\n${payload.reason ? t('terminal.message.connectionClosedWithReason', settings.language, { reason: payload.reason }) : t('terminal.message.connectionClosed', settings.language)}`);
+      scheduleAutoReconnect();
     });
     const removeConnectionRestored = api.events.onConnectionRestored((payload) => {
       if (payload.connectionId !== connectionId || disposed) {
         return;
       }
 
+      resetAutoReconnect();
       terminal.writeln(`\r\n${t('terminal.message.connectionRestored', settings.language)}\r\n`);
       void startTerminalSession();
     });
     const removeTransferProgress = api.events.onTransferProgress(renderSftpProgress);
     const removeTransferEnd = api.events.onTransferEnd(finishSftpProgress);
     const inputDisposable = terminal.onData((data) => {
+      if (autoReconnectActiveRef.current) {
+        cancelAutoReconnect(true);
+        return;
+      }
+
       if (!isTerminalReadyRef.current) {
         return;
       }
@@ -780,6 +876,7 @@ function RemoteTerminal({
       disposed = true;
       isTerminalReadyRef.current = false;
       window.clearTimeout(startWarningTimer);
+      resetAutoReconnect();
       window.cancelAnimationFrame(animationFrame);
       resizeObserver?.disconnect();
       inputDisposable.dispose();
