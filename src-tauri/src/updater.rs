@@ -1,11 +1,36 @@
 use crate::{error_string, now, sanitize_file_name, vault::read_store, AppState};
 use serde_json::{json, Value};
 use std::{fs, path::Path, time::Duration};
+use tauri::utils::config::BundleType;
 use tauri::{Emitter, Runtime};
 use tauri_plugin_updater::UpdaterExt;
 
 const TAURI_UPDATER_ENDPOINT: &str =
     "https://github.com/liubaicai/ShellDesk/releases/latest/download/latest.json";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LinuxPackageKind {
+    AppImage,
+    Deb,
+    Rpm,
+}
+
+fn current_linux_package_kind() -> Option<LinuxPackageKind> {
+    match tauri::utils::platform::bundle_type() {
+        Some(BundleType::AppImage) => Some(LinuxPackageKind::AppImage),
+        Some(BundleType::Deb) => Some(LinuxPackageKind::Deb),
+        Some(BundleType::Rpm) => Some(LinuxPackageKind::Rpm),
+        _ if std::env::var("APPIMAGE").is_ok() => Some(LinuxPackageKind::AppImage),
+        _ => None,
+    }
+}
+
+fn should_use_tauri_update_for_release_check(
+    platform: &str,
+    linux_package: Option<LinuxPackageKind>,
+) -> bool {
+    platform != "linux" || linux_package == Some(LinuxPackageKind::AppImage)
+}
 
 fn tauri_updater_public_key() -> Option<String> {
     option_env!("TAURI_UPDATER_PUBLIC_KEY")
@@ -128,14 +153,21 @@ async fn check_tauri_update(app: tauri::AppHandle) -> Result<Option<Value>, Stri
 }
 
 pub(crate) async fn check_release_info(app: tauri::AppHandle) -> Result<Value, String> {
+    let linux_package = current_linux_package_kind();
+    if !should_use_tauri_update_for_release_check(std::env::consts::OS, linux_package) {
+        return check_github_release(app, linux_package).await;
+    }
     match check_tauri_update(app.clone()).await {
         Ok(Some(update)) => Ok(update),
-        Ok(None) => check_github_release(app).await,
-        Err(_) => check_github_release(app).await,
+        Ok(None) => check_github_release(app, linux_package).await,
+        Err(_) => check_github_release(app, linux_package).await,
     }
 }
 
-async fn check_github_release(app: tauri::AppHandle) -> Result<Value, String> {
+async fn check_github_release(
+    app: tauri::AppHandle,
+    linux_package: Option<LinuxPackageKind>,
+) -> Result<Value, String> {
     let current_version = app.package_info().version.to_string();
     let checked_at = now();
     let release = fetch_latest_release().await?;
@@ -145,7 +177,7 @@ async fn check_github_release(app: tauri::AppHandle) -> Result<Value, String> {
         .unwrap_or("")
         .trim_start_matches('v')
         .to_string();
-    let asset = select_release_asset(&release).unwrap_or_else(|| json!({}));
+    let asset = select_release_asset(&release, linux_package).unwrap_or_else(|| json!({}));
     Ok(json!({
         "repository": "liubaicai/ShellDesk",
         "currentVersion": current_version,
@@ -180,15 +212,30 @@ async fn fetch_latest_release() -> Result<Value, String> {
     response.json().await.map_err(error_string)
 }
 
-fn select_release_asset(release: &Value) -> Option<Value> {
+fn select_release_asset(release: &Value, linux_package: Option<LinuxPackageKind>) -> Option<Value> {
     let assets = release.get("assets").and_then(Value::as_array)?;
-    select_release_asset_for_platform(assets, std::env::consts::OS, std::env::consts::ARCH)
+    select_release_asset_for_platform_with_package(
+        assets,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        linux_package,
+    )
 }
 
+#[cfg(test)]
 fn select_release_asset_for_platform(
     assets: &[Value],
     platform: &str,
     arch: &str,
+) -> Option<Value> {
+    select_release_asset_for_platform_with_package(assets, platform, arch, None)
+}
+
+fn select_release_asset_for_platform_with_package(
+    assets: &[Value],
+    platform: &str,
+    arch: &str,
+    linux_package: Option<LinuxPackageKind>,
 ) -> Option<Value> {
     assets
         .iter()
@@ -198,7 +245,7 @@ fn select_release_asset_for_platform(
             if name.is_empty() || url.is_empty() {
                 return None;
             }
-            score_release_asset(name, platform, arch).map(|score| (asset, score))
+            score_release_asset(name, platform, arch, linux_package).map(|score| (asset, score))
         })
         .max_by(|(left_asset, left_score), (right_asset, right_score)| {
             left_score.cmp(right_score).then_with(|| {
@@ -213,7 +260,12 @@ fn select_release_asset_for_platform(
         .map(|(asset, _)| asset.clone())
 }
 
-fn score_release_asset(name: &str, platform: &str, arch: &str) -> Option<i32> {
+fn score_release_asset(
+    name: &str,
+    platform: &str,
+    arch: &str,
+    linux_package: Option<LinuxPackageKind>,
+) -> Option<i32> {
     let lower = name.to_lowercase();
     if is_metadata_asset(&lower) || has_conflicting_platform(&lower, platform) {
         return None;
@@ -224,7 +276,36 @@ fn score_release_asset(name: &str, platform: &str, arch: &str) -> Option<i32> {
     } else {
         60
     };
-    Some(platform_score + extension_score + arch_score(&lower, arch))
+    Some(
+        platform_score
+            + extension_score
+            + arch_score(&lower, arch)
+            + linux_package_affinity_score(&lower, platform, linux_package),
+    )
+}
+
+fn linux_package_affinity_score(
+    lower_name: &str,
+    platform: &str,
+    preferred: Option<LinuxPackageKind>,
+) -> i32 {
+    if platform != "linux" || preferred.is_none() {
+        return 0;
+    }
+    let package = if lower_name.ends_with(".appimage") || lower_name.ends_with(".appimage.tar.gz") {
+        Some(LinuxPackageKind::AppImage)
+    } else if lower_name.ends_with(".deb") {
+        Some(LinuxPackageKind::Deb)
+    } else if lower_name.ends_with(".rpm") {
+        Some(LinuxPackageKind::Rpm)
+    } else {
+        None
+    };
+    if package == preferred {
+        300
+    } else {
+        0
+    }
 }
 
 fn is_metadata_asset(lower_name: &str) -> bool {
@@ -995,5 +1076,65 @@ mod tests {
             selected.get("name").and_then(Value::as_str),
             Some("ShellDesk_1.2.3_x86_64.AppImage")
         );
+    }
+
+    #[test]
+    fn linux_release_asset_preserves_current_package_format() {
+        let assets = vec![
+            asset("ShellDesk_1.2.3_amd64.AppImage"),
+            asset("ShellDesk_1.2.3_amd64.deb"),
+            asset("ShellDesk-1.2.3-1.x86_64.rpm"),
+        ];
+        for (package, expected) in [
+            (LinuxPackageKind::AppImage, "ShellDesk_1.2.3_amd64.AppImage"),
+            (LinuxPackageKind::Deb, "ShellDesk_1.2.3_amd64.deb"),
+            (LinuxPackageKind::Rpm, "ShellDesk-1.2.3-1.x86_64.rpm"),
+        ] {
+            let selected = select_release_asset_for_platform_with_package(
+                &assets,
+                "linux",
+                "x86_64",
+                Some(package),
+            )
+            .unwrap();
+            assert_eq!(selected.get("name").and_then(Value::as_str), Some(expected));
+        }
+    }
+
+    #[test]
+    fn linux_release_asset_preserves_package_format_and_architecture() {
+        let assets = vec![
+            asset("ShellDesk_1.2.3_amd64.deb"),
+            asset("ShellDesk_1.2.3_arm64.deb"),
+            asset("ShellDesk_1.2.3_arm64.AppImage"),
+        ];
+        let selected = select_release_asset_for_platform_with_package(
+            &assets,
+            "linux",
+            "aarch64",
+            Some(LinuxPackageKind::Deb),
+        )
+        .unwrap();
+        assert_eq!(
+            selected.get("name").and_then(Value::as_str),
+            Some("ShellDesk_1.2.3_arm64.deb")
+        );
+    }
+
+    #[test]
+    fn only_appimage_uses_tauri_linux_update_manifest() {
+        assert!(should_use_tauri_update_for_release_check(
+            "linux",
+            Some(LinuxPackageKind::AppImage)
+        ));
+        assert!(!should_use_tauri_update_for_release_check(
+            "linux",
+            Some(LinuxPackageKind::Deb)
+        ));
+        assert!(!should_use_tauri_update_for_release_check(
+            "linux",
+            Some(LinuxPackageKind::Rpm)
+        ));
+        assert!(should_use_tauri_update_for_release_check("windows", None));
     }
 }
