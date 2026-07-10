@@ -178,7 +178,7 @@ fn build_ssh_profile(
     let keepalive_enabled = host
         .get("keepaliveEnabled")
         .and_then(Value::as_bool)
-        .unwrap_or(false);
+        .unwrap_or(true);
     let keepalive_interval_ms = host
         .get("keepaliveIntervalMs")
         .and_then(Value::as_u64)

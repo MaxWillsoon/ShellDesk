@@ -734,6 +734,10 @@ function RemoteTerminal({
         return;
       }
 
+      const hasExitStatus = payload.code !== undefined && payload.code !== null;
+      const hasExitSignal = typeof payload.signal === 'string' && payload.signal.trim() !== '';
+      const isUnexpectedSshTerminalClose = connectionKind !== 'local' && !hasExitStatus && !hasExitSignal;
+
       isTerminalReadyRef.current = false;
       disconnectedRef.current = true;
       setHasForegroundTask(false);
@@ -747,6 +751,15 @@ function RemoteTerminal({
       sftpTransferEndedRef.current = false;
       sftpProgressLineLengthRef.current = 0;
       setLastExitCode(Number.isInteger(payload.code) ? payload.code ?? null : null);
+
+      if (isUnexpectedSshTerminalClose) {
+        setSessionStatus('disconnected');
+        terminal.writeln(`\r\n${t('terminal.message.connectionClosed', settings.language)}`);
+        terminal.writeln(t('terminal.message.pressRToReconnect', settings.language));
+        scheduleAutoReconnect();
+        return;
+      }
+
       setSessionStatus('exited');
       terminal.writeln(`\r\n${t('terminal.message.sessionEnded', settings.language)}`);
     });

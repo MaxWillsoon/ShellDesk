@@ -1,7 +1,7 @@
 use crate::russh_client::connect_authenticated;
 use crate::{
     error_string, get_connection, prevent_tokio_process_window, string_arg, value_to_bytes,
-    ActiveConnection, AppState, ConnectionKind, UiWindowRef,
+    ActiveConnection, AppState, ConnectionKind, SshProfile, UiWindowRef,
 };
 use russh::ChannelMsg;
 use serde_json::{json, Value};
@@ -52,6 +52,8 @@ struct TerminalStartupPlan {
     root_password: String,
     after_auth_input: String,
 }
+
+const TERMINAL_KEEPALIVE_INTERVAL_MS: u64 = 15_000;
 
 struct SuRootAutomation {
     terminal_prompt_buffer: String,
@@ -200,10 +202,12 @@ async fn start_ssh_terminal_session(
     rows: u16,
     launch_options: TerminalLaunchOptions,
 ) -> Result<TerminalSession, String> {
-    let profile = connection
-        .ssh
-        .clone()
-        .ok_or_else(|| "SSH profile is unavailable.".to_string())?;
+    let profile = terminal_keepalive_profile(
+        connection
+            .ssh
+            .clone()
+            .ok_or_else(|| "SSH profile is unavailable.".to_string())?,
+    );
     let startup_plan = create_terminal_startup_plan(&connection, &launch_options);
     let (control_tx, mut control_rx) = mpsc::unbounded_channel();
     let terminals = state.terminals.clone();
@@ -350,6 +354,14 @@ async fn start_ssh_terminal_session(
         control_tx,
         task: Some(task),
     })
+}
+
+fn terminal_keepalive_profile(mut profile: SshProfile) -> SshProfile {
+    profile.keepalive_enabled = true;
+    if profile.keepalive_interval_ms == 0 {
+        profile.keepalive_interval_ms = TERMINAL_KEEPALIVE_INTERVAL_MS;
+    }
+    profile
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -969,6 +981,21 @@ mod tests {
         assert_eq!(
             create_terminal_startup_input(&connection, &launch_options),
             "cd \"C:\\Users\\root\"\rpowershell\rWrite-Host ok\r"
+        );
+    }
+
+    #[test]
+    fn terminal_profile_forces_keepalive_for_stale_hosts() {
+        let mut profile = crate::test_helpers::ssh_profile();
+        profile.keepalive_enabled = false;
+        profile.keepalive_interval_ms = 0;
+
+        let profile = terminal_keepalive_profile(profile);
+
+        assert!(profile.keepalive_enabled);
+        assert_eq!(
+            profile.keepalive_interval_ms,
+            TERMINAL_KEEPALIVE_INTERVAL_MS
         );
     }
 
