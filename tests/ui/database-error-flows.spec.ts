@@ -66,10 +66,14 @@ test('Monitor persistence places sample count in the control bar and combines ne
 
   const optInDialog = page.getByRole('dialog', { name: '开启持久化分析？' });
   await expect(optInDialog).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).__shellDeskUiHarnessMetricsRequestCount)).toBeGreaterThan(0);
+  const realtimeMetricsRequestCount = await page.evaluate(() => (window as any).__shellDeskUiHarnessMetricsRequestCount as number);
   await optInDialog.getByRole('button', { name: '开启持久化' }).click();
 
   await expect(optInDialog).toBeHidden();
   await expect(page.getByText('持久化分析')).toBeVisible();
+  await page.waitForTimeout(2_200);
+  await expect.poll(() => page.evaluate(() => (window as any).__shellDeskUiHarnessMetricsRequestCount)).toBe(realtimeMetricsRequestCount);
   await expect(page.getByText('24 个采样点', { exact: true })).toBeVisible();
   await expect(page.locator('.monitor-observability-summary')).toHaveCount(0);
   await expect(page.getByText('根磁盘使用率')).toBeVisible();

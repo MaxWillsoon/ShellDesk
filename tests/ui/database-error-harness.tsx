@@ -78,8 +78,13 @@ function installGuiSshMock() {
   let monitorConfigured = false;
   let monitorThresholds = { cpu: 90, memory: 90, disk: 85 };
   let metricsCounter = 1_000_000;
+  let metricsRequestCount = 0;
 
   window.localStorage.removeItem('shelldesk.monitor.persistencePrompt.v1.ui-test-host');
+  Object.defineProperty(window, '__shellDeskUiHarnessMetricsRequestCount', {
+    configurable: true,
+    get: () => metricsRequestCount,
+  });
 
   (window as any).guiSSH = {
     connections: {
@@ -160,6 +165,7 @@ function installGuiSshMock() {
         ],
       }),
       getMetrics: async () => {
+        metricsRequestCount += 1;
         metricsCounter += 12_000;
         return {
           refreshedAt: new Date().toISOString(),

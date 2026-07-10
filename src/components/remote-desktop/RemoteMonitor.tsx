@@ -814,6 +814,9 @@ export default function RemoteMonitor({ connectionId, hostId, systemType, onOpen
   }, []);
 
   useEffect(() => {
+    if (dataMode !== 'realtime') {
+      return undefined;
+    }
     let canceled = false;
     let timerId: number | undefined;
 
