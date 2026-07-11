@@ -62,12 +62,18 @@
   max-height: calc(100% - var(--desktop-dock-safe-area, 72px) - 32px);
 }
 
+.remote-desktop-dock-bottom .desktop-icons {
+  max-height: calc(100% - var(--desktop-dock-safe-area, 72px) - 18px);
+}
+
 .remote-desktop-dock-left .desktop-icons {
   left: calc(var(--desktop-dock-safe-area, 72px) + 16px);
+  max-height: calc(100% - 20px);
 }
 
 .remote-desktop-dock-right .desktop-icons {
   right: calc(var(--desktop-dock-safe-area, 72px) + 16px);
+  max-height: calc(100% - 20px);
   max-width: calc(100% - var(--desktop-dock-safe-area, 72px) - 32px);
 }
 
@@ -76,7 +82,7 @@
   width: 74px;
   height: 84px;
   justify-items: center;
-  align-content: start;
+  align-content: center;
   gap: 6px;
   border-color: transparent;
   border-radius: 6px;
