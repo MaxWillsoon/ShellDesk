@@ -6,6 +6,7 @@ use tauri::{
 
 const PACKAGE_JSON: &str = include_str!("../../package.json");
 const DEFAULT_REPOSITORY: &str = "https://github.com/liubaicai/ShellDesk";
+const MAIN_WINDOW_LABEL: &str = "main";
 
 #[derive(serde::Serialize)]
 pub(crate) struct AppInfo {
@@ -143,6 +144,21 @@ pub(crate) fn open_connection_window(
     );
 
     Ok(json!({ "ok": true, "label": label }))
+}
+
+pub(crate) fn open_main_ai_settings(app: &tauri::AppHandle) -> Result<Value, String> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "主窗口不可用。".to_string())?;
+
+    window.show().map_err(error_string)?;
+    window.unminimize().map_err(error_string)?;
+    window.set_focus().map_err(error_string)?;
+    window
+        .emit("app:open-ai-settings", Value::Null)
+        .map_err(error_string)?;
+
+    Ok(Value::Null)
 }
 
 fn sanitize_window_label(value: &str) -> String {

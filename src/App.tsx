@@ -2421,6 +2421,7 @@ function App() {
   const [updateInstallError, setUpdateInstallError] = useState('');
   const [appInfo, setAppInfo] = useState<ShellDeskAppInfo | null>(null);
   const [settingsUpdateCheckRequestId, setSettingsUpdateCheckRequestId] = useState(0);
+  const [settingsSectionRequest, setSettingsSectionRequest] = useState<{ section: 'ai'; id: number } | null>(null);
   const [credentialHost, setCredentialHost] = useState<ConnectionHost | null>(null);
   const [credentialForm, setCredentialForm] = useState<CredentialFormState>(emptyCredentialForm);
   const [credentialError, setCredentialError] = useState('');
@@ -3448,6 +3449,19 @@ function App() {
       setIsCloseToTrayPromptOpen(true);
     });
   }, [windowControls]);
+
+  useEffect(() => {
+    if (isConnectionWindow || !window.guiSSH?.events.onOpenAiSettings) {
+      return undefined;
+    }
+
+    return window.guiSSH.events.onOpenAiSettings(() => {
+      setConnection(null);
+      setActivePage('settings');
+      setSettingsSectionRequest((current) => ({ section: 'ai', id: (current?.id ?? 0) + 1 }));
+      preloadFullMessageCatalog();
+    });
+  }, [isConnectionWindow]);
 
   useEffect(() => {
     if (!window.guiSSH?.events.onVaultChanged || !vaultControls) {
@@ -5443,6 +5457,9 @@ function App() {
                 storageInfo={storageInfo}
                 isConfigTransferPending={isConfigTransferPending}
                 updateCheckRequestId={settingsUpdateCheckRequestId}
+                initialSection={settingsSectionRequest?.section}
+                sectionRequestId={settingsSectionRequest?.id}
+                onInitialSectionApplied={() => setSettingsSectionRequest(null)}
                 onSettingsChange={updateSettings}
                 onImportConfig={importConfig}
                 onExportConfig={exportConfig}

@@ -19,6 +19,7 @@ pub(crate) async fn dispatch(
         "app:open-connection-window" => {
             app_handlers::open_connection_window(&app, &state, args.to_vec())?
         }
+        "app:open-main-ai-settings" => app_handlers::open_main_ai_settings(&app)?,
         "app:check-for-updates" => check_release_info(app.clone()).await?,
         "app:get-update-status" => read_update_state(&state, &app),
         "app:check-for-update-download" => {

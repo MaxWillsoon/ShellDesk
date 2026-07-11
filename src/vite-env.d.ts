@@ -159,6 +159,7 @@ interface ShellDeskAppControls {
   getUpdateStatus: () => Promise<ShellDeskUpdateStatus>;
   openExternal: (url: string) => Promise<boolean>;
   openConnectionWindow: (connectionId: string) => Promise<{ ok?: boolean; label?: string }>;
+  openMainAiSettings: () => Promise<void>;
 }
 
 interface ShellDeskFileControls {
@@ -1491,6 +1492,7 @@ interface ShellDeskEventControls {
   onDatabaseTunnelIdleTimeout: (callback: (payload: ShellDeskDatabaseTunnelIdleTimeoutPayload) => void) => () => void;
   onWindowMaximizedChange: (callback: (payload: { maximized: boolean }) => void) => () => void;
   onCloseToTrayPrompt: (callback: () => void) => () => void;
+  onOpenAiSettings: (callback: () => void) => () => void;
   onVaultChanged: (callback: (payload: { kind: 'vault' | 'bookmarks' | 'preference' | 'hostKeyTrust'; scope?: string; key?: string }) => void) => () => void;
   onSyncChanged: (callback: (payload: ShellDeskSyncResult) => void) => () => void;
   onTransferProgress: (callback: (payload: ShellDeskTransferProgress) => void) => () => void;

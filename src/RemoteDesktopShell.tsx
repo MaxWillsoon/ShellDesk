@@ -3047,6 +3047,8 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
   };
 
   const renderWindowContent = (desktopWindow: DesktopWindowState) => {
+    const openMainAiSettings = window.guiSSH?.app.openMainAiSettings;
+
     if (desktopWindow.appKey === 'terminal') {
       return (
         <RemoteTerminal
@@ -3265,7 +3267,13 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
           language={settings.language}
           connectionId={connection.id}
           systemType={connection.host.systemType}
-          onOpenSettings={() => openSettingsWindow()}
+          onOpenSettings={openMainAiSettings
+            ? () => {
+              void openMainAiSettings().catch((error) => {
+                console.error('[shelldesk] failed to open main AI settings:', error);
+              });
+            }
+            : undefined}
           onOpenApp={(appKey) => openDesktopWindow(appKey as DesktopAppKey)}
         />
       );

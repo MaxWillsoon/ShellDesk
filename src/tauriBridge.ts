@@ -483,6 +483,7 @@ window.guiSSH = {
     getUpdateStatus: () => ipc('app:get-update-status'),
     openExternal: (url) => ipc('app:open-external', url),
     openConnectionWindow: (connectionId) => ipc('app:open-connection-window', connectionId),
+    openMainAiSettings: () => ipc('app:open-main-ai-settings'),
   },
   window: {
     show: () => ipc('window:show'),
@@ -655,6 +656,7 @@ window.guiSSH = {
     onDatabaseTunnelIdleTimeout: (callback) => onTauriEvent('database:tunnel-idle-timeout', callback),
     onWindowMaximizedChange: (callback) => onTauriEvent('window:maximize-state-changed', callback),
     onCloseToTrayPrompt: (callback) => onTauriEvent('window:close-to-tray-prompt', callback),
+    onOpenAiSettings: (callback) => onTauriEvent('app:open-ai-settings', callback),
     onVaultChanged: (callback) => onTauriEvent('vault:changed', callback),
     onSyncChanged: (callback) => onTauriEvent('sync:changed', callback),
     onTransferProgress: (callback) => onTauriEvent('transfer:progress', callback),

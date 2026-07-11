@@ -469,6 +469,9 @@ interface SettingsPageProps {
   storageInfo: ShellDeskStorageInfo | null;
   isConfigTransferPending: boolean;
   updateCheckRequestId: number;
+  initialSection?: (typeof settingsSections)[number]['key'];
+  sectionRequestId?: number;
+  onInitialSectionApplied?: () => void;
   onSettingsChange: (settings: ShellDeskAppSettings) => void;
   onImportConfig: () => void;
   onExportConfig: () => void;
@@ -494,6 +497,9 @@ function SettingsPage({
   storageInfo,
   isConfigTransferPending,
   updateCheckRequestId,
+  initialSection,
+  sectionRequestId,
+  onInitialSectionApplied,
   onSettingsChange,
   onImportConfig,
   onExportConfig,
@@ -527,6 +533,13 @@ function SettingsPage({
   const [syncNeedsShrinkConfirmation, setSyncNeedsShrinkConfirmation] = useState(false);
   const [syncShrinkConflictResolution, setSyncShrinkConflictResolution] = useState<ShellDeskSyncConflictResolution | ''>('');
   const [syncPendingAction, setSyncPendingAction] = useState<SyncPendingAction>('');
+
+  useEffect(() => {
+    if (initialSection) {
+      setActiveSection(initialSection);
+      onInitialSectionApplied?.();
+    }
+  }, [initialSection, onInitialSectionApplied, sectionRequestId]);
 
   const updateSetting = <Field extends keyof ShellDeskAppSettings>(field: Field, value: ShellDeskAppSettings[Field]) => {
     onSettingsChange({
