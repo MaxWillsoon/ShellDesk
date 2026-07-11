@@ -50,8 +50,7 @@ pub(crate) async fn dispatch(
                     "download",
                 ),
             }
-            let result = result?;
-            result
+            result?
         }
         "app:install-update" => {
             let result = install_update(state.clone(), app.clone()).await;
