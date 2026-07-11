@@ -279,6 +279,7 @@ interface RemoteDesktopProps {
   settings: ShellDeskAppSettings;
   onSettingsChange?: (settings: ShellDeskAppSettings) => void;
   onTerminalSessionEvent?: (event: RemoteTerminalSessionEvent) => void;
+  initialAppKey?: ShellDeskDesktopAppKey;
 }
 
 function clearDesktopTextSelection() {
@@ -1689,7 +1690,7 @@ const DesktopWindow = memo(function DesktopWindow({
   previousProps.appLabel === nextProps.appLabel
 ));
 
-function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminalSessionEvent }: RemoteDesktopProps) {
+function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminalSessionEvent, initialAppKey }: RemoteDesktopProps) {
   const desktopSurfaceRef = useRef<HTMLElement | null>(null);
   const windowPointerStateRef = useRef<DesktopWindowPointerState | null>(null);
   const titlebarClickStateRef = useRef<DesktopWindowTitlebarClickState | null>(null);
@@ -1701,6 +1702,7 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
   const tmuxRefreshRequestRef = useRef(0);
   const connectionCheckSequenceRef = useRef(0);
   const zIndexRef = useRef(0);
+  const openedInitialAppRef = useRef('');
   const launchpadCloseTimerRef = useRef<number | null>(null);
   const folderCloseTimerRef = useRef<number | null>(null);
   const [desktopWindows, setDesktopWindows] = useState<DesktopWindowState[]>([]);
@@ -2434,6 +2436,19 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
 
     setDesktopWindows((currentWindows) => [...currentWindows, nextWindow]);
     setFocusedWindowId(nextWindow.id);
+    const app = getAppInfo(appKey);
+    void window.guiSSH?.logs?.appendEntry({
+      id: `desktop-app-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      timestamp: new Date().toISOString(),
+      category: 'system',
+      level: 'info',
+      message: t('desktop.app.openLog', settings.language, { name: getAppLabel(app, settings.language) }),
+      detail: `appKey: ${appKey}`,
+      component: appKey,
+      hostId: connection.host.id,
+      hostName: connection.host.name,
+      hostAddress: connection.host.address,
+    }).catch(() => undefined);
   };
 
   const openBrowserWindow = (initialUrl?: string) => {
@@ -2509,6 +2524,28 @@ function RemoteDesktopShell({ connection, settings, onSettingsChange, onTerminal
 
     appendDesktopWindow(appKey);
   };
+
+  useEffect(() => {
+    if (!initialAppKey || openedInitialAppRef.current === initialAppKey || !desktopApps.some((app) => app.key === initialAppKey)) {
+      return;
+    }
+
+    openedInitialAppRef.current = initialAppKey;
+    openDesktopWindow(initialAppKey as DesktopAppKey);
+  }, [initialAppKey]);
+
+  useEffect(() => {
+    const events = window.guiSSH?.events;
+    if (!events?.onDesktopAppOpen) {
+      return undefined;
+    }
+
+    return events.onDesktopAppOpen(({ appKey }) => {
+      if (desktopApps.some((app) => app.key === appKey)) {
+        openDesktopWindow(appKey as DesktopAppKey);
+      }
+    });
+  }, []);
 
   const refreshTmuxSessions = useCallback(async () => {
     const requestId = tmuxRefreshRequestRef.current + 1;

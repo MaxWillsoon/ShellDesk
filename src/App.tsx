@@ -1,4 +1,4 @@
-import { type FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, type FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Check,
@@ -19,6 +19,7 @@ import {
   Server,
   Settings as SettingsIcon,
   ShieldCheck,
+  Sparkles,
   Terminal,
 } from 'lucide-react';
 
@@ -44,6 +45,8 @@ const LogsPage = lazy(() =>
   Promise.all([loadFullMessageCatalog(), import('./pages/LogsPage')]).then(([, module]) => module));
 const SettingsPage = lazy(() =>
   Promise.all([loadFullMessageCatalog(), import('./pages/SettingsPage')]).then(([, module]) => module));
+const AgentWorkspace = lazy(() =>
+  Promise.all([loadFullMessageCatalog(), import('./pages/AgentWorkspace')]).then(([, module]) => module));
 
 const hostsStorageKey = 'shelldesk:hosts';
 const terminalSnippetsStorageKey = 'shelldesk:terminal-snippets';
@@ -81,6 +84,7 @@ const themePreloadStorageKey = 'shelldesk:theme-preload';
 const dismissedUpdateReadyVersionStorageKey = 'shelldesk:update-ready-dismissed-version';
 const remoteDesktopLayoutShadowStorageKey = 'shelldesk:remote-desktop-layout-shadow';
 const remoteDesktopLayoutShadowPreferenceKey = 'remoteDesktop.layoutShadow';
+const maxRenderedLogEntries = 5_000;
 const ungroupedKey = '__ungrouped__';
 const hostPageSizeOptions = [10, 20, 50, 100] as const;
 type HostPageSize = (typeof hostPageSizeOptions)[number];
@@ -762,6 +766,10 @@ function HostGroupIcon() {
 }
 
 function ShellDeskNavIcon({ name }: { name: ShellDeskNavIconName }) {
+  if (name === 'agent') {
+    return <Sparkles aria-hidden="true" />;
+  }
+
   if (name === 'hosts') {
     return <Monitor aria-hidden="true" />;
   }
@@ -2185,6 +2193,15 @@ function readWindowConnectionId() {
   return new URLSearchParams(window.location.search).get('connectionId')?.trim() ?? '';
 }
 
+function isAgentWorkspaceWindow() {
+  return new URLSearchParams(window.location.search).get('agentWorkspace') === '1';
+}
+
+function readDesktopAppRequest(): ShellDeskDesktopAppKey | undefined {
+  const value = new URLSearchParams(window.location.search).get('desktopApp')?.trim();
+  return value ? value as ShellDeskDesktopAppKey : undefined;
+}
+
 function tokenizeQuickConnectInput(value: string) {
   return Array.from(value.matchAll(/"([^"]*)"|'([^']*)'|[^\s]+/g), (match) => match[1] ?? match[2] ?? match[0]);
 }
@@ -2329,6 +2346,8 @@ function parseQuickConnectCommand(value: string) {
 }
 
 function App() {
+  const isAgentWorkspace = isAgentWorkspaceWindow();
+  const desktopAppRequest = readDesktopAppRequest();
   const initialPublicSnapshotRef = useRef<ShellDeskVaultSnapshot | null>(window.guiSSH?.vault?.initialPublicSnapshot ?? null);
   const initialPublicSnapshot = initialPublicSnapshotRef.current;
   const [hosts, setHosts] = useState<Host[]>(() => (
@@ -2395,7 +2414,6 @@ function App() {
   ));
   const [isVaultReady, setIsVaultReady] = useState(Boolean(initialPublicSnapshot) || !window.guiSSH?.vault);
   const [isVaultHydrated, setIsVaultHydrated] = useState(!window.guiSSH?.vault);
-  const [isLogsReady, setIsLogsReady] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [connection, setConnection] = useState<RemoteConnectionInfo | null>(null);
   const [windowConnectionId] = useState(readWindowConnectionId);
@@ -2440,7 +2458,6 @@ function App() {
   const collectionsSaveInFlightSerializedRef = useRef('');
   const collectionsSavePromiseRef = useRef<Promise<void> | null>(null);
   const pendingCollectionsSaveRef = useRef<{ payload: VaultCollectionsSavePayload; serialized: string } | null>(null);
-  const lastPersistedLogsRef = useRef('');
   const platform = window.guiSSH?.platform;
   const windowControls = window.guiSSH?.window;
   const vaultControls = window.guiSSH?.vault;
@@ -2892,6 +2909,42 @@ function App() {
   }, [settings]);
 
   useEffect(() => {
+    if (!isAgentWorkspace || !vaultControls?.getPublicSnapshot) {
+      return undefined;
+    }
+
+    let disposed = false;
+    let isSyncing = false;
+    const syncAppearance = () => {
+      if (disposed || isSyncing) return;
+      isSyncing = true;
+      void vaultControls.getPublicSnapshot().then((snapshot) => {
+        if (disposed) return;
+        const incoming = snapshot.settings;
+        setSettings((current) => {
+          if (current.theme === incoming.theme && current.accentColor === incoming.accentColor) {
+            return current;
+          }
+          const nextSettings = { ...current, theme: incoming.theme, accentColor: incoming.accentColor };
+          settingsRef.current = nextSettings;
+          return nextSettings;
+        });
+      }).catch(() => undefined).finally(() => {
+        isSyncing = false;
+      });
+    };
+
+    syncAppearance();
+    const timer = window.setInterval(syncAppearance, 800);
+    window.addEventListener('focus', syncAppearance);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', syncAppearance);
+    };
+  }, [isAgentWorkspace, vaultControls]);
+
+  useEffect(() => {
     fetchBackendDefaults().then((backendDefaults) => {
       if (Object.keys(backendDefaults).length > 0) {
         setSettings((prev) => {
@@ -3156,11 +3209,7 @@ function App() {
 
     void logsControls.getEntries().then((entries) => {
       setLogs(entries as unknown as LogEntry[]);
-      lastPersistedLogsRef.current = JSON.stringify(entries);
-      setIsLogsReady(true);
-    }).catch(() => {
-      setIsLogsReady(true);
-    });
+    }).catch(() => undefined);
   }, [isConnectionWindow, isVaultReady]);
 
   useEffect(() => {
@@ -3221,22 +3270,34 @@ function App() {
   }, [hostInfoDialogHostId]);
 
   useEffect(() => {
-    const logsControls = window.guiSSH?.logs;
-
-    if (!logsControls || !isLogsReady || isConnectionWindow) {
-      return;
+    if (isConnectionWindow || !window.guiSSH?.events.onLogsChanged) {
+      return undefined;
     }
 
-    const serialized = JSON.stringify(logs);
+    return window.guiSSH.events.onLogsChanged((payload) => {
+      if (payload.kind === 'clear') {
+        setLogs([]);
+        return;
+      }
 
-    if (serialized === lastPersistedLogsRef.current) {
-      return;
-    }
+      if (payload.kind === 'append' && payload.entry) {
+        const entry = payload.entry as LogEntry;
+        setLogs((current) => {
+          if (current.some((currentEntry) => currentEntry.id === entry.id)) {
+            return current;
+          }
 
-    lastPersistedLogsRef.current = serialized;
+          const next = [entry, ...current];
+          return next.length > maxRenderedLogEntries ? next.slice(0, maxRenderedLogEntries) : next;
+        });
+        return;
+      }
 
-    void logsControls.saveEntries(logs as unknown as ShellDeskLogEntry[]).catch(() => undefined);
-  }, [logs, isConnectionWindow, isLogsReady]);
+      void window.guiSSH?.logs?.getEntries().then((entries) => {
+        setLogs(entries as unknown as LogEntry[]);
+      }).catch(() => undefined);
+    });
+  }, [isConnectionWindow]);
 
   useEffect(() => {
     const handleExternalLogEntry = (event: Event) => {
@@ -3252,7 +3313,7 @@ function App() {
         }
 
         const next = [entry, ...current];
-        return next.length > 500 ? next.slice(0, 500) : next;
+        return next.length > maxRenderedLogEntries ? next.slice(0, maxRenderedLogEntries) : next;
       });
     };
 
@@ -3554,20 +3615,23 @@ function App() {
 
     setLogs((current) => {
       const next = [entry, ...current];
-      return next.length > 500 ? next.slice(0, 500) : next;
+      return next.length > maxRenderedLogEntries ? next.slice(0, maxRenderedLogEntries) : next;
     });
 
     void window.guiSSH?.logs?.appendEntry(entry as unknown as ShellDeskLogEntry).catch(() => undefined);
   };
 
   const clearLogs = () => {
-    lastPersistedLogsRef.current = JSON.stringify([]);
     setLogs([]);
     void window.guiSSH?.logs?.clearEntries().catch(() => undefined);
   };
 
   const minimizeWindow = () => {
     void windowControls?.minimize();
+  };
+
+  const startWindowDragging = () => {
+    void windowControls?.startDragging().catch(() => undefined);
   };
 
   const toggleMaximizeWindow = () => {
@@ -3663,6 +3727,22 @@ function App() {
       requestId: request.requestId,
       accept,
       addToKnownHosts,
+    }).then(() => {
+      if (!accept || !addToKnownHosts) {
+        return;
+      }
+
+      const host = request.port ? `${request.hostname}:${request.port}` : request.hostname;
+      addLog(
+        'key',
+        'success',
+        t('app.hostKey.trustedLog', appLanguage, { host }),
+        request.fingerprint ? `${request.keyType || 'SSH'} ${request.fingerprint}` : '',
+        {
+          hostName: request.hostname,
+          hostAddress: request.hostname,
+        },
+      );
     }).catch((error) => {
       setStatusMessage(getErrorMessage(error, appLanguage));
     }).finally(() => {
@@ -4580,6 +4660,17 @@ function App() {
     preloadFullMessageCatalog();
   };
 
+  const openAgentWorkspace = () => {
+    if (!window.guiSSH?.app?.openAgentWindow) {
+      setStatusMessage(appLanguage === 'zh-CN' ? '当前环境不支持打开 Agent 工作台。' : 'This environment cannot open the Agent workspace.');
+      return;
+    }
+
+    void window.guiSSH.app.openAgentWindow().catch((error) => {
+      setStatusMessage(getErrorMessage(error, appLanguage));
+    });
+  };
+
   const selectHostGroup = (groupKey: string | null) => {
     setActivePage('hosts');
     setIsHostGroupPanelCollapsed(false);
@@ -4760,6 +4851,7 @@ function App() {
   return (
     <div className={isMacOS ? 'app-shell app-shell-macos' : 'app-shell'}>
       <header className="top-chrome drag-region">
+        <div className="titlebar-drag-surface no-drag" aria-hidden="true" onPointerDown={(event) => { if (event.button === 0) startWindowDragging(); }} />
         <div className={`workspace-title ${connection ? 'has-connection' : 'app-only'}`} aria-label={connection ? undefined : 'ShellDesk'}>
           <img className="app-window-icon" src={appIconUrl} alt="" />
           {connection ? (
@@ -5040,9 +5132,19 @@ function App() {
         document.body,
       ) : null}
 
-      {connection ? (
+      {isAgentWorkspace ? (
+        <Suspense fallback={<LazyContentFallback language={appLanguage} />}>
+          <AgentWorkspace
+            hosts={hosts}
+            settings={settings}
+            language={appLanguage}
+            onOpenSettings={() => void window.guiSSH?.app?.openMainAiSettings?.()}
+            onReturnToHostManagement={() => void window.guiSSH?.app?.showMainWindow?.()}
+          />
+        </Suspense>
+      ) : connection ? (
         <Suspense fallback={<RemoteDesktopLoadingFallback language={appLanguage} />}>
-          <RemoteDesktop connection={connection} settings={settings} onSettingsChange={updateRemoteDesktopSettings} />
+          <RemoteDesktop connection={connection} settings={settings} onSettingsChange={updateRemoteDesktopSettings} initialAppKey={desktopAppRequest} />
         </Suspense>
       ) : isConnectionWindow ? (
         <main className="vault-page no-drag">
@@ -5060,17 +5162,28 @@ function App() {
         <aside className="side-nav">
           <nav className="feature-nav" aria-label={t('app.nav.feature', appLanguage)}>
             {navigationItems.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                className={`feature-nav-item ${isNavigationItemActive(item) ? 'active' : ''}`}
-                onClick={() => openNavigationItem(item)}
-                onFocus={item.key === 'hosts' ? undefined : preloadFullMessageCatalog}
-                onMouseEnter={item.key === 'hosts' ? undefined : preloadFullMessageCatalog}
-              >
-                <span className="nav-icon"><ShellDeskNavIcon name={item.icon} /></span>
-                {item.label[appLanguage]}
-              </button>
+              <Fragment key={item.key}>
+                <button
+                  type="button"
+                  className={`feature-nav-item ${isNavigationItemActive(item) ? 'active' : ''}`}
+                  onClick={() => openNavigationItem(item)}
+                  onFocus={item.key === 'hosts' ? undefined : preloadFullMessageCatalog}
+                  onMouseEnter={item.key === 'hosts' ? undefined : preloadFullMessageCatalog}
+                >
+                  <span className="nav-icon"><ShellDeskNavIcon name={item.icon} /></span>
+                  {item.label[appLanguage]}
+                </button>
+                {item.key === 'hosts' ? <button
+                  type="button"
+                  className="feature-nav-item"
+                  onClick={openAgentWorkspace}
+                  onFocus={preloadFullMessageCatalog}
+                  onMouseEnter={preloadFullMessageCatalog}
+                >
+                  <span className="nav-icon"><ShellDeskNavIcon name="agent" /></span>
+                  {appLanguage === 'zh-CN' ? 'AI 工作台' : 'AI workspace'}
+                </button> : null}
+              </Fragment>
             ))}
           </nav>
 
