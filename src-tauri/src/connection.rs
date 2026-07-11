@@ -3,9 +3,10 @@ use crate::ssh_tunnel::spawn_tunnel_shutdown;
 use crate::vault::read_store;
 use crate::{
     error_string, https_url_origin, now, prevent_process_window, random_id, read_string_field,
-    read_u16_field, remote_fs, sanitize_file_name, string_arg, terminal,
-    unavailable_password_auth_error, whoami, ActiveConnection, AppState, ConnectionKind,
-    PrivilegeConfig, SshProfile,
+    read_u16_field, remote_fs,
+    russh_client::{connect_authenticated, run_exec_command},
+    sanitize_file_name, string_arg, terminal, unavailable_password_auth_error, whoami,
+    ActiveConnection, AppState, ConnectionKind, PrivilegeConfig, SshProfile, UiWindowRef,
 };
 use host_keys::prepare_ssh_host_key_trust;
 use serde_json::{json, Value};
@@ -15,6 +16,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::PathBuf,
+    time::Duration,
 };
 use tauri::Emitter;
 
@@ -458,6 +460,52 @@ fn build_privilege_config(
     Ok(None)
 }
 
+fn login_validation_error_message(error: impl std::fmt::Display) -> String {
+    let detail = error.to_string();
+    let has_unreadable_text = detail.contains('\u{fffd}')
+        || detail
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\r' | '\n' | '\t'));
+    if has_unreadable_text {
+        return "SSH 登录验证失败：服务器在认证阶段断开，或返回了无法识别的错误文本。请检查 Windows OpenSSH 的认证策略和服务端日志。".to_string();
+    }
+
+    let detail = detail.trim();
+    if detail.is_empty() {
+        "SSH 登录验证失败。".to_string()
+    } else {
+        format!("SSH 登录验证失败：{detail}")
+    }
+}
+
+fn remote_system_type_from_probe_output(output: &str) -> Option<&'static str> {
+    output
+        .to_ascii_uppercase()
+        .contains("WINDOWS_NT")
+        .then_some("windows")
+}
+
+async fn probe_remote_system_type(
+    state: AppState,
+    window: &tauri::Window,
+    profile: SshProfile,
+) -> Option<&'static str> {
+    // `echo %OS%` is parsed by cmd.exe on the standard Windows OpenSSH shell and
+    // stays a harmless literal on POSIX shells. Do this before any platform-specific
+    // status command so a Windows host never receives a Unix redirect such as /dev/null.
+    let output = run_exec_command(
+        Some(state),
+        Some(UiWindowRef::from_window(window)),
+        profile,
+        "echo %OS%".to_string(),
+        String::new(),
+        Duration::from_secs(8),
+    )
+    .await
+    .ok()?;
+    remote_system_type_from_probe_output(&format!("{}{}", output.stdout, output.stderr))
+}
+
 pub(crate) fn respond_keyboard_interactive(
     state: &AppState,
     args: Vec<Value>,
@@ -510,6 +558,28 @@ pub(crate) async fn connect_ssh(
         return Ok(json!({ "ok": false, "error": error }));
     }
 
+    // A host-key scan only proves that an SSH server is reachable. Authenticate before
+    // declaring the connection successful so invalid credentials and server-side policy
+    // rejections are reported by the connection dialog instead of a later desktop action.
+    let mut authentication_probe = match connect_authenticated(
+        Some(state.clone()),
+        Some(UiWindowRef::from_window(&window)),
+        profile.clone(),
+    )
+    .await
+    {
+        Ok(session) => session,
+        Err(error) => {
+            return Ok(json!({
+                "ok": false,
+                "error": login_validation_error_message(error)
+            }));
+        }
+    };
+    authentication_probe.disconnect().await;
+    let detected_system_type =
+        probe_remote_system_type(state.clone(), &window, profile.clone()).await;
+
     let id = random_id("ssh");
     let connection = ActiveConnection {
         id: id.clone(),
@@ -529,7 +599,9 @@ pub(crate) async fn connect_ssh(
             "jumpHostId": raw_host.get("jumpHostId").cloned().unwrap_or(Value::Null),
             "proxyProfileId": raw_host.get("proxyProfileId").cloned().unwrap_or(Value::Null),
             "jumpHost": jump_host_display,
-            "systemType": raw_host.get("systemType").cloned().unwrap_or_else(|| json!("unknown")),
+            "systemType": detected_system_type
+                .map(|system_type| json!(system_type))
+                .unwrap_or_else(|| raw_host.get("systemType").cloned().unwrap_or_else(|| json!("unknown"))),
             "systemName": raw_host.get("systemName").cloned().unwrap_or(Value::Null)
         }),
         ssh: Some(profile),
@@ -847,6 +919,31 @@ mod tests {
             known_hosts_host_pattern("192.168.100.23", 2222),
             "[192.168.100.23]:2222"
         );
+    }
+
+    #[test]
+    fn login_validation_error_hides_replacement_character_garble() {
+        let message = login_validation_error_message("\u{fffd}\u{fffd}f\u{fffd}\u{fffd}");
+
+        assert!(message.contains("无法识别的错误文本"));
+        assert!(!message.contains('\u{fffd}'));
+    }
+
+    #[test]
+    fn login_validation_error_keeps_readable_detail() {
+        assert_eq!(
+            login_validation_error_message("服务器拒绝 SSH 密码认证。"),
+            "SSH 登录验证失败：服务器拒绝 SSH 密码认证。"
+        );
+    }
+
+    #[test]
+    fn remote_system_probe_detects_standard_windows_openssh_shell() {
+        assert_eq!(
+            remote_system_type_from_probe_output("WINDOWS_NT\r\n"),
+            Some("windows")
+        );
+        assert_eq!(remote_system_type_from_probe_output("%OS%\n"), None);
     }
 
     #[test]
