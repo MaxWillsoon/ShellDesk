@@ -585,9 +585,73 @@ mod tests {
         assert!(metrics_command.contains("LC_ALL=C free | awk"));
     }
 
+    const HOST_COMPONENT_PREFIX: &str = "__SHELLDESK_COMPONENT__";
+    const WINDOWS_HOST_COMPONENT_PROBE: &str = r#"
+$ErrorActionPreference = 'Stop'
+function Test-ShellDeskComponent([string]$Key, [scriptblock]$Probe, [bool]$Optional = $false) {
+  try {
+    $value = & $Probe
+    if ($null -eq $value) { throw 'empty output' }
+    [Console]::Out.WriteLine('__SHELLDESK_COMPONENT__' + $Key + '|ok')
+  } catch {
+    $status = if ($Optional) { 'skip' } else { 'fail' }
+    [Console]::Out.WriteLine('__SHELLDESK_COMPONENT__' + $Key + '|' + $status)
+  }
+}
+
+Test-ShellDeskComponent 'terminal' { $PSVersionTable.PSVersion.ToString() }
+Test-ShellDeskComponent 'files' {
+  $path = Join-Path ([IO.Path]::GetTempPath()) ('shelldesk-host-smoke-' + [guid]::NewGuid().ToString('N') + '.txt')
+  try {
+    [IO.File]::WriteAllText($path, 'ok')
+    if ([IO.File]::ReadAllText($path) -ne 'ok') { throw 'read-back mismatch' }
+    Get-Item -LiteralPath $path
+  } finally {
+    Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+  }
+}
+Test-ShellDeskComponent 'processes' { Get-Process -Id $PID }
+Test-ShellDeskComponent 'services' { Get-Service | Select-Object -First 1 }
+Test-ShellDeskComponent 'network' { [System.Net.Dns]::GetHostName() }
+Test-ShellDeskComponent 'disks' { Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | Select-Object -First 1 }
+Test-ShellDeskComponent 'users' { [System.Security.Principal.WindowsIdentity]::GetCurrent().Name }
+Test-ShellDeskComponent 'firewall' { Get-NetFirewallProfile | Select-Object -First 1 } $true
+Test-ShellDeskComponent 'scheduledTasks' { Get-ScheduledTask | Select-Object -First 1 } $true
+Test-ShellDeskComponent 'eventLog' { Get-WinEvent -LogName System -MaxEvents 1 } $true
+Test-ShellDeskComponent 'packages' { Get-Command winget -ErrorAction Stop } $true
+Test-ShellDeskComponent 'containers' { Get-Command docker -ErrorAction Stop } $true
+"#;
+    const LINUX_HOST_COMPONENT_PROBE: &str = r#"
+component() {
+  key="$1"
+  optional="$2"
+  shift 2
+  if "$@" >/dev/null 2>&1; then
+    printf '__SHELLDESK_COMPONENT__%s|ok\n' "$key"
+  elif [ "$optional" = "true" ]; then
+    printf '__SHELLDESK_COMPONENT__%s|skip\n' "$key"
+  else
+    printf '__SHELLDESK_COMPONENT__%s|fail\n' "$key"
+  fi
+}
+
+component terminal false sh -c 'command -v sh'
+component files false sh -c 'path=$(mktemp); trap "rm -f \"$path\"" EXIT; printf ok > "$path"; test "$(cat "$path")" = ok'
+component processes false sh -c 'ps -p $$ >/dev/null'
+component services true sh -c 'command -v systemctl >/dev/null && systemctl list-units --type=service --no-pager --no-legend | head -n 1'
+component network false sh -c 'hostname >/dev/null'
+component disks false sh -c 'df -Pk / >/dev/null'
+component users false sh -c 'id -un >/dev/null'
+component firewall true sh -c 'command -v firewall-cmd >/dev/null || command -v ufw >/dev/null || command -v iptables >/dev/null'
+component scheduledTasks true sh -c 'command -v crontab >/dev/null || command -v systemctl >/dev/null'
+component eventLog true sh -c 'command -v journalctl >/dev/null || test -d /var/log'
+component packages true sh -c 'command -v apt-get >/dev/null || command -v dnf >/dev/null || command -v yum >/dev/null || command -v zypper >/dev/null || command -v pacman >/dev/null || command -v apk >/dev/null'
+component containers true sh -c 'command -v docker >/dev/null || command -v podman >/dev/null'
+"#;
+
     #[tokio::test]
-    async fn live_windows_system_info_reads_all_batch_items() {
-        if std::env::var("SHELLDESK_RUN_LIVE_WINDOWS_SYSTEM_INFO")
+    async fn live_windows_host_components_smoke() {
+        if std::env::var("SHELLDESK_RUN_LIVE_HOST_COMPONENTS")
             .ok()
             .as_deref()
             != Some("1")
@@ -595,10 +659,207 @@ mod tests {
             return;
         }
 
+        let (profile, known_hosts_path) = live_ssh_profile_with_scanned_host_key().await;
+
+        let items = system_info_items(true);
+        let (command, stdin) = create_windows_batch_command(&items);
+        let system_info = crate::russh_client::run_exec_command(
+            None,
+            None,
+            profile.clone(),
+            command,
+            stdin,
+            Duration::from_secs(25),
+        )
+        .await
+        .expect("live Windows system information command should run");
+
+        assert_eq!(system_info.code, 0, "stderr: {}", system_info.stderr);
+        let values = parse_batch_output(&system_info.stdout);
+        assert_eq!(
+            values.len(),
+            items.len(),
+            "stdout: {}; stderr: {}",
+            system_info.stdout,
+            system_info.stderr
+        );
+        assert!(values.iter().all(|(_, value)| !value.trim().is_empty()));
+        assert!(values
+            .iter()
+            .any(|(key, value)| key == "hostname" && value != "No output"));
+
+        let metrics = crate::russh_client::run_exec_command(
+            None,
+            None,
+            profile.clone(),
+            create_windows_metrics_command(),
+            String::new(),
+            Duration::from_secs(15),
+        )
+        .await
+        .expect("live Windows metrics command should run");
+        assert_eq!(metrics.code, 0, "stderr: {}", metrics.stderr);
+        assert!(metrics.stdout.contains("cpu="));
+        assert!(metrics.stdout.contains("mem="));
+
+        let (component_command, component_stdin) =
+            create_powershell_stdin_command(WINDOWS_HOST_COMPONENT_PROBE);
+        let component_probe = crate::russh_client::run_exec_command(
+            None,
+            None,
+            profile,
+            component_command,
+            component_stdin,
+            Duration::from_secs(25),
+        )
+        .await;
+        let _ = std::fs::remove_file(&known_hosts_path);
+        let component_probe = component_probe.expect("live Windows component probe should run");
+        assert_eq!(
+            component_probe.code, 0,
+            "stderr: {}",
+            component_probe.stderr
+        );
+
+        let component_statuses = parse_component_statuses(&component_probe.stdout);
+        for component in [
+            "terminal",
+            "files",
+            "processes",
+            "services",
+            "network",
+            "disks",
+            "users",
+        ] {
+            assert_eq!(
+                component_statuses.get(component).map(String::as_str),
+                Some("ok"),
+                "component {component} output: {}",
+                component_probe.stdout
+            );
+        }
+        let summary = component_statuses
+            .iter()
+            .map(|(component, status)| format!("{component}={status}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("Live Windows host component smoke passed: {summary}");
+    }
+
+    #[tokio::test]
+    async fn live_linux_host_components_smoke() {
+        if std::env::var("SHELLDESK_RUN_LIVE_HOST_COMPONENTS")
+            .ok()
+            .as_deref()
+            != Some("linux")
+        {
+            return;
+        }
+
+        let (profile, known_hosts_path) = live_ssh_profile_with_scanned_host_key().await;
+        let platform = crate::russh_client::run_exec_command(
+            None,
+            None,
+            profile.clone(),
+            "uname -s".to_string(),
+            String::new(),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("live Linux platform probe should run");
+        assert!(
+            platform.code == 0 && platform.stdout.trim().eq_ignore_ascii_case("linux"),
+            "smoke:linux-host requires a Linux target, got stdout: {}; stderr: {}",
+            platform.stdout,
+            platform.stderr
+        );
+
+        let items = system_info_items(false);
+        let system_info = crate::russh_client::run_exec_command(
+            None,
+            None,
+            profile.clone(),
+            create_unix_batch_command(&items),
+            String::new(),
+            Duration::from_secs(25),
+        )
+        .await
+        .expect("live Linux system information command should run");
+        assert_eq!(system_info.code, 0, "stderr: {}", system_info.stderr);
+        let values = parse_batch_output(&system_info.stdout);
+        assert_eq!(values.len(), items.len(), "stdout: {}", system_info.stdout);
+
+        let metrics = crate::russh_client::run_exec_command(
+            None,
+            None,
+            profile.clone(),
+            create_unix_metrics_command(),
+            String::new(),
+            Duration::from_secs(15),
+        )
+        .await
+        .expect("live Linux metrics command should run");
+        assert_eq!(metrics.code, 0, "stderr: {}", metrics.stderr);
+        assert!(metrics.stdout.contains("cpu="));
+        assert!(metrics.stdout.contains("mem="));
+
+        let component_probe = crate::russh_client::run_exec_command(
+            None,
+            None,
+            profile,
+            format!(
+                "sh <<'SHELLDESK_HOST_SMOKE'\n{LINUX_HOST_COMPONENT_PROBE}\nSHELLDESK_HOST_SMOKE"
+            ),
+            String::new(),
+            Duration::from_secs(25),
+        )
+        .await;
+        let _ = std::fs::remove_file(&known_hosts_path);
+        let component_probe = component_probe.expect("live Linux component probe should run");
+        assert_eq!(
+            component_probe.code, 0,
+            "stderr: {}",
+            component_probe.stderr
+        );
+
+        let component_statuses = parse_component_statuses(&component_probe.stdout);
+        for component in [
+            "terminal",
+            "files",
+            "processes",
+            "network",
+            "disks",
+            "users",
+        ] {
+            assert_eq!(
+                component_statuses.get(component).map(String::as_str),
+                Some("ok"),
+                "component {component} output: {}",
+                component_probe.stdout
+            );
+        }
+        let summary = component_statuses
+            .iter()
+            .map(|(component, status)| format!("{component}={status}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("Live Linux host component smoke passed: {summary}");
+    }
+
+    fn parse_component_statuses(output: &str) -> HashMap<String, String> {
+        output
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix(HOST_COMPONENT_PREFIX))
+            .filter_map(|line| line.split_once('|'))
+            .map(|(key, status)| (key.trim().to_string(), status.trim().to_string()))
+            .collect()
+    }
+
+    async fn live_ssh_profile_with_scanned_host_key() -> (crate::SshProfile, std::path::PathBuf) {
         let mut profile = live_ssh_profile_from_dotenv();
         let scanned_keys = crate::russh_client::scan_host_public_keys(profile.clone())
             .await
-            .expect("live Windows host key scan should succeed");
+            .expect("live host key scan should succeed");
         let host_pattern = if profile.port == 22 {
             profile.address.clone()
         } else {
@@ -610,103 +871,16 @@ mod tests {
             .map(|key| format!("{host_pattern} {key}"))
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(
-            !known_hosts.is_empty(),
-            "live Windows host should provide a key"
-        );
+        assert!(!known_hosts.is_empty(), "live host should provide a key");
 
         let known_hosts_path = std::env::temp_dir().join(format!(
-            "shelldesk-live-windows-system-info-{}.known_hosts",
+            "shelldesk-live-host-smoke-{}.known_hosts",
             std::process::id()
         ));
         std::fs::write(&known_hosts_path, format!("{known_hosts}\n"))
             .expect("temporary known_hosts should be writable");
         profile.known_hosts_path = known_hosts_path.to_string_lossy().into_owned();
-
-        let stdin_probe = crate::russh_client::run_exec_command(
-            None,
-            None,
-            profile.clone(),
-            "powershell.exe -NoLogo -NoProfile -NonInteractive -OutputFormat Text -Command -"
-                .to_string(),
-            "[Console]::Out.WriteLine('SHELLDESK_STDIN_READY')\n".to_string(),
-            Duration::from_secs(10),
-        )
-        .await
-        .expect("live Windows PowerShell stdin probe should run");
-        assert_eq!(stdin_probe.code, 0, "stderr: {}", stdin_probe.stderr);
-        assert!(
-            stdin_probe.stdout.contains("SHELLDESK_STDIN_READY"),
-            "stdout: {}",
-            stdin_probe.stdout
-        );
-
-        let (prelude_command, prelude_stdin) =
-            create_powershell_stdin_command("[Console]::Out.WriteLine('SHELLDESK_PRELUDE_READY')");
-        let prelude_probe = crate::russh_client::run_exec_command(
-            None,
-            None,
-            profile.clone(),
-            prelude_command,
-            prelude_stdin,
-            Duration::from_secs(10),
-        )
-        .await
-        .expect("live Windows PowerShell prelude probe should run");
-        assert_eq!(prelude_probe.code, 0, "stderr: {}", prelude_probe.stderr);
-        assert!(
-            prelude_probe.stdout.contains("SHELLDESK_PRELUDE_READY"),
-            "stdout: {}",
-            prelude_probe.stdout
-        );
-
-        let (function_command, function_stdin) = create_powershell_stdin_command(
-            "function Write-ShellDeskProbe {\n  [Console]::Out.WriteLine('SHELLDESK_FUNCTION_READY')\n}\nWrite-ShellDeskProbe",
-        );
-        let function_probe = crate::russh_client::run_exec_command(
-            None,
-            None,
-            profile.clone(),
-            function_command,
-            function_stdin,
-            Duration::from_secs(10),
-        )
-        .await
-        .expect("live Windows PowerShell function probe should run");
-        assert_eq!(function_probe.code, 0, "stderr: {}", function_probe.stderr);
-        assert!(
-            function_probe.stdout.contains("SHELLDESK_FUNCTION_READY"),
-            "stdout: {}",
-            function_probe.stdout
-        );
-
-        let items = system_info_items(true);
-        let (command, stdin) = create_windows_batch_command(&items);
-        let result = crate::russh_client::run_exec_command(
-            None,
-            None,
-            profile,
-            command,
-            stdin,
-            Duration::from_secs(25),
-        )
-        .await;
-        let _ = std::fs::remove_file(&known_hosts_path);
-        let result = result.expect("live Windows system information command should run");
-
-        assert_eq!(result.code, 0, "stderr: {}", result.stderr);
-        let values = parse_batch_output(&result.stdout);
-        assert_eq!(
-            values.len(),
-            items.len(),
-            "stdout: {}; stderr: {}",
-            result.stdout,
-            result.stderr
-        );
-        assert!(values.iter().all(|(_, value)| !value.trim().is_empty()));
-        assert!(values
-            .iter()
-            .any(|(key, value)| key == "hostname" && value != "No output"));
+        (profile, known_hosts_path)
     }
 
     fn live_ssh_profile_from_dotenv() -> crate::SshProfile {
@@ -726,14 +900,21 @@ mod tests {
                 Some((key.trim().to_string(), value.trim().to_string()))
             })
             .collect::<HashMap<_, _>>();
-        let value = |key: &str| {
+        let optional_value = |key: &str| {
             values
                 .get(key)
                 .filter(|value| !value.is_empty() && value.as_str() != "change-me")
                 .cloned()
-                .unwrap_or_else(|| panic!("live Windows system information test requires {key}"))
         };
-        let password = value("SHELLDESK_TEST_SSH_PASSWORD");
+        let value = |key: &str| {
+            optional_value(key).unwrap_or_else(|| panic!("live Windows host smoke requires {key}"))
+        };
+        let password = optional_value("SHELLDESK_TEST_SSH_PASSWORD").unwrap_or_default();
+        let key_path = optional_value("SHELLDESK_TEST_SSH_KEY_PATH").unwrap_or_default();
+        assert!(
+            !password.is_empty() || !key_path.is_empty(),
+            "live Windows host smoke requires SHELLDESK_TEST_SSH_PASSWORD or SHELLDESK_TEST_SSH_KEY_PATH"
+        );
 
         crate::SshProfile {
             address: value("SHELLDESK_TEST_SSH_HOST"),
@@ -742,9 +923,13 @@ mod tests {
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(22),
             username: value("SHELLDESK_TEST_SSH_USERNAME"),
-            auth_method: "password".to_string(),
+            auth_method: if key_path.is_empty() {
+                "password".to_string()
+            } else {
+                "privateKey".to_string()
+            },
             password,
-            key_path: String::new(),
+            key_path,
             known_hosts_path: String::new(),
             proxy_helper_exe: String::new(),
             proxy: None,
