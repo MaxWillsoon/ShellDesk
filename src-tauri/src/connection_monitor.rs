@@ -649,16 +649,7 @@ component packages true sh -c 'command -v apt-get >/dev/null || command -v dnf >
 component containers true sh -c 'command -v docker >/dev/null || command -v podman >/dev/null'
 "#;
 
-    #[tokio::test]
-    async fn live_windows_host_components_smoke() {
-        if std::env::var("SHELLDESK_RUN_LIVE_HOST_COMPONENTS")
-            .ok()
-            .as_deref()
-            != Some("1")
-        {
-            return;
-        }
-
+    async fn run_live_windows_host_components_smoke() {
         let (profile, known_hosts_path) = live_ssh_profile_with_scanned_host_key().await;
 
         let items = system_info_items(true);
@@ -746,16 +737,7 @@ component containers true sh -c 'command -v docker >/dev/null || command -v podm
         println!("Live Windows host component smoke passed: {summary}");
     }
 
-    #[tokio::test]
-    async fn live_linux_host_components_smoke() {
-        if std::env::var("SHELLDESK_RUN_LIVE_HOST_COMPONENTS")
-            .ok()
-            .as_deref()
-            != Some("linux")
-        {
-            return;
-        }
-
+    async fn run_live_linux_host_components_smoke() {
         let (profile, known_hosts_path) = live_ssh_profile_with_scanned_host_key().await;
         let platform = crate::russh_client::run_exec_command(
             None,
@@ -769,7 +751,7 @@ component containers true sh -c 'command -v docker >/dev/null || command -v podm
         .expect("live Linux platform probe should run");
         assert!(
             platform.code == 0 && platform.stdout.trim().eq_ignore_ascii_case("linux"),
-            "smoke:linux-host requires a Linux target, got stdout: {}; stderr: {}",
+            "smoke:host selected Linux checks, but target returned stdout: {}; stderr: {}",
             platform.stdout,
             platform.stderr
         );
@@ -844,6 +826,39 @@ component containers true sh -c 'command -v docker >/dev/null || command -v podm
             .collect::<Vec<_>>()
             .join(", ");
         println!("Live Linux host component smoke passed: {summary}");
+    }
+
+    #[tokio::test]
+    async fn live_host_components_smoke() {
+        if std::env::var("SHELLDESK_RUN_LIVE_HOST_COMPONENTS")
+            .ok()
+            .as_deref()
+            != Some("1")
+        {
+            return;
+        }
+
+        let (profile, known_hosts_path) = live_ssh_profile_with_scanned_host_key().await;
+        let platform = crate::russh_client::run_exec_command(
+            None,
+            None,
+            profile,
+            "echo %OS%".to_string(),
+            String::new(),
+            Duration::from_secs(10),
+        )
+        .await;
+        let _ = std::fs::remove_file(&known_hosts_path);
+        let platform = platform.expect("live host platform probe should run");
+        assert_eq!(platform.code, 0, "stderr: {}", platform.stderr);
+
+        if platform.stdout.trim().eq_ignore_ascii_case("windows_nt") {
+            println!("Live host platform: Windows");
+            run_live_windows_host_components_smoke().await;
+        } else {
+            println!("Live host platform: Linux/Unix");
+            run_live_linux_host_components_smoke().await;
+        }
     }
 
     fn parse_component_statuses(output: &str) -> HashMap<String, String> {

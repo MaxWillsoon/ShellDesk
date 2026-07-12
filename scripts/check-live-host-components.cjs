@@ -2,12 +2,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const target = (process.argv[2] ?? '').trim().toLowerCase();
-if (!['windows', 'linux'].includes(target)) {
-  console.error('Usage: node scripts/check-live-host-components.cjs <windows|linux>');
-  process.exit(1);
-}
-
 const root = path.resolve(__dirname, '..');
 const dotenvPath = path.join(root, '.env');
 const requiredKeys = ['SHELLDESK_TEST_SSH_HOST', 'SHELLDESK_TEST_SSH_USERNAME'];
@@ -34,7 +28,7 @@ const hasPassword = Boolean(values.SHELLDESK_TEST_SSH_PASSWORD && values.SHELLDE
 const hasKey = Boolean(values.SHELLDESK_TEST_SSH_KEY_PATH && values.SHELLDESK_TEST_SSH_KEY_PATH !== 'change-me');
 if (!hasPassword && !hasKey) missing.push('SHELLDESK_TEST_SSH_PASSWORD or SHELLDESK_TEST_SSH_KEY_PATH');
 if (missing.length) {
-  console.error(`Live ${target} host smoke requires .env values: ${missing.join(', ')}`);
+  console.error(`Live host smoke requires .env values: ${missing.join(', ')}`);
   process.exit(1);
 }
 
@@ -45,14 +39,14 @@ const result = spawnSync(cargo, [
   'test',
   '--manifest-path',
   'src-tauri/Cargo.toml',
-  `live_${target}_host_components_smoke`,
+  'live_host_components_smoke',
   '--',
   '--nocapture',
 ], {
   cwd: root,
   env: {
     ...process.env,
-    SHELLDESK_RUN_LIVE_HOST_COMPONENTS: target === 'windows' ? '1' : target,
+    SHELLDESK_RUN_LIVE_HOST_COMPONENTS: '1',
   },
   encoding: 'utf8',
   stdio: 'pipe',
@@ -69,4 +63,4 @@ if (result.stdout) process.stdout.write(redact(result.stdout));
 if (result.stderr) process.stderr.write(redact(result.stderr));
 if (result.status !== 0) process.exit(result.status ?? 1);
 
-console.log(`Live ${target} host component smoke passed.`);
+console.log('Live host component smoke passed.');
