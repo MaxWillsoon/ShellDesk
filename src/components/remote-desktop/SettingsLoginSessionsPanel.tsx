@@ -15,7 +15,7 @@ import {
   type LoginSessionEntry,
   type LoginSessionTab,
 } from './loginSessionParsers';
-import { isWindowsSystem } from './remoteSystem';
+import { isPowerShellProgressCliXml, isWindowsSystem } from './remoteSystem';
 import { useRemoteSettingsCommand } from './settingsShared';
 import type { RemoteSystemType } from './types';
 import { tCurrent } from '../../i18n';
@@ -150,8 +150,10 @@ export default function SettingsLoginSessionsPanel({ systemType }: SettingsLogin
 
       setLoadedAt(new Date().toLocaleTimeString(getShellDeskLocale()));
       setLoadedTabs((current) => new Set(current).add(tab));
-      if (result.code !== 0 || result.stderr.trim()) {
-        setNotice(result.stderr || tCurrent('auto.remoteLoginSessions.xxe616'));
+      const stderr = result.stderr.trim();
+      const actionableStderr = isPowerShellProgressCliXml(stderr) ? '' : stderr;
+      if (result.code !== 0 || actionableStderr) {
+        setNotice(actionableStderr || tCurrent('auto.remoteLoginSessions.xxe616'));
       }
     } catch (err) {
       setError(getErrorMessage(err));

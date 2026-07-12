@@ -42,14 +42,26 @@ export function powershellCommand(script: string) {
     binary += String.fromCharCode(byte);
   }
 
-  return `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${btoa(binary)}`;
+  return `powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -OutputFormat Text -EncodedCommand ${btoa(binary)}`;
 }
 
 export function powershellStdinCommand(script: string): RemoteCommandInput {
   return {
-    command: 'powershell -NoProfile -ExecutionPolicy Bypass -Command -',
+    command: 'powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -OutputFormat Text -Command -',
     stdin: createPowerShellScript(script),
   };
+}
+
+/**
+ * Windows PowerShell writes startup/module-load progress to stderr as CLIXML
+ * when its output is redirected through SSH. It is informational rather than
+ * a command failure and should not be surfaced as an error notification.
+ */
+export function isPowerShellProgressCliXml(output: string) {
+  const value = output.trim();
+  return value.startsWith('#< CLIXML')
+    && /<Obj\s+S="progress"/i.test(value)
+    && !/<(?:Obj|S)\s+S="(?:error|warning)"/i.test(value);
 }
 
 export function powershellSingleQuote(value: string) {

@@ -32,6 +32,7 @@ pub(crate) async fn get_connection_status(
         state,
         connection,
         connection_status_command(),
+        String::new(),
         Duration::from_secs(8),
     )
     .await?;
@@ -113,12 +114,13 @@ async fn run_command_report(
     items: &[MonitorItem],
     is_windows: bool,
 ) -> Result<Value, String> {
-    let command = if is_windows {
+    let (command, stdin) = if is_windows {
         create_windows_batch_command(items)
     } else {
-        create_unix_batch_command(items)
+        (create_unix_batch_command(items), String::new())
     };
-    let output = run_monitor_command(state, connection, command, Duration::from_secs(25)).await?;
+    let output =
+        run_monitor_command(state, connection, command, stdin, Duration::from_secs(25)).await?;
     if output.get("code").and_then(Value::as_i64).unwrap_or(1) != 0 {
         return Err(output
             .get("stderr")
@@ -151,10 +153,11 @@ async fn run_monitor_command(
     state: AppState,
     connection: ActiveConnection,
     command: String,
+    stdin: String,
     timeout: Duration,
 ) -> Result<Value, String> {
     if connection.kind == ConnectionKind::Local {
-        return run_shell(command, "", Some(timeout)).await;
+        return run_shell(command, &stdin, Some(timeout)).await;
     }
     run_ssh_command_for_profile_interactive(
         state.clone(),
@@ -163,7 +166,7 @@ async fn run_monitor_command(
             .clone()
             .ok_or_else(|| "SSH profile is unavailable.".to_string())?,
         command,
-        String::new(),
+        stdin,
     )
     .await
 }
@@ -186,11 +189,11 @@ fn system_info_items(is_windows: bool) -> Vec<MonitorItem> {
             MonitorItem { key: "kernel", label: "系统版本", icon: Some("⚙️"), command: "[Environment]::OSVersion.VersionString" },
             MonitorItem { key: "hostname", label: "主机名", icon: Some("🏠"), command: "[System.Net.Dns]::GetHostName()" },
             MonitorItem { key: "arch", label: "系统架构", icon: Some("🧩"), command: "(Get-CimInstance Win32_OperatingSystem).OSArchitecture" },
-            MonitorItem { key: "cpuCores", label: "CPU 核心", icon: Some("🧮"), command: "$cores = (Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Sum; if ($null -eq $cores) { '未检测到' } else { [string][int]$cores }" },
-            MonitorItem { key: "memoryTotal", label: "内存总量", icon: Some("🧠"), command: "$os = Get-CimInstance Win32_OperatingSystem; if ($os.TotalVisibleMemorySize) { '{0} GB' -f [math]::Round($os.TotalVisibleMemorySize / 1MB, 1) } else { '未检测到' }" },
-            MonitorItem { key: "diskTotal", label: "硬盘总量", icon: Some("💽"), command: "$total = (Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | Measure-Object -Property Size -Sum).Sum; if ($null -eq $total) { '未检测到' } else { '{0} GB' -f [math]::Round($total / 1GB, 1) }" },
+            MonitorItem { key: "cpuCores", label: "CPU 核心", icon: Some("🧮"), command: "$cores = (Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Sum; if ($null -eq $cores) { 'Unavailable' } else { [string][int]$cores }" },
+            MonitorItem { key: "memoryTotal", label: "内存总量", icon: Some("🧠"), command: "$os = Get-CimInstance Win32_OperatingSystem; if ($os.TotalVisibleMemorySize) { '{0} GB' -f [math]::Round($os.TotalVisibleMemorySize / 1MB, 1) } else { 'Unavailable' }" },
+            MonitorItem { key: "diskTotal", label: "硬盘总量", icon: Some("💽"), command: "$total = (Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | Measure-Object -Property Size -Sum).Sum; if ($null -eq $total) { 'Unavailable' } else { '{0} GB' -f [math]::Round($total / 1GB, 1) }" },
             MonitorItem { key: "cpu", label: "CPU", icon: Some("💻"), command: "$cpu = Get-CimInstance Win32_Processor | Select-Object -First 1; '{0}; Cores: {1}; Logical: {2}' -f $cpu.Name, $cpu.NumberOfCores, $cpu.NumberOfLogicalProcessors" },
-            MonitorItem { key: "memory", label: "内存", icon: Some("🧠"), command: "$os = Get-CimInstance Win32_OperatingSystem; $total = [math]::Round($os.TotalVisibleMemorySize / 1MB, 2); $free = [math]::Round($os.FreePhysicalMemory / 1MB, 2); $used = [math]::Round($total - $free, 2); '已用 {0} GB / 总计 {1} GB，空闲 {2} GB' -f $used, $total, $free" },
+            MonitorItem { key: "memory", label: "内存", icon: Some("🧠"), command: "$os = Get-CimInstance Win32_OperatingSystem; $total = [math]::Round($os.TotalVisibleMemorySize / 1MB, 2); $free = [math]::Round($os.FreePhysicalMemory / 1MB, 2); $used = [math]::Round($total - $free, 2); 'Used {0} GB / Total {1} GB / Free {2} GB' -f $used, $total, $free" },
             MonitorItem { key: "disk", label: "磁盘", icon: Some("💽"), command: "Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | Select-Object DeviceID, VolumeName, FileSystem, @{Name='SizeGB'; Expression={[math]::Round($_.Size / 1GB, 2)}}, @{Name='FreeGB'; Expression={[math]::Round($_.FreeSpace / 1GB, 2)}} | Format-Table -AutoSize | Out-String -Width 220" },
             MonitorItem { key: "uptime", label: "运行时间", icon: Some("⏱️"), command: "$os = Get-CimInstance Win32_OperatingSystem; ((Get-Date) - $os.LastBootUpTime).ToString()" },
             MonitorItem { key: "load", label: "CPU 负载", icon: Some("⚡"), command: "$value = (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average; if ($null -eq $value) { '0%' } else { '{0}%' -f [math]::Round($value, 1) }" },
@@ -200,7 +203,7 @@ fn system_info_items(is_windows: bool) -> Vec<MonitorItem> {
             MonitorItem { key: "timezone", label: "时区", icon: Some("🌍"), command: "(Get-TimeZone).DisplayName" },
             MonitorItem { key: "gpu", label: "GPU", icon: Some("🎮"), command: "Get-CimInstance Win32_VideoController | Select-Object -First 3 -ExpandProperty Name | Out-String -Width 200" },
             MonitorItem { key: "virt", label: "硬件型号", icon: Some("📫"), command: "$cs = Get-CimInstance Win32_ComputerSystem; '{0} {1}' -f $cs.Manufacturer, $cs.Model" },
-            MonitorItem { key: "boot", label: "启动模式", icon: Some("🔄"), command: "try { if (Confirm-SecureBootUEFI) { 'UEFI / Secure Boot' } else { 'UEFI' } } catch { 'Legacy BIOS 或未识别' }" },
+            MonitorItem { key: "boot", label: "启动模式", icon: Some("🔄"), command: "try { if (Confirm-SecureBootUEFI) { 'UEFI / Secure Boot' } else { 'UEFI' } } catch { 'Legacy BIOS or unknown' }" },
         ]
     } else {
         vec![
@@ -262,7 +265,7 @@ fn create_unix_batch_command(items: &[MonitorItem]) -> String {
     )
 }
 
-fn create_windows_batch_command(items: &[MonitorItem]) -> String {
+fn create_windows_batch_command(items: &[MonitorItem]) -> (String, String) {
     let invocations = items
         .iter()
         .map(|item| {
@@ -274,18 +277,18 @@ fn create_windows_batch_command(items: &[MonitorItem]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    create_powershell_command(&format!(
+    create_powershell_stdin_command(&format!(
         r#"function Invoke-ShellDeskItem([string]$Key, [scriptblock]$Script) {{
   [Console]::Out.WriteLine('{begin}' + $Key)
   try {{
-    $result = & $Script 2>&1 | Out-String -Width 260
+    $result = & $Script 2>$null 3>$null 4>$null 5>$null 6>$null | Out-String -Width 260
     if ([string]::IsNullOrWhiteSpace($result)) {{
-      [Console]::Out.WriteLine('无输出')
+      [Console]::Out.WriteLine('No output')
     }} else {{
       [Console]::Out.WriteLine($result.TrimEnd())
     }}
   }} catch {{
-    [Console]::Out.WriteLine('获取失败：' + $_.Exception.Message)
+    [Console]::Out.WriteLine('Unavailable')
   }}
   [Console]::Out.WriteLine('{end}' + $Key)
 }}
@@ -391,7 +394,27 @@ fn quote_powershell_string(value: &str) -> String {
 }
 
 fn create_powershell_command(script: &str) -> String {
-    let prelude = [
+    format!(
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -OutputFormat Text -EncodedCommand {}",
+        powershell_encoded(&format!("{}\n{script}", powershell_prelude()))
+    )
+}
+
+fn create_powershell_stdin_command(script: &str) -> (String, String) {
+    let encoded_script = powershell_encoded(&format!("{}\n{script}", powershell_prelude()));
+    (
+        "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -OutputFormat Text -Command -".to_string(),
+        // `-Command -` parses stdin one statement at a time. Send one short
+        // loader statement, then execute the complete script from its UTF-16
+        // payload so function definitions are parsed as a whole.
+        format!(
+            "$__shelldeskScript = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('{encoded_script}')); & ([ScriptBlock]::Create($__shelldeskScript))\n"
+        ),
+    )
+}
+
+fn powershell_prelude() -> String {
+    [
         "try {",
         "$__shelldeskUtf8 = New-Object System.Text.UTF8Encoding $false",
         "[Console]::InputEncoding = $__shelldeskUtf8",
@@ -399,12 +422,12 @@ fn create_powershell_command(script: &str) -> String {
         "$OutputEncoding = $__shelldeskUtf8",
         "} catch {}",
         "try { chcp.com 65001 > $null } catch {}",
+        "$ProgressPreference = 'SilentlyContinue'",
+        "$VerbosePreference = 'SilentlyContinue'",
+        "$DebugPreference = 'SilentlyContinue'",
+        "$InformationPreference = 'SilentlyContinue'",
     ]
-    .join("\n");
-    format!(
-        "powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand {}",
-        powershell_encoded(&format!("{prelude}\n{script}"))
-    )
+    .join("\n")
 }
 
 fn powershell_encoded(script: &str) -> String {
@@ -483,6 +506,7 @@ fn clamp_metric_bytes(value: Option<u64>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn parses_batch_output_blocks() {
@@ -505,13 +529,17 @@ mod tests {
     }
 
     #[test]
-    fn windows_batch_command_uses_encoded_powershell() {
+    fn windows_batch_command_uses_powershell_stdin_to_avoid_cmd_length_limit() {
         let items = system_info_items(true);
-        let command = create_windows_batch_command(&items);
+        let (command, stdin) = create_windows_batch_command(&items);
 
-        assert!(command
-            .starts_with("powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "));
-        assert!(!command.contains("Get-CimInstance Win32_LogicalDisk"));
+        assert_eq!(
+            command,
+            "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -OutputFormat Text -Command -"
+        );
+        assert!(command.len() < 160);
+        assert!(stdin.contains("[Convert]::FromBase64String"));
+        assert!(!stdin.contains("Get-CimInstance Win32_LogicalDisk"));
     }
 
     #[test]
@@ -555,5 +583,174 @@ mod tests {
 
         let metrics_command = create_unix_metrics_command();
         assert!(metrics_command.contains("LC_ALL=C free | awk"));
+    }
+
+    #[tokio::test]
+    async fn live_windows_system_info_reads_all_batch_items() {
+        if std::env::var("SHELLDESK_RUN_LIVE_WINDOWS_SYSTEM_INFO")
+            .ok()
+            .as_deref()
+            != Some("1")
+        {
+            return;
+        }
+
+        let mut profile = live_ssh_profile_from_dotenv();
+        let scanned_keys = crate::russh_client::scan_host_public_keys(profile.clone())
+            .await
+            .expect("live Windows host key scan should succeed");
+        let host_pattern = if profile.port == 22 {
+            profile.address.clone()
+        } else {
+            format!("[{}]:{}", profile.address, profile.port)
+        };
+        let known_hosts = scanned_keys
+            .iter()
+            .filter_map(|key| key.to_openssh().ok())
+            .map(|key| format!("{host_pattern} {key}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !known_hosts.is_empty(),
+            "live Windows host should provide a key"
+        );
+
+        let known_hosts_path = std::env::temp_dir().join(format!(
+            "shelldesk-live-windows-system-info-{}.known_hosts",
+            std::process::id()
+        ));
+        std::fs::write(&known_hosts_path, format!("{known_hosts}\n"))
+            .expect("temporary known_hosts should be writable");
+        profile.known_hosts_path = known_hosts_path.to_string_lossy().into_owned();
+
+        let stdin_probe = crate::russh_client::run_exec_command(
+            None,
+            None,
+            profile.clone(),
+            "powershell.exe -NoLogo -NoProfile -NonInteractive -OutputFormat Text -Command -"
+                .to_string(),
+            "[Console]::Out.WriteLine('SHELLDESK_STDIN_READY')\n".to_string(),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("live Windows PowerShell stdin probe should run");
+        assert_eq!(stdin_probe.code, 0, "stderr: {}", stdin_probe.stderr);
+        assert!(
+            stdin_probe.stdout.contains("SHELLDESK_STDIN_READY"),
+            "stdout: {}",
+            stdin_probe.stdout
+        );
+
+        let (prelude_command, prelude_stdin) =
+            create_powershell_stdin_command("[Console]::Out.WriteLine('SHELLDESK_PRELUDE_READY')");
+        let prelude_probe = crate::russh_client::run_exec_command(
+            None,
+            None,
+            profile.clone(),
+            prelude_command,
+            prelude_stdin,
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("live Windows PowerShell prelude probe should run");
+        assert_eq!(prelude_probe.code, 0, "stderr: {}", prelude_probe.stderr);
+        assert!(
+            prelude_probe.stdout.contains("SHELLDESK_PRELUDE_READY"),
+            "stdout: {}",
+            prelude_probe.stdout
+        );
+
+        let (function_command, function_stdin) = create_powershell_stdin_command(
+            "function Write-ShellDeskProbe {\n  [Console]::Out.WriteLine('SHELLDESK_FUNCTION_READY')\n}\nWrite-ShellDeskProbe",
+        );
+        let function_probe = crate::russh_client::run_exec_command(
+            None,
+            None,
+            profile.clone(),
+            function_command,
+            function_stdin,
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("live Windows PowerShell function probe should run");
+        assert_eq!(function_probe.code, 0, "stderr: {}", function_probe.stderr);
+        assert!(
+            function_probe.stdout.contains("SHELLDESK_FUNCTION_READY"),
+            "stdout: {}",
+            function_probe.stdout
+        );
+
+        let items = system_info_items(true);
+        let (command, stdin) = create_windows_batch_command(&items);
+        let result = crate::russh_client::run_exec_command(
+            None,
+            None,
+            profile,
+            command,
+            stdin,
+            Duration::from_secs(25),
+        )
+        .await;
+        let _ = std::fs::remove_file(&known_hosts_path);
+        let result = result.expect("live Windows system information command should run");
+
+        assert_eq!(result.code, 0, "stderr: {}", result.stderr);
+        let values = parse_batch_output(&result.stdout);
+        assert_eq!(
+            values.len(),
+            items.len(),
+            "stdout: {}; stderr: {}",
+            result.stdout,
+            result.stderr
+        );
+        assert!(values.iter().all(|(_, value)| !value.trim().is_empty()));
+        assert!(values
+            .iter()
+            .any(|(key, value)| key == "hostname" && value != "No output"));
+    }
+
+    fn live_ssh_profile_from_dotenv() -> crate::SshProfile {
+        let dotenv_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .join(".env");
+        let dotenv = std::fs::read_to_string(dotenv_path).expect("live test .env should exist");
+        let values = dotenv
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    return None;
+                }
+                let (key, value) = line.split_once('=')?;
+                Some((key.trim().to_string(), value.trim().to_string()))
+            })
+            .collect::<HashMap<_, _>>();
+        let value = |key: &str| {
+            values
+                .get(key)
+                .filter(|value| !value.is_empty() && value.as_str() != "change-me")
+                .cloned()
+                .unwrap_or_else(|| panic!("live Windows system information test requires {key}"))
+        };
+        let password = value("SHELLDESK_TEST_SSH_PASSWORD");
+
+        crate::SshProfile {
+            address: value("SHELLDESK_TEST_SSH_HOST"),
+            port: values
+                .get("SHELLDESK_TEST_SSH_PORT")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(22),
+            username: value("SHELLDESK_TEST_SSH_USERNAME"),
+            auth_method: "password".to_string(),
+            password,
+            key_path: String::new(),
+            known_hosts_path: String::new(),
+            proxy_helper_exe: String::new(),
+            proxy: None,
+            jump: None,
+            keepalive_enabled: false,
+            keepalive_interval_ms: 15_000,
+        }
     }
 }

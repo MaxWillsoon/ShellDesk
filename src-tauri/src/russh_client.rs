@@ -3,6 +3,7 @@ use crate::{
     ui_prompts::request_keyboard_interactive_decision, AppState, SshProfile, UiWindowRef,
 };
 use base64::Engine;
+use encoding_rs::GBK;
 use russh::{
     client,
     keys::{
@@ -209,18 +210,34 @@ async fn exec_on_session(
     }
     let code = code.unwrap_or(-1);
     Ok(RusshExecOutput {
-        stdout: String::from_utf8_lossy(&stdout).to_string(),
-        stderr: String::from_utf8_lossy(&stderr).to_string(),
+        stdout: decode_remote_text(&stdout),
+        stderr: decode_remote_text(&stderr),
         code,
         success: code == 0,
     })
+}
+
+/// OpenSSH for Windows forwards output from legacy console applications in the
+/// active ANSI code page. Prefer UTF-8, but recover GBK/CP936 output instead
+/// of replacing every non-UTF-8 byte with U+FFFD on Chinese Windows hosts.
+fn decode_remote_text(data: &[u8]) -> String {
+    if let Ok(text) = std::str::from_utf8(data) {
+        return text.to_owned();
+    }
+
+    let (decoded, _, had_errors) = GBK.decode(data);
+    if !had_errors {
+        return decoded.into_owned();
+    }
+
+    String::from_utf8_lossy(data).into_owned()
 }
 
 fn emit_stream_chunk(stream: Option<&(UiWindowRef, String)>, stream_name: &str, data: &[u8]) {
     let Some((window, stream_id)) = stream else {
         return;
     };
-    let chunk = String::from_utf8_lossy(data).to_string();
+    let chunk = decode_remote_text(data);
     let _ = window.emit(
         "connection:run-command-stream:chunk",
         json!({ "streamId": stream_id, "chunk": chunk, "stream": stream_name }),
@@ -897,5 +914,20 @@ mod tests {
             key_auth_hash_algorithms(Algorithm::Ed25519, Some(Some(HashAlg::Sha512))),
             vec![None]
         );
+    }
+
+    #[test]
+    fn remote_text_keeps_valid_utf8() {
+        assert_eq!(
+            decode_remote_text("Windows 系统信息".as_bytes()),
+            "Windows 系统信息"
+        );
+    }
+
+    #[test]
+    fn remote_text_decodes_gbk_console_output() {
+        let (encoded, _, had_errors) = GBK.encode("系统信息");
+        assert!(!had_errors);
+        assert_eq!(decode_remote_text(&encoded), "系统信息");
     }
 }

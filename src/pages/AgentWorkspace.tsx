@@ -219,6 +219,10 @@ function AgentWorkspace({ hosts, settings, language, onOpenSettings, onReturnToH
   hostsRef.current = hosts;
   const selectedHost = hosts.find((host) => host.id === selectedHostId) ?? null;
   const activeTask = tasks.find((task) => task.id === activeTaskId) ?? tasks[0];
+  const startedTasks = useMemo(
+    () => tasks.filter((task) => task.messages.some((message) => message.role === 'user')),
+    [tasks],
+  );
   const conversationId = selectedHost ? `host:${selectedHost.id}` : `task:${activeTask?.id ?? 'new'}`;
   const initialMessages = selectedHost
     ? hostSessions[selectedHost.id]?.messages ?? []
@@ -268,7 +272,14 @@ function AgentWorkspace({ hosts, settings, language, onOpenSettings, onReturnToH
 
     void sessionsApi.get().then((snapshot) => {
       if (isDisposed) return;
-      const restoredTasks = snapshot.tasks.map(fromStoredSession);
+      const restoredTasks = snapshot.tasks
+        .filter((task) => task.messages.some((message) => message.role === 'user'))
+        .map(fromStoredSession);
+      for (const task of snapshot.tasks) {
+        if (!task.messages.some((message) => message.role === 'user')) {
+          void sessionsApi.delete(task.id).catch(() => undefined);
+        }
+      }
       const initialTask = initialTaskRef.current ?? createTaskSession(language);
       const reusableTask = [...restoredTasks]
         .sort((first, second) => second.updatedAt.localeCompare(first.updatedAt))
@@ -321,7 +332,9 @@ function AgentWorkspace({ hosts, settings, language, onOpenSettings, onReturnToH
   useEffect(() => {
     if (!areSessionsHydrated || !window.guiSSH?.agentSessions) return;
     for (const task of tasks) {
-      saveAgentSession(task, 'task');
+      if (task.messages.some((message) => message.role === 'user')) {
+        saveAgentSession(task, 'task');
+      }
     }
   }, [areSessionsHydrated, saveAgentSession, tasks]);
 
@@ -630,9 +643,9 @@ function AgentWorkspace({ hosts, settings, language, onOpenSettings, onReturnToH
     return () => window.removeEventListener('pointerdown', closeMenu);
   }, [messageContextMenu, taskContextMenu]);
 
-  const visibleTasks = [...tasks]
+  const visibleTasks = [...startedTasks]
     .sort((first, second) => second.updatedAt.localeCompare(first.updatedAt))
-    .slice(0, areMoreTasksVisible ? tasks.length : 3);
+    .slice(0, areMoreTasksVisible ? startedTasks.length : 3);
 
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -667,7 +680,7 @@ function AgentWorkspace({ hosts, settings, language, onOpenSettings, onReturnToH
             <span className="agent-host-icon"><SquarePen aria-hidden="true" /></span>
             <span><strong>{copy.newTask}</strong></span>
           </button>
-          <div className="agent-host-list-heading"><span>{copy.tasks}</span><span>{tasks.length}</span></div>
+          <div className="agent-host-list-heading"><span>{copy.tasks}</span><span>{startedTasks.length}</span></div>
           <div className="agent-task-list">
             {visibleTasks.map((task) => {
               const conversationStatus = conversationStatuses[`task:${task.id}`] ?? 'idle';
@@ -675,7 +688,7 @@ function AgentWorkspace({ hosts, settings, language, onOpenSettings, onReturnToH
                 <span>{task.title}</span><i className={conversationStatus} title={conversationStatus} />
               </button>;
             })}
-            {tasks.length > 3 ? <button type="button" className="agent-task-expand" onClick={() => setAreMoreTasksVisible((current) => !current)}>{areMoreTasksVisible ? copy.showFewerTasks : copy.showMoreTasks}</button> : null}
+            {startedTasks.length > 3 ? <button type="button" className="agent-task-expand" onClick={() => setAreMoreTasksVisible((current) => !current)}>{areMoreTasksVisible ? copy.showFewerTasks : copy.showMoreTasks}</button> : null}
           </div>
           <div className="agent-host-list-heading"><span>{copy.hosts}</span><span>{hosts.length}</span></div>
           <div className="agent-host-list">
