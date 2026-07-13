@@ -27,7 +27,10 @@ use host_keys::{
     classify_scanned_host_key, known_host_matches_host, known_hosts_host_pattern,
     merge_known_hosts_from_scan, select_scanned_host_key_decision,
 };
-pub(crate) use host_keys::{ensure_ssh_profile_host_key_trusted, respond_host_key_verification};
+pub(crate) use host_keys::{
+    ensure_ssh_profile_host_key_trusted, is_host_key_verification_message,
+    respond_host_key_verification,
+};
 pub(crate) fn open_local_connection(state: &AppState) -> Result<Value, String> {
     {
         let connections = state.connections.lock().map_err(error_string)?;
@@ -485,22 +488,38 @@ fn remote_system_type_from_probe_output(output: &str) -> Option<&'static str> {
 }
 
 async fn validate_login_and_probe_remote_system_type(
-    state: AppState,
+    state: &AppState,
     window: &tauri::Window,
-    profile: SshProfile,
+    profile: &mut SshProfile,
 ) -> Result<Option<&'static str>, String> {
     // `echo %OS%` is parsed by cmd.exe on the standard Windows OpenSSH shell and
     // stays a harmless literal on POSIX shells. Do this before any platform-specific
     // status command so a Windows host never receives a Unix redirect such as /dev/null.
-    let output = run_exec_command(
-        Some(state),
+    let first = run_exec_command(
+        Some(state.clone()),
         Some(UiWindowRef::from_window(window)),
-        profile,
+        profile.clone(),
         "echo %OS%".to_string(),
         String::new(),
         Duration::from_secs(8),
     )
-    .await?;
+    .await;
+    let output = match first {
+        Ok(output) => output,
+        Err(error) if is_host_key_verification_message(&error) => {
+            ensure_ssh_profile_host_key_trusted(state, window, profile).await?;
+            run_exec_command(
+                Some(state.clone()),
+                Some(UiWindowRef::from_window(window)),
+                profile.clone(),
+                "echo %OS%".to_string(),
+                String::new(),
+                Duration::from_secs(8),
+            )
+            .await?
+        }
+        Err(error) => return Err(error),
+    };
     Ok(remote_system_type_from_probe_output(&format!(
         "{}{}",
         output.stdout, output.stderr
@@ -563,9 +582,7 @@ pub(crate) async fn connect_ssh(
     // standard Windows OpenSSH shell is in use. This avoids a separate authentication-only
     // SSH session before opening the desktop.
     let detected_system_type =
-        match validate_login_and_probe_remote_system_type(state.clone(), &window, profile.clone())
-            .await
-        {
+        match validate_login_and_probe_remote_system_type(&state, &window, &mut profile).await {
             Ok(system_type) => system_type,
             Err(error) => {
                 return Ok(json!({

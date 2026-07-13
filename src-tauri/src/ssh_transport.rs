@@ -390,7 +390,7 @@ fn is_recoverable_ssh_message(message: &str) -> bool {
 fn ssh_result_is_host_key_verification_failure(result: &Result<Value, String>) -> bool {
     match result {
         Ok(output) => ssh_output_is_host_key_verification_failure(output),
-        Err(error) => is_host_key_verification_message(error),
+        Err(error) => connection::is_host_key_verification_message(error),
     }
 }
 
@@ -406,19 +406,7 @@ fn ssh_output_is_host_key_verification_failure(output: &Value) -> bool {
     if code != 255 && code != -1 {
         return false;
     }
-    is_host_key_verification_message(&output_message(output))
-}
-
-fn is_host_key_verification_message(message: &str) -> bool {
-    let message = message.to_ascii_lowercase();
-    message.contains("host key verification failed")
-        || message.contains("remote host identification has changed")
-        || message.contains("possible dns spoofing detected")
-        || message.contains("host key is not trusted")
-        || message.contains("known_hosts 校验")
-        || message.contains("known_hosts verification")
-        || (message.contains("offending") && message.contains("known_hosts"))
-        || (message.contains("no ") && message.contains("host key is known"))
+    connection::is_host_key_verification_message(&output_message(output))
 }
 
 async fn refresh_profile_after_host_key_verification_failure(
@@ -742,15 +730,15 @@ mod tests {
 
     #[test]
     fn host_key_verification_messages_trigger_trust_refresh() {
-        assert!(is_host_key_verification_message(
+        assert!(connection::is_host_key_verification_message(
             "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n\
              @    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n\
              @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
         ));
-        assert!(is_host_key_verification_message(
+        assert!(connection::is_host_key_verification_message(
             "Host key verification failed."
         ));
-        assert!(is_host_key_verification_message(
+        assert!(connection::is_host_key_verification_message(
             "example.com:22 未通过 known_hosts 校验，请先信任该主机密钥。"
         ));
         assert!(ssh_output_is_host_key_verification_failure(&json!({
@@ -763,7 +751,7 @@ mod tests {
 
     #[test]
     fn auth_failures_do_not_trigger_host_key_refresh() {
-        assert!(!is_host_key_verification_message(
+        assert!(!connection::is_host_key_verification_message(
             "Permission denied (publickey,password)."
         ));
         assert!(!ssh_output_is_host_key_verification_failure(&json!({

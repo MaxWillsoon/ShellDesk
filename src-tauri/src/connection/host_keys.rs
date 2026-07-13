@@ -371,6 +371,18 @@ fn normalize_hostname(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
 
+pub(crate) fn is_host_key_verification_message(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("host key verification failed")
+        || message.contains("remote host identification has changed")
+        || message.contains("possible dns spoofing detected")
+        || message.contains("host key is not trusted")
+        || message.contains("known_hosts 校验")
+        || message.contains("known_hosts verification")
+        || (message.contains("offending") && message.contains("known_hosts"))
+        || (message.contains("no ") && message.contains("host key is known"))
+}
+
 fn parse_known_host_pattern(hostname: &str) -> (String, Option<u16>) {
     let first_pattern = hostname.trim().split(',').next().unwrap_or("").trim();
     if first_pattern.is_empty() {
