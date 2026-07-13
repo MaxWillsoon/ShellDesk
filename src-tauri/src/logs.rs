@@ -203,14 +203,24 @@ fn read_log_entry_list(entries: &Value) -> Result<Vec<Value>, String> {
     let Some(items) = entries.as_array() else {
         return Ok(Vec::new());
     };
+    let fallback_timestamp = now();
     items
         .iter()
         .take(MAX_LOG_ENTRIES)
-        .filter_map(|entry| read_log_entry(entry).transpose())
+        .filter_map(|entry| {
+            read_log_entry_with_fallback_timestamp(entry, &fallback_timestamp).transpose()
+        })
         .collect()
 }
 
 fn read_log_entry(entry: &Value) -> Result<Option<Value>, String> {
+    read_log_entry_with_fallback_timestamp(entry, &now())
+}
+
+fn read_log_entry_with_fallback_timestamp(
+    entry: &Value,
+    fallback_timestamp: &str,
+) -> Result<Option<Value>, String> {
     let Some(raw_entry) = entry.as_object() else {
         return Ok(None);
     };
@@ -227,7 +237,7 @@ fn read_log_entry(entry: &Value) -> Result<Option<Value>, String> {
         .filter(|value| !value.trim().is_empty())
         .map(|value| read_bounded_string(value, "日志时间", 80, true, true, true))
         .transpose()?
-        .unwrap_or_else(now);
+        .unwrap_or_else(|| fallback_timestamp.to_string());
     let category = raw_entry
         .get("category")
         .and_then(Value::as_str)
@@ -436,6 +446,7 @@ mod tests {
         assert_eq!(saved[0]["id"], "new");
         assert_eq!(saved[1]["id"], "old");
         assert_eq!(saved[1]["message"], "replacement wins");
+        assert_eq!(saved[0]["timestamp"], saved[1]["timestamp"]);
 
         let cleared = save_entries(&state, json!([])).unwrap();
         assert!(cleared.as_array().unwrap().is_empty());
