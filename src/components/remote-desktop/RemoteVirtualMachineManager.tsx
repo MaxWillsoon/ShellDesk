@@ -85,6 +85,7 @@ function RemoteVirtualMachineManager({ connectionId, systemType, onOpenTerminal,
   const detailRequestIdRef = useRef(0);
   const isMountedRef = useRef(true);
   const [uri, setUri] = useState('qemu:///system');
+  const [uriDraft, setUriDraft] = useState('qemu:///system');
   const [host, setHost] = useState<VirshHostSummary>(() => defaultHost('qemu:///system'));
   const [domains, setDomains] = useState<VirtualMachineSummary[]>([]);
   const [networks, setNetworks] = useState<VirshNetworkSummary[]>([]);
@@ -153,10 +154,10 @@ function RemoteVirtualMachineManager({ connectionId, systemType, onOpenTerminal,
     }
   }, [language, runCommand, uri]);
 
-  const refreshResources = useCallback(async (silent = false) => {
+  const refreshResources = useCallback(async (silent = false, targetUri = uri) => {
     if (!silent) setLoading(true);
     try {
-      const result = await runCommand(getVirshResourcesCommand(uri), undefined, { onSudoAttempt: () => setUsedSudo(true) });
+      const result = await runCommand(getVirshResourcesCommand(targetUri), undefined, { onSudoAttempt: () => setUsedSudo(true) });
       if (result.code !== 0 && !result.stdout) throw new Error(result.stderr || t('vm.error.resources', language));
       const parsed = parseVirshResources(result.stdout);
       if (!isMountedRef.current) return;
@@ -174,23 +175,26 @@ function RemoteVirtualMachineManager({ connectionId, systemType, onOpenTerminal,
 
   const refreshAll = useCallback(async () => {
     if (isWindowsHost) return;
+    const targetUri = uriDraft.trim() || 'qemu:///system';
     setLoading(true);
     setError('');
     setNotice('');
     setResourcesLoaded(false);
     setUsedSudo(false);
     try {
-      const result = await runCommand(getVirshDetectCommand(uri), undefined, { onSudoAttempt: () => setUsedSudo(true) });
+      const result = await runCommand(getVirshDetectCommand(targetUri), undefined, { onSudoAttempt: () => setUsedSudo(true) });
       if (result.code !== 0) throw new Error(result.stderr || (result.stdout.includes('VIRSH_NOT_FOUND') ? t('vm.error.notFound', language) : t('vm.error.connect', language)));
       const parsed = parseVirshOverview(result.stdout);
       if (!isMountedRef.current) return;
+      setUri(targetUri);
+      setUriDraft(targetUri);
       setHost(parsed.host);
       setDomains(parsed.domains);
       setSelectedDomainUuid((current) => current && parsed.domains.some((domain) => domain.uuid === current) ? current : parsed.domains[0]?.uuid ?? '');
-      await refreshResources(true);
+      await refreshResources(true, targetUri);
     } catch (nextError) {
       if (isMountedRef.current) {
-        setHost(defaultHost(uri));
+        setHost(defaultHost(targetUri));
         setDomains([]);
         setNetworks([]);
         setPools([]);
@@ -200,13 +204,16 @@ function RemoteVirtualMachineManager({ connectionId, systemType, onOpenTerminal,
     } finally {
       if (isMountedRef.current) setLoading(false);
     }
-  }, [isWindowsHost, language, refreshResources, runCommand, uri]);
+  }, [isWindowsHost, language, refreshResources, runCommand, uriDraft]);
+
+  const refreshAllRef = useRef(refreshAll);
+  refreshAllRef.current = refreshAll;
 
   useEffect(() => {
     isMountedRef.current = true;
-    void refreshAll();
+    void refreshAllRef.current();
     return () => { isMountedRef.current = false; };
-  }, [connectionId, refreshAll]);
+  }, [connectionId]);
 
   useEffect(() => {
     if (!selectedDomain) {
@@ -368,7 +375,7 @@ function RemoteVirtualMachineManager({ connectionId, systemType, onOpenTerminal,
     <div className="vm-manager-container">
       <header className="vm-manager-toolbar">
         <nav role="tablist">{managerTabs.map((tab) => { const Icon = tab.icon; return <button key={tab.key} type="button" role="tab" aria-selected={activeTab === tab.key} className={activeTab === tab.key ? 'active' : ''} onClick={() => setActiveTab(tab.key)}><Icon size={16} />{t(tab.labelId, language)}</button>; })}</nav>
-        <label className="vm-manager-uri"><span>URI</span><input list="vm-manager-uri-suggestions" value={uri} onChange={(event) => setUri(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void refreshAll(); }} /><datalist id="vm-manager-uri-suggestions">{uriSuggestions.map((value) => <option key={value} value={value} />)}</datalist></label>
+        <label className="vm-manager-uri"><span>URI</span><input list="vm-manager-uri-suggestions" value={uriDraft} onChange={(event) => setUriDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void refreshAll(); }} /><datalist id="vm-manager-uri-suggestions">{uriSuggestions.map((value) => <option key={value} value={value} />)}</datalist></label>
         <div className="vm-manager-connection"><span className={error ? 'error' : 'ok'} /> <div><strong>{error ? t('vm.connection.error', language) : t('vm.connection.connected', language)}</strong><small>{[host.virshVersion && `virsh ${host.virshVersion}`, host.hypervisor, usedSudo ? 'sudo' : 'user'].filter(Boolean).join(' · ')}</small></div></div>
         <label className="vm-manager-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('vm.search.placeholder', language)} /></label>
         <button type="button" className="vm-manager-refresh" onClick={() => void refreshAll()} disabled={loading}><RefreshCw size={16} className={loading ? 'spinning' : ''} />{t('vm.action.refresh', language)}</button>

@@ -88,6 +88,25 @@ test('Virtual machine manager remains usable at a compact desktop width', async 
   await expect(page.locator('.vm-manager-detail')).toBeVisible();
 });
 
+test('Virtual machine manager applies URI changes only after explicit confirmation', async ({ page }) => {
+  await gotoHarness(page, 'component=vm-manager');
+  await expect(page.locator('.vm-manager-table tbody tr')).toHaveCount(8);
+
+  const getVirshRequestCount = () => page.evaluate(() => Number((window as typeof window & {
+    __shellDeskUiHarnessVirshRequestCount?: number;
+  }).__shellDeskUiHarnessVirshRequestCount ?? 0));
+  await expect.poll(getVirshRequestCount).toBeGreaterThanOrEqual(3);
+  const initialRequestCount = await getVirshRequestCount();
+  const uriInput = page.locator('.vm-manager-uri input');
+
+  await uriInput.fill('qemu:///session');
+  await page.waitForTimeout(250);
+  expect(await getVirshRequestCount()).toBe(initialRequestCount);
+
+  await uriInput.press('Enter');
+  await expect.poll(getVirshRequestCount).toBeGreaterThan(initialRequestCount);
+});
+
 test('Monitor persistence remains opt-in and can return to real-time only', async ({ page }) => {
   await gotoHarness(page, 'component=monitor');
 

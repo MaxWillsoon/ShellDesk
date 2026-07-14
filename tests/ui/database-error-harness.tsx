@@ -155,16 +155,24 @@ function installGuiSshMock() {
   let monitorThresholds = { cpu: 90, memory: 90, disk: 85 };
   let metricsCounter = 1_000_000;
   let metricsRequestCount = 0;
+  let virshRequestCount = 0;
 
   window.localStorage.removeItem('shelldesk.monitor.persistencePrompt.v1.ui-test-host');
   Object.defineProperty(window, '__shellDeskUiHarnessMetricsRequestCount', {
     configurable: true,
     get: () => metricsRequestCount,
   });
+  Object.defineProperty(window, '__shellDeskUiHarnessVirshRequestCount', {
+    configurable: true,
+    get: () => virshRequestCount,
+  });
 
   (window as any).guiSSH = {
     connections: {
       runCommand: async (_connectionId: string, command: string, _stdin?: string, options?: { sudoPassword?: string }) => {
+        if (command.includes('SHELLDESK_VIRSH_URI=')) {
+          virshRequestCount += 1;
+        }
         if (scenario === 'sudo-prompt' && !sudoPromptShown && !options?.sudoPassword) {
           sudoPromptShown = true;
           return createCommandResult('', 'sudo: a password is required', 1);
