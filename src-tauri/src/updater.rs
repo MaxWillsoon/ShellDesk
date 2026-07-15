@@ -1,6 +1,11 @@
 use crate::{error_string, now, sanitize_file_name, vault::read_store, AppState};
 use serde_json::{json, Value};
-use std::{fs, path::Path, time::Duration};
+use std::{
+    fs,
+    path::Path,
+    sync::{atomic::Ordering, Arc},
+    time::Duration,
+};
 use tauri::utils::config::BundleType;
 use tauri::{Emitter, Runtime};
 use tauri_plugin_updater::UpdaterExt;
@@ -566,7 +571,51 @@ pub(crate) async fn check_for_update_download(
     window: tauri::Window,
     app: tauri::AppHandle,
 ) -> Result<Value, String> {
+    let Some(_operation) = UpdateOperationGuard::try_acquire(&state) else {
+        return current_update_check_result(&state);
+    };
     check_for_update_download_inner(state, window, app, false).await
+}
+
+struct UpdateOperationGuard {
+    active: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl UpdateOperationGuard {
+    fn try_acquire(state: &AppState) -> Option<Self> {
+        state
+            .update_operation_active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| Self {
+                active: state.update_operation_active.clone(),
+            })
+    }
+}
+
+impl Drop for UpdateOperationGuard {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::Release);
+    }
+}
+
+fn current_update_check_result(state: &AppState) -> Result<Value, String> {
+    let status = state.update_state.lock().map_err(error_string)?.clone();
+    let status_name = status
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("idle");
+    Ok(json!({
+        "available": matches!(status_name, "available" | "downloading" | "ready"),
+        "supported": status.get("supported").and_then(Value::as_bool).unwrap_or(true),
+        "checking": status.get("isChecking").and_then(Value::as_bool).unwrap_or(false),
+        "downloading": status_name == "downloading",
+        "ready": status_name == "ready",
+        "version": status.get("version").cloned().unwrap_or(Value::Null),
+        "releaseNotes": status.get("releaseNotes").cloned().unwrap_or(Value::Null),
+        "releaseDate": status.get("releaseDate").cloned().unwrap_or(Value::Null),
+        "error": status.get("error").cloned().unwrap_or(Value::Null)
+    }))
 }
 
 async fn check_for_update_download_inner<R, W>(
@@ -715,6 +764,9 @@ pub(crate) fn start_auto_update_check(
 
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(delay).await;
+        let Some(_operation) = UpdateOperationGuard::try_acquire(&state) else {
+            return;
+        };
         let _ = check_for_update_download_inner(state, window, app, true).await;
     });
 }
@@ -751,6 +803,10 @@ pub(crate) async fn download_update(
         let _ = window.emit("app:update:error", status);
         return Ok(json!({ "success": false, "error": unsupported_reason }));
     }
+
+    let Some(_operation) = UpdateOperationGuard::try_acquire(&state) else {
+        return Ok(json!({ "success": true }));
+    };
 
     download_tauri_update(state, window, app).await
 }
@@ -977,6 +1033,18 @@ mod tests {
         assert!(!auto_update_enabled_from_store(&json!({
             "settings": { "autoUpdateEnabled": false }
         })));
+    }
+
+    #[test]
+    fn update_operation_guard_allows_only_one_active_operation() {
+        let state = AppState::new(std::env::temp_dir().join("shelldesk-updater-guard-test"));
+
+        let first =
+            UpdateOperationGuard::try_acquire(&state).expect("first operation should start");
+        assert!(UpdateOperationGuard::try_acquire(&state).is_none());
+
+        drop(first);
+        assert!(UpdateOperationGuard::try_acquire(&state).is_some());
     }
 
     #[test]

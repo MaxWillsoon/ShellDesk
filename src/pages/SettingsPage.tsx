@@ -1,4 +1,4 @@
-import { type ChangeEvent, type CSSProperties, useCallback, useEffect, useMemo, useState } from 'react';
+import { type ChangeEvent, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { builtinModels } from '@earendil-works/pi-ai/providers/all';
 
 import {
@@ -521,6 +521,7 @@ function SettingsPage({
   const [updateStatus, setUpdateStatus] = useState<ShellDeskUpdateStatus>(() => createDefaultUpdateStatus());
   const [isCheckingForUpdates, setIsCheckingForUpdates] = useState(false);
   const [updateCheckError, setUpdateCheckError] = useState('');
+  const updateCheckInFlightRef = useRef(false);
   const [syncConfig, setSyncConfig] = useState<ShellDeskSyncPublicConfig | null>(null);
   const [syncForm, setSyncForm] = useState<ShellDeskSyncConfigInput>(() => createDefaultSyncForm());
   const [syncMessage, setSyncMessage] = useState('');
@@ -775,6 +776,10 @@ function SettingsPage({
   }, []);
 
   const checkForUpdates = async () => {
+    if (updateCheckInFlightRef.current) {
+      return;
+    }
+
     const checkUpdates = window.guiSSH?.app?.checkForUpdates;
 
     if (!checkUpdates) {
@@ -782,6 +787,7 @@ function SettingsPage({
       return;
     }
 
+    updateCheckInFlightRef.current = true;
     setIsCheckingForUpdates(true);
     setUpdateCheckError('');
 
@@ -869,6 +875,7 @@ function SettingsPage({
       setUpdateCheckResult(null);
       setUpdateCheckError(getUpdateCheckErrorMessage(error, settings.language));
     } finally {
+      updateCheckInFlightRef.current = false;
       setIsCheckingForUpdates(false);
     }
   };
