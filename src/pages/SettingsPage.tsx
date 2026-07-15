@@ -1,4 +1,5 @@
 import { type ChangeEvent, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { builtinModels } from '@earendil-works/pi-ai/providers/all';
 
 import {
@@ -78,6 +79,27 @@ const terminalPreferredFontChoices = [
   'Courier New',
 ];
 const maxWallpaperImageBytes = 2 * 1024 * 1024;
+const defaultMcpServerEndpoint = 'http://127.0.0.1:38471/mcp';
+const mcpCallExample = `{
+  "mcpServers": {
+    "shelldesk": {
+      "type": "streamable-http",
+      "url": "${defaultMcpServerEndpoint}"
+    }
+  }
+}
+
+Prompt example:
+Use the ShellDesk MCP tools to list my saved hosts, then run "uname -a" on the host I select.`;
+const skillCallExample = `1. Import shelldesk-remote-hosts.zip into the AI platform.
+2. Keep ShellDesk running and enable System Settings > AI > MCP Service.
+3. Invoke the skill with a prompt such as:
+
+Use $shelldesk-remote-hosts to list my saved hosts and inspect disk usage on the host I select.
+
+Fallback without native MCP support:
+python scripts/shelldesk_mcp_client.py list-hosts
+python scripts/shelldesk_mcp_client.py run-command <host-id> "df -h"`;
 const acceptedWallpaperTypes = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif']);
 const wallpaperExtensionPattern = /\.(png|jpe?g|webp|gif)$/i;
 const wallpaperDataUrlPattern = /^data:image\/(?:png|jpe?g|webp|gif);base64,/i;
@@ -516,6 +538,12 @@ function SettingsPage({
   const [aiModelsError, setAiModelsError] = useState('');
   const [isAiModelListOpen, setIsAiModelListOpen] = useState(false);
   const [showWebSearchApiKey, setShowWebSearchApiKey] = useState(false);
+  const [mcpServerStatus, setMcpServerStatus] = useState<ShellDeskMcpServerStatus | null>(null);
+  const [isMcpServerPending, setIsMcpServerPending] = useState(false);
+  const [isMcpSkillExporting, setIsMcpSkillExporting] = useState(false);
+  const [mcpMessage, setMcpMessage] = useState('');
+  const [mcpError, setMcpError] = useState('');
+  const [mcpExampleDialog, setMcpExampleDialog] = useState<'mcp' | 'skill' | null>(null);
   const [appInfo, setAppInfo] = useState<ShellDeskAppInfo | null>(null);
   const [updateCheckResult, setUpdateCheckResult] = useState<ShellDeskUpdateCheckResult | null>(null);
   const [updateStatus, setUpdateStatus] = useState<ShellDeskUpdateStatus>(() => createDefaultUpdateStatus());
@@ -541,6 +569,36 @@ function SettingsPage({
       onInitialSectionApplied?.();
     }
   }, [initialSection, onInitialSectionApplied, sectionRequestId]);
+
+  useEffect(() => {
+    if (activeSection !== 'ai') {
+      return undefined;
+    }
+
+    let isCurrent = true;
+    const getStatus = window.guiSSH?.ai?.getMcpServerStatus;
+    if (!getStatus) {
+      setMcpError(t('settings.ai.mcp.error.noApi', settings.language));
+      return undefined;
+    }
+
+    void getStatus()
+      .then((status) => {
+        if (isCurrent) {
+          setMcpServerStatus(status);
+          setMcpError(status.error ?? '');
+        }
+      })
+      .catch((error: unknown) => {
+        if (isCurrent) {
+          setMcpError(error instanceof Error ? error.message : t('settings.ai.mcp.error.statusFailed', settings.language));
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [activeSection, settings.language, settings.mcpServerEnabled]);
 
   const updateSetting = <Field extends keyof ShellDeskAppSettings>(field: Field, value: ShellDeskAppSettings[Field]) => {
     onSettingsChange({
@@ -582,6 +640,13 @@ function SettingsPage({
       ? t('settings.ai.model.loaded', settings.language, { count: String(aiModelOptions.length) })
       : t('settings.ai.model.fetchHint', settings.language)
   );
+  const mcpStatusText = isMcpServerPending
+    ? t('settings.ai.mcp.status.updating', settings.language)
+    : mcpError
+      ? t('settings.ai.mcp.status.error', settings.language, { error: mcpError })
+      : mcpServerStatus?.running
+        ? t('settings.ai.mcp.status.running', settings.language, { endpoint: mcpServerStatus.endpoint })
+        : t('settings.ai.mcp.status.stopped', settings.language);
   const interfaceFontOptions = useMemo(
     () => createFontOptions(systemFonts, settings.interfaceFont, interfacePreferredFontChoices),
     [settings.interfaceFont, systemFonts],
@@ -753,6 +818,50 @@ function SettingsPage({
       setAiModelsError(error instanceof Error ? error.message : t('settings.ai.model.error.fetchFailed', settings.language));
     } finally {
       setIsAiModelsLoading(false);
+    }
+  };
+
+  const updateMcpServerEnabled = async (enabled: boolean) => {
+    const setEnabled = window.guiSSH?.ai?.setMcpServerEnabled;
+    if (!setEnabled) {
+      setMcpError(t('settings.ai.mcp.error.noApi', settings.language));
+      return;
+    }
+
+    setIsMcpServerPending(true);
+    setMcpMessage('');
+    setMcpError('');
+    try {
+      const status = await setEnabled(enabled);
+      setMcpServerStatus(status);
+      setMcpError(status.error ?? '');
+      updateSetting('mcpServerEnabled', enabled);
+    } catch (error) {
+      setMcpError(error instanceof Error ? error.message : t('settings.ai.mcp.error.toggleFailed', settings.language));
+    } finally {
+      setIsMcpServerPending(false);
+    }
+  };
+
+  const exportMcpSkill = async () => {
+    const exportSkill = window.guiSSH?.ai?.exportMcpSkill;
+    if (!exportSkill) {
+      setMcpError(t('settings.ai.mcp.error.noApi', settings.language));
+      return;
+    }
+
+    setIsMcpSkillExporting(true);
+    setMcpMessage('');
+    setMcpError('');
+    try {
+      const result = await exportSkill();
+      if (!result.canceled) {
+        setMcpMessage(t('settings.ai.mcp.skill.exported', settings.language, { path: result.path ?? '' }));
+      }
+    } catch (error) {
+      setMcpError(error instanceof Error ? error.message : t('settings.ai.mcp.error.exportFailed', settings.language));
+    } finally {
+      setIsMcpSkillExporting(false);
     }
   };
 
@@ -2009,6 +2118,72 @@ function SettingsPage({
 
           {activeSection === 'ai' ? (
             <>
+              <section className="settings-section settings-mcp-section">
+                <h2>{t('settings.ai.mcp.title', settings.language)}</h2>
+                <div className="settings-card settings-mcp-card">
+                  <label className="settings-row">
+                    <span>
+                      <strong>{t('settings.ai.mcp.enabled.label', settings.language)}</strong>
+                      <small className={mcpError ? 'settings-error-text' : undefined}>{mcpStatusText}</small>
+                    </span>
+                    <input
+                      className="settings-toggle"
+                      type="checkbox"
+                      checked={settings.mcpServerEnabled}
+                      disabled={isMcpServerPending}
+                      onChange={(event) => void updateMcpServerEnabled(event.target.checked)}
+                      aria-label={t('settings.ai.mcp.enabled.label', settings.language)}
+                    />
+                  </label>
+
+                  <div className="settings-row settings-mcp-action-row">
+                    <span>
+                      <strong>{t('settings.ai.mcp.endpoint.label', settings.language)}</strong>
+                      <small>{t('settings.ai.mcp.endpoint.summary', settings.language)}</small>
+                    </span>
+                    <div className="settings-mcp-actions">
+                      <code className="settings-inline-code">{mcpServerStatus?.endpoint ?? defaultMcpServerEndpoint}</code>
+                      <button
+                        type="button"
+                        className="command-button"
+                        onClick={() => setMcpExampleDialog('mcp')}
+                      >
+                        {t('settings.ai.mcp.example.button', settings.language)}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="settings-row settings-mcp-action-row">
+                    <span>
+                      <strong>{t('settings.ai.mcp.skill.label', settings.language)}</strong>
+                      <small>{t('settings.ai.mcp.skill.summary', settings.language)}</small>
+                    </span>
+                    <div className="settings-mcp-actions">
+                      <button
+                        type="button"
+                        className="command-button"
+                        disabled={isMcpSkillExporting}
+                        onClick={() => void exportMcpSkill()}
+                      >
+                        {isMcpSkillExporting
+                          ? t('settings.ai.mcp.skill.exporting', settings.language)
+                          : t('settings.ai.mcp.skill.export', settings.language)}
+                      </button>
+                      <button
+                        type="button"
+                        className="command-button"
+                        onClick={() => setMcpExampleDialog('skill')}
+                      >
+                        {t('settings.ai.mcp.skill.example.button', settings.language)}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <p className={mcpError ? 'settings-caption settings-error-text' : 'settings-caption'}>
+                  {mcpError || mcpMessage || t('settings.ai.mcp.caption', settings.language)}
+                </p>
+              </section>
+
               <section className="settings-section">
                 <h2>{t('settings.ai.provider.title', settings.language)}</h2>
                 <div className="settings-card">
@@ -2835,6 +3010,42 @@ function SettingsPage({
             </div>
           ) : null}
         </div>
+        {mcpExampleDialog ? createPortal(
+          <div
+            className="settings-example-modal-overlay"
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                setMcpExampleDialog(null);
+              }
+            }}
+          >
+            <div className="settings-example-modal" role="dialog" aria-modal="true" aria-labelledby="settings-mcp-example-title">
+              <div className="settings-example-modal-header">
+                <div>
+                  <strong id="settings-mcp-example-title">
+                    {t(mcpExampleDialog === 'mcp' ? 'settings.ai.mcp.example.title' : 'settings.ai.mcp.skill.example.title', settings.language)}
+                  </strong>
+                  <small>{t('settings.ai.mcp.example.summary', settings.language)}</small>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMcpExampleDialog(null)}
+                  aria-label={t('settings.ai.mcp.example.close', settings.language)}
+                >
+                  ×
+                </button>
+              </div>
+              <pre><code>{mcpExampleDialog === 'mcp' ? mcpCallExample : skillCallExample}</code></pre>
+              <div className="settings-example-modal-actions">
+                <button type="button" className="command-button" onClick={() => setMcpExampleDialog(null)}>
+                  {t('settings.ai.mcp.example.close', settings.language)}
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        ) : null}
     </section>
   );
 }

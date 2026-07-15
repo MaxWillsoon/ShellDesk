@@ -77,6 +77,7 @@ function createPreviewSettings(): ShellDeskAppSettings {
     aiApiBaseUrl: 'https://api.openai.com/v1',
     aiApiKey: '',
     aiModel: '',
+    mcpServerEnabled: false,
     webSearchEnabled: false,
     webSearchProvider: 'tavily',
     webSearchApiKey: '',
@@ -333,6 +334,20 @@ async function previewIpc<T = unknown>(channel: string, args: unknown[]): Promis
         results: [],
       } satisfies ShellDeskWebSearchResult as T;
 
+    case 'ai:mcp-server-status':
+    case 'ai:set-mcp-server-enabled':
+      return {
+        enabled: false,
+        running: false,
+        host: '127.0.0.1',
+        port: 38471,
+        endpoint: 'http://127.0.0.1:38471/mcp',
+        error: previewUnsupportedMessage,
+      } satisfies ShellDeskMcpServerStatus as T;
+
+    case 'ai:export-mcp-skill':
+      return { canceled: true } satisfies ShellDeskMcpSkillExportResult as T;
+
     case 'connection:get-ipc-capabilities':
       return { terminalSessions: false, terminalBinary: false } satisfies ShellDeskIpcCapabilities as T;
 
@@ -537,6 +552,9 @@ window.guiSSH = {
     chat: (request) => ipc('ai:chat', request),
     chatStream,
     webSearch: (request) => ipc('ai:web-search', request),
+    getMcpServerStatus: () => ipc('ai:mcp-server-status'),
+    setMcpServerEnabled: (enabled) => ipc('ai:set-mcp-server-enabled', enabled),
+    exportMcpSkill: () => ipc('ai:export-mcp-skill'),
   },
   agentSessions: {
     get: () => ipc('agent-sessions:get'),

@@ -175,6 +175,7 @@
 
 .settings-content > .settings-section:has(.desktop-wallpaper-card),
 .settings-content > .settings-section:has(.ai-model-card),
+.settings-content > .settings-section:has(.settings-mcp-card),
 .settings-content > .settings-section:has(.settings-sync-card) {
   grid-column: 1 / -1;
 }
@@ -360,6 +361,123 @@
 .ai-model-options button.selected {
   border-color: var(--accent-border);
   background: var(--accent-soft);
+}
+
+.settings-mcp-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.settings-mcp-actions .settings-inline-code {
+  max-width: min(360px, 44vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-mcp-actions .command-button {
+  min-height: 38px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.settings-example-modal-overlay {
+  position: fixed;
+  z-index: 12000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(3, 8, 15, 0.72);
+  backdrop-filter: blur(8px);
+}
+
+.settings-example-modal {
+  display: grid;
+  width: min(760px, 94vw);
+  max-height: min(720px, 88vh);
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  background: var(--surface-panel);
+  box-shadow: var(--shadow-float);
+}
+
+.settings-example-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-example-modal-header > div {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-example-modal-header strong {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 850;
+}
+
+.settings-example-modal-header small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-example-modal-header > button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-control);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 20px;
+}
+
+.settings-example-modal-header > button:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.settings-example-modal pre {
+  min-height: 180px;
+  margin: 0;
+  overflow: auto;
+  padding: 20px;
+  background: color-mix(in srgb, var(--bg) 82%, black 18%);
+  color: var(--text);
+  font-family: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.settings-example-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 14px 20px 18px;
+  border-top: 1px solid var(--border);
+}
+
+[data-theme="light"] .settings-example-modal-overlay {
+  background: rgba(22, 33, 48, 0.34);
+}
+
+[data-theme="light"] .settings-example-modal pre {
+  background: #f4f7fa;
 }
 
 .ai-model-options strong,
@@ -1240,6 +1358,16 @@ button:disabled {
     justify-content: flex-start;
   }
 
+  .settings-mcp-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .settings-mcp-actions .settings-inline-code {
+    max-width: 100%;
+    text-align: left;
+  }
+
   .desktop-wallpaper-control {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
@@ -1319,7 +1447,16 @@ button:disabled {
   }
 
   .settings-sync-actions,
-  .settings-update-actions {
+  .settings-update-actions,
+  .settings-mcp-actions {
     justify-content: flex-start;
+  }
+
+  .settings-mcp-actions {
+    flex-wrap: wrap;
+  }
+
+  .settings-mcp-actions .settings-inline-code {
+    max-width: 100%;
   }
 }

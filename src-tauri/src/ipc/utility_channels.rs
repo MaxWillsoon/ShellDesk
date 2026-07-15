@@ -9,7 +9,7 @@ use crate::logs::{
 };
 use crate::proxy::test_proxy;
 use crate::system::{list_system_fonts, read_known_hosts};
-use crate::{config, sync_backend, AppState};
+use crate::{config, mcp_server, sync_backend, AppState};
 use serde_json::{json, Value};
 use tauri::Emitter;
 
@@ -58,6 +58,12 @@ pub(crate) async fn dispatch(
         "ai:chat" => ai_chat(args.to_vec()).await?,
         "ai:chat-stream" => ai_chat_stream(&window, args.to_vec()).await?,
         "ai:web-search" => ai_web_search(args.to_vec()).await?,
+        "ai:mcp-server-status" => mcp_server::status(),
+        "ai:set-mcp-server-enabled" => {
+            let enabled = args.first().and_then(Value::as_bool).unwrap_or(false);
+            mcp_server::apply_enabled(state.clone(), enabled).await?
+        }
+        "ai:export-mcp-skill" => mcp_server::export_skill(&state)?,
 
         "sync:get-config" => sync_backend::sync_config(&state)?,
         "sync:save-config" => {

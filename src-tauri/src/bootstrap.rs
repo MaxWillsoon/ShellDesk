@@ -61,6 +61,7 @@ pub(crate) fn run() {
             crate::tray::setup(app)?;
             let state = app.state::<AppState>().inner().clone();
             if let Some(window) = app.get_webview_window("main") {
+                crate::ui_prompts::remember_ui_window(&state, &window.as_ref().window());
                 let _ = window.set_title("ShellDesk");
                 crate::updater::start_auto_update_check(
                     state.clone(),
@@ -71,6 +72,13 @@ pub(crate) fn run() {
             }
             crate::sync_backend::reload_sync_schedule(&state, app.handle());
             crate::database::tunnel::start_idle_cleanup(state.clone(), app.handle().clone());
+            if crate::mcp_server::configured_enabled(&state) {
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = crate::mcp_server::apply_enabled(state, true).await {
+                        eprintln!("[mcp-server] auto-start failed: {error}");
+                    }
+                });
+            }
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -78,6 +86,7 @@ pub(crate) fn run() {
 
     app.run(|app_handle, event| {
         if matches!(event, tauri::RunEvent::Exit) {
+            crate::mcp_server::stop();
             let state = app_handle.state::<AppState>();
             crate::connection::cleanup_all_temporary_key_files(state.inner());
         }

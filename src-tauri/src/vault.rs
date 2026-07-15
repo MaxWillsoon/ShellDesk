@@ -79,6 +79,7 @@ pub(crate) fn default_settings() -> Value {
         "aiApiBaseUrl": "https://api.openai.com/v1",
         "aiApiKey": "",
         "aiModel": "",
+        "mcpServerEnabled": false,
         "webSearchEnabled": false,
         "webSearchProvider": "tavily",
         "webSearchApiKey": "",

@@ -338,6 +338,20 @@ interface ShellDeskWebSearchResult {
   results: ShellDeskWebSearchResultItem[];
 }
 
+interface ShellDeskMcpServerStatus {
+  enabled: boolean;
+  running: boolean;
+  host: string;
+  port: number;
+  endpoint: string;
+  error: string | null;
+}
+
+interface ShellDeskMcpSkillExportResult {
+  canceled: boolean;
+  path?: string;
+}
+
 interface ShellDeskAppSettings {
   language: 'zh-CN' | 'en-US';
   interfaceFont: string;
@@ -364,6 +378,7 @@ interface ShellDeskAppSettings {
   aiApiBaseUrl: string;
   aiApiKey: string;
   aiModel: string;
+  mcpServerEnabled: boolean;
   webSearchEnabled: boolean;
   webSearchProvider: ShellDeskWebSearchProvider;
   webSearchApiKey: string;
@@ -1327,6 +1342,9 @@ interface ShellDeskAiControls {
   chat: (request: ShellDeskAiChatRequest) => Promise<ShellDeskAiChatResult>;
   chatStream?: (request: ShellDeskAiChatRequest, callbacks?: ShellDeskAiChatStreamCallbacks) => Promise<ShellDeskAiChatResult>;
   webSearch: (request: ShellDeskWebSearchRequest) => Promise<ShellDeskWebSearchResult>;
+  getMcpServerStatus: () => Promise<ShellDeskMcpServerStatus>;
+  setMcpServerEnabled: (enabled: boolean) => Promise<ShellDeskMcpServerStatus>;
+  exportMcpSkill: () => Promise<ShellDeskMcpSkillExportResult>;
 }
 
 interface ShellDeskAgentSessionMessage {

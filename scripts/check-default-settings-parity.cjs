@@ -24,6 +24,7 @@ const checkedKeys = [
   'aiApiBaseUrl',
   'aiApiKey',
   'aiModel',
+  'mcpServerEnabled',
   'webSearchEnabled',
   'webSearchProvider',
   'webSearchApiKey',

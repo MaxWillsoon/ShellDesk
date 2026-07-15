@@ -4,7 +4,7 @@ use crate::vault::{
     save_bookmarks_to_store, save_remote_connection_profile_to_store, set_preference_to_store,
     snapshot, to_snapshot, upsert_vault_collections, with_store_mut,
 };
-use crate::{string_arg, AppState};
+use crate::{mcp_server, string_arg, AppState};
 use serde_json::{json, Value};
 use tauri::{Emitter, Manager};
 
@@ -29,6 +29,13 @@ pub(crate) async fn dispatch(
             let _ = window.emit("vault:changed", event.clone());
             if let Some(agent_window) = window.app_handle().get_webview_window("agent-workspace") {
                 let _ = agent_window.emit("vault:changed", event);
+            }
+            let mcp_enabled = snapshot
+                .pointer("/settings/mcpServerEnabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if let Err(error) = mcp_server::apply_enabled(state.clone(), mcp_enabled).await {
+                eprintln!("[mcp-server] failed to apply saved setting: {error}");
             }
             snapshot
         }

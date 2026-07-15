@@ -264,6 +264,7 @@ pub(crate) fn normalize_app_settings(raw_settings: &Value) -> Result<Value, Stri
         "aiApiBaseUrl": ai_api_base_url,
         "aiApiKey": ai_api_key,
         "aiModel": ai_model,
+        "mcpServerEnabled": read_bool(settings.get("mcpServerEnabled"), defaults["mcpServerEnabled"].as_bool().unwrap_or(false)),
         "webSearchEnabled": read_bool(settings.get("webSearchEnabled"), defaults["webSearchEnabled"].as_bool().unwrap_or(false)),
         "webSearchProvider": web_search_provider,
         "webSearchApiKey": web_search_api_key,

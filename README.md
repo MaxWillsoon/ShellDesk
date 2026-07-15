@@ -124,6 +124,7 @@ ShellDesk is useful for:
 - Supports dark, light, and system themes
 - Supports accent color, system fonts, default host view, desktop wallpaper, and remote desktop layout
 - Supports AI provider, API format, base URL, API key, and model discovery settings for the AI Assistant and Code Editor
+- Can expose saved remote hosts to other local AI clients through a loopback-only MCP service, with a credential-free Skill ZIP export and built-in call examples
 - UI language supports English and Simplified Chinese; first launch follows the system language
 - Logs record connection, host, key, config, and system operations with search, filters, and clearing
 - Config import/export covers hosts, keys, settings, and browser bookmarks
@@ -141,6 +142,7 @@ ShellDesk stores local data in the Tauri app data directory. The Settings page s
 - Logs are stored separately in the user data directory
 - Exported config JSON may include hosts, passwords, private keys, and key passphrases, so it should only be stored in trusted locations
 - The React renderer accesses controlled backend APIs through the `window.guiSSH` Tauri bridge
+- The optional MCP service listens only on `127.0.0.1` while ShellDesk is running; exported Skill ZIPs contain instructions and a client helper, never vault credentials
 - Native dialog limitations around `prompt`, `confirm`, and `alert` are handled with custom modals
 - SSH protocol operations are implemented in Rust with `russh`; ShellDesk does not require `openssh-client`, `sshpass`, `ssh-keyscan`, `ssh-keygen`, or `portable-pty` on the client machine
 
@@ -277,6 +279,7 @@ ShellDesk/
 │   │   └── themes/                      # Light theme overrides
 │   └── vite-env.d.ts                    # window.guiSSH and global type definitions
 ├── docs/
+│   ├── local-mcp-service.md             # Local MCP service, tools, and Skill export
 │   ├── remote-desktop-component-roadmap.md # Remote desktop app catalog and docs index
 │   └── remote-desktop-components/       # Per-component design and implementation notes
 ├── index.html
