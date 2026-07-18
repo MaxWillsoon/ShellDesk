@@ -800,7 +800,7 @@ pub(crate) async fn download_sftp_paths(
         let target = local_dir.join(&directory);
         match fs::symlink_metadata(&target) {
             Ok(metadata) if metadata.is_dir() => {}
-            Ok(metadata) if conflict_policy == TransferConflictPolicy::Skip => {
+            Ok(_metadata) if conflict_policy == TransferConflictPolicy::Skip => {
                 blocked_directories.push(directory);
                 skipped_count = skipped_count.saturating_add(1);
             }
