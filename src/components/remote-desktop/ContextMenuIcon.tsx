@@ -1,5 +1,6 @@
 import {
   Archive,
+  ArrowUpFromLine,
   ArrowDownUp,
   Copy,
   Database,
@@ -48,7 +49,7 @@ const CONTEXT_MENU_ICONS: Record<ContextMenuIconName, LucideIcon> = {
   desktop: Monitor,
   download: Download,
   info: Info,
-  'move-desktop': Monitor,
+  'move-desktop': ArrowUpFromLine,
   'new-file': FilePlus2,
   'new-folder': FolderPlus,
   notepad: FileText,

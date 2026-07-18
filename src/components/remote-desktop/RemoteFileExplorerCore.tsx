@@ -164,7 +164,7 @@ function ExplorerSearchIcon() {
 
 function ExplorerSortIndicator({ active, direction }: { active: boolean; direction: SortDirection }) {
   const Icon = active ? (direction === 'asc' ? ArrowUp : ArrowDown) : ArrowUpDown;
-  return <Icon className="sort-indicator" size={14} aria-hidden="true" />;
+  return <Icon className="sort-indicator" size={14} aria-hidden="true" focusable="false" />;
 }
 
 function getTrackedTableScrollTop(scrollTop: number) {
@@ -1459,7 +1459,7 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
           <div className="breadcrumb-trail path-breadcrumb">
             {breadcrumbSegments.map((segment, index) => (
               <span key={`${segment.path}-${index}`} className="breadcrumb-segment">
-                {index > 0 && <ChevronRight className="breadcrumb-sep path-breadcrumb-chevron" size={14} aria-hidden="true" />}
+                {index > 0 && <ChevronRight className="breadcrumb-sep path-breadcrumb-chevron" size={14} aria-hidden="true" focusable="false" />}
                 <button
                   type="button"
                   className="breadcrumb-btn path-segment"
@@ -1497,7 +1497,7 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
               aria-label={t('fileExplorer.search.clear', language)}
               title={t('fileExplorer.search.clear', language)}
             >
-              <X size={14} aria-hidden="true" />
+              <X size={14} aria-hidden="true" focusable="false" />
             </button>
           ) : null}
         </div>
@@ -1599,19 +1599,39 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
 
           <div className="explorer-table" role="table" aria-busy={isFilesLoading} ref={tableRef} onScroll={handleTableScroll}>
             <div className="explorer-row explorer-header" role="row">
-              <button type="button" className="sort-header" onClick={() => handleSort('name')}>
+              <button
+                type="button"
+                className="sort-header"
+                onClick={() => handleSort('name')}
+                aria-sort={sortField === 'name' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
+              >
                 <span>{t('fileExplorer.table.name', language)}</span>
                 <ExplorerSortIndicator active={sortField === 'name'} direction={sortDirection} />
               </button>
-              <button type="button" className="sort-header column-size" onClick={() => handleSort('size')}>
+              <button
+                type="button"
+                className="sort-header column-size"
+                onClick={() => handleSort('size')}
+                aria-sort={sortField === 'size' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
+              >
                 <span>{t('fileExplorer.table.size', language)}</span>
                 <ExplorerSortIndicator active={sortField === 'size'} direction={sortDirection} />
               </button>
-              <button type="button" className="sort-header column-modified" onClick={() => handleSort('modifiedAt')}>
+              <button
+                type="button"
+                className="sort-header column-modified"
+                onClick={() => handleSort('modifiedAt')}
+                aria-sort={sortField === 'modifiedAt' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
+              >
                 <span>{t('fileExplorer.table.modifiedAt', language)}</span>
                 <ExplorerSortIndicator active={sortField === 'modifiedAt'} direction={sortDirection} />
               </button>
-              <button type="button" className="sort-header" onClick={() => handleSort('type')}>
+              <button
+                type="button"
+                className="sort-header"
+                onClick={() => handleSort('type')}
+                aria-sort={sortField === 'type' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
+              >
                 <span>{t('fileExplorer.table.type', language)}</span>
                 <ExplorerSortIndicator active={sortField === 'type'} direction={sortDirection} />
               </button>
@@ -1662,7 +1682,7 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
                               aria-label={t('fileExplorer.context.rename', language)}
                               title={t('fileExplorer.context.rename', language)}
                             >
-                              <Pencil size={14} aria-hidden="true" />
+                              <Pencil size={14} aria-hidden="true" focusable="false" />
                             </button>
                             <button
                               type="button"
@@ -1671,7 +1691,7 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
                               aria-label={t('fileExplorer.context.delete', language)}
                               title={t('fileExplorer.context.delete', language)}
                             >
-                              <Trash2 size={14} aria-hidden="true" />
+                              <Trash2 size={14} aria-hidden="true" focusable="false" />
                             </button>
                           </span>
                         </span>
@@ -1687,8 +1707,9 @@ function RemoteFileExplorer({ connectionId, systemType, initialPath, onOpenFile,
           </div>
 
           {isFilesLoading ? (
-            <div className="explorer-table-loading" role="status" aria-live="polite">
-              <div className="explorer-skeleton-list" aria-label={t('fileExplorer.loading.directory', language)}>
+            <div className="explorer-table-loading">
+              <div className="explorer-skeleton-list" role="status" aria-live="polite" aria-label={t('fileExplorer.loading.directory', language)}>
+                <span className="visually-hidden">{t('fileExplorer.loading.directory', language)}</span>
                 {Array.from({ length: 8 }, (_, index) => (
                   <div className="skeleton-row" key={index}>
                     <span className="skeleton-icon" />
